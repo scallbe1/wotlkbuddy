@@ -108,6 +108,58 @@ class MerchantTests(unittest.TestCase):
         self.assertFalse(any('3265' in cmd for cmd in game.driver.commands))
         self.assertIn('/click MerchantFrameCloseButton',game.driver.commands)
 
+    def test_delayed_merchant_close_telemetry_does_not_abort_sales(self):
+        # The game closes its merchant window on the first click, but the
+        # RGB addon still publishes three stale "open" frames. This was the
+        # precise live behavior after ten confirmed sales at Blacksmith Rand.
+        class DelayedClose(MerchantGame):
+            def __init__(self):
+                super().__init__()
+                self.stale_frames = 0
+
+            def chat(self, command):
+                super().chat(command)
+                if command == '/click MerchantFrameCloseButton':
+                    self.stale_frames = 3
+
+            def capture(self):
+                state = super().capture()
+                if self.stale_frames > 0:
+                    self.stale_frames -= 1
+                    return replace(state, merchant_open=True,
+                                   merchant_scan_complete=True)
+                return state
+
+        game = DelayedClose()
+        messages = []
+        sale = sell_at_verified_merchant(
+            npc_name=NPC, npc_id=ENTRY, profile=profile(),
+            capture=game.capture, driver=game.driver, min_free_slots=3,
+            now=game.clock.now, sleep=game.clock.sleep, log=messages.append)
+        self.assertEqual(sale.after_free, 3)
+        self.assertEqual(game.driver.commands.count(
+            '/click MerchantFrameCloseButton'), 1)
+        self.assertEqual(game.mode, 'none')
+        self.assertIn('merchant window closed and verified',
+                      '\n'.join(messages))
+
+    def test_unresponsive_merchant_close_fails_without_double_click(self):
+        class NeverClose(MerchantGame):
+            def chat(self, command):
+                if command != '/click MerchantFrameCloseButton':
+                    super().chat(command)
+
+        game = NeverClose()
+        with self.assertRaisesRegex(LiveControlError,
+                                    'two consecutive closed telemetry frames'):
+            sell_at_verified_merchant(
+                npc_name=NPC, npc_id=ENTRY, profile=profile(),
+                capture=game.capture, driver=game.driver, min_free_slots=3,
+                now=game.clock.now, sleep=game.clock.sleep)
+        self.assertEqual(game.driver.commands.count(
+            '/click MerchantFrameCloseButton'), 1)
+        self.assertEqual(game.free, 3)
+
     def test_gossip_service_vendor_second_selected(self):
         game=MerchantGame(initial='none')
         sold=sell_at_verified_merchant(
