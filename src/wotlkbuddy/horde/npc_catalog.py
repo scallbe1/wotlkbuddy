@@ -145,6 +145,7 @@ def nearby_service_npcs(
     if primary:
         return primary
     if profiles_root:
-        return candidates(load_horde_vendor_catalog(profiles_root),
-                          'local Horde XML vendor catalog')
+        return candidates(load_horde_vendor_catalog(
+            profiles_root, selected_profile_path=profile.source_path),
+            'local Horde XML vendor catalog')
     return ()
