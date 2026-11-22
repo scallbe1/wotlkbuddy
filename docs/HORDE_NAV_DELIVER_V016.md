@@ -113,3 +113,7 @@ or attack automatically.
 All new behavior has **offline synthetic tests** only. No claims of live
 navmesh waypoint following or combat recovery are made until actual client
 and matching navigation assets have been tested.
+
+## v0.16.1 wall recovery
+
+See [OBSTACLE_RECOVERY_V0161.md](OBSTACLE_RECOVERY_V0161.md). With the matching DLL, the follower may attempt bounded, navmesh-checked Q/E sidesteps around short collision obstacles. Q/E must be bound to strafe, not turn. Disable with `--no-stuck-recovery`. Dynamic obstacles and combat remain unsupported; do not leave the client unattended.

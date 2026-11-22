@@ -380,3 +380,7 @@ recover, or continue leveling autonomously. No guessed 2-D map offset is used.
 See [setup, safety and commands](docs/HORDE_NAV_DELIVER_V016.md). The external
 DLL/terrain assets must be supplied separately; no Python package includes them.
 
+
+### v0.16.1: bounded collision recovery
+
+`horde-nav-deliver` now attempts up to two small, navmesh-checked lateral recoveries when a physical wall prevents forward progress. It tries **E (strafe right)** first, then **Q (strafe left)** if right cannot move; measures real world XYZ after every step; and advances past the corner before resuming Detour waypoints. Confirm Q/E are WoW strafe bindings. It still stops on combat or unknown motion. For the original immediate-stop behavior use `--no-stuck-recovery`. See [docs/OBSTACLE_RECOVERY_V0161.md](docs/OBSTACLE_RECOVERY_V0161.md).

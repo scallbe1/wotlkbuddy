@@ -35,6 +35,10 @@ def process_request(nav: DetourNavigator, payload: dict[str, Any]) -> dict[str, 
         result = nav.nearest_point(int(payload["map_id"]), _vec(payload["point"]))
         return {"ok": True, "result": None if result is None
                 else [result.x, result.y, result.z]}
+    if op == "segment":
+        clear = nav.segment_clear(int(payload["map_id"]), _vec(payload["start"]),
+                                  _vec(payload["end"]))
+        return {"ok": True, "result": bool(clear)}
     if op == "quit":
         return {"ok": True, "result": "bye"}
     raise ValueError(f"Unknown operation: {op!r}")
