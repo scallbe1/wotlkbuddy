@@ -74,6 +74,43 @@ local function tickData()
         safe(UnitName('target'), 50),
     }, '\t')
     appendLine(playerLine)
+    -- Optional status extension: no new protocol version is required. If the
+    -- status line cannot fit, the existing truncation marker prevents guessing.
+    local mana = UnitMana('player') or 0
+    local maxmana = UnitManaMax('player') or 0
+    local free, capacity = 0, 0
+    for bag = 0, 4 do
+        local slots = GetContainerNumSlots(bag) or 0
+        capacity = capacity + slots
+        for slot = 1, slots do
+            local texture = GetContainerItemInfo(bag, slot)
+            if not texture then free = free + 1 end
+        end
+    end
+    -- Some WotLK builds may not expose durability on all equip slots.
+    -- Report -1 when unavailable instead of assuming equipment is healthy.
+    local durability = -1
+    if GetInventoryItemDurability then
+        for slot = 1, 19 do
+            local now, maximum = GetInventoryItemDurability(slot)
+            if now and maximum and maximum > 0 then
+                local percent = math.floor(100 * now / maximum + 0.5)
+                if durability < 0 or percent < durability then
+                    durability = percent
+                end
+            end
+        end
+    end
+    local talents = -1
+    if UnitCharacterPoints then
+        talents = UnitCharacterPoints('player') or -1
+    end
+    local _, classToken = UnitClass('player')
+    local _, raceToken = UnitRace('player')
+    appendLine(table.concat({'S', tostring(mana), tostring(maxmana),
+        tostring(free), tostring(capacity), tostring(durability),
+        tostring(talents), tostring(GetMoney() or 0),
+        safe(classToken, 18), safe(raceToken, 18)}, '\t'))
     local entries = GetNumQuestLogEntries() or 0
     for i = 1, entries do
         local title, level, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wotlkbuddy"
-version = "0.10.1"
+version = "0.11.0"
 description = "Python-first WotLK 3.3.5a bot framework (early port)"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -58,6 +58,12 @@ def summarize_telemetry(telemetry: ClientTelemetry) -> str:
     lines = [f'{p.name} level {p.level} — {p.zone_name}',
              f'HP {p.health}/{p.max_health} | combat={p.in_combat} | '
              f'dead={p.dead} | map=({p.map_x:.5f},{p.map_y:.5f})',
+             (f'Mana {telemetry.resources.mana}/{telemetry.resources.max_mana} | '
+              f'free bags {telemetry.resources.free_bag_slots}/'
+              f'{telemetry.resources.total_bag_slots} | '
+              f'durability {telemetry.resources.durability_percent}% | '
+              f'unspent talents {telemetry.resources.unspent_talent_points}'
+              if telemetry.resources is not None else 'Mana/bags/durability: unobserved (update addon)'),
              f'Quests: {len(telemetry.quests)}'
              + (' (TRUNCATED)' if telemetry.truncated else '')]
     for quest in observe_quests(telemetry):

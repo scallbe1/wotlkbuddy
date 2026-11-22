@@ -96,11 +96,26 @@ class PlayerRecord:
 
 
 @dataclass(frozen=True)
+class PlayerResources:
+    """Optional v3-extension resource record (old addon frames lack this)."""
+    mana: int
+    max_mana: int
+    free_bag_slots: int
+    total_bag_slots: int
+    durability_percent: int  # -1 if unobtainable in this client
+    unspent_talent_points: int  # -1 when unavailable
+    money_copper: int
+    class_token: str = ''
+    race_token: str = ''
+
+
+@dataclass(frozen=True)
 class ClientTelemetry:
     sequence: int
     player: PlayerRecord
     quests: tuple[QuestRecord, ...]
     truncated: bool = False
+    resources: PlayerResources | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -109,6 +124,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     quests: dict[int, QuestRecord] = {}
     obj: dict[int, list[QuestObjective]] = {}
     truncated = False
+    resources = None
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -151,6 +167,19 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise
             except ValueError as exc:
                 raise TelemetryError('Malformed objective record') from exc
+        elif parts[0] == 'S':
+            if len(parts) not in (8, 10) or resources is not None:
+                raise TelemetryError('Invalid or repeated resources record')
+            try:
+                values = tuple(int(value) for value in parts[1:8])
+            except ValueError as exc:
+                raise TelemetryError('Malformed resources record') from exc
+            mana, max_mana, free, capacity, durability, talents, money = values
+            if (not 0 <= mana <= max_mana or max_mana < 0 or
+                    not 0 <= free <= capacity or capacity < 0 or
+                    not -1 <= durability <= 100 or not -1 <= talents <= 100 or money < 0):
+                raise TelemetryError('Invalid resource values')
+            resources = PlayerResources(*values, *(parts[8:] if len(parts) == 10 else ()))
         elif parts[0] == 'E':
             if len(parts) < 2:
                 raise TelemetryError('Malformed error marker')
@@ -167,4 +196,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
         raise TelemetryError('Invalid normalized map coordinates')
     entries = tuple(QuestRecord(q.quest_id, q.level, q.complete, q.title,
                                 tuple(obj[q.quest_id])) for q in quests.values())
-    return ClientTelemetry(sequence, player, entries, truncated=truncated)
+    return ClientTelemetry(sequence, player, entries, truncated=truncated,
+                           resources=resources)
