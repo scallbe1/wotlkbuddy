@@ -18,7 +18,7 @@ No quest-specific source or NPC IDs are hardcoded into execution.
   target GUID/template, corpse dead state, loot window status, item inventory.
 
 The new addon allows `/wbttrack <item_id>` (bounded integer) and emits
-read-only `C` telemetry with the exact requested item ID and bag item count.
+read-only `J` telemetry with the exact requested item ID and bag item count.
 Before combat, Python requires that the reported item ID matches XML.
 After each corpse loot, it verifies the item count and journal objective.
 When one item goal completes, the bot switches to the next CollectItem
