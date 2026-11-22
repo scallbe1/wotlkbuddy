@@ -550,7 +550,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
 
 
 def _horde_next(args: argparse.Namespace) -> None:
-    """Run a verified profile step; complete KillMob objectives and return to NPC."""
+    """Run a verified profile step, including source-backed item collection."""
+    from wotlkbuddy.live.control import LiveControlError
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
     from wotlkbuddy.horde.planner import plan_mage
     from wotlkbuddy.live.status_hud import GoalActionHUD
