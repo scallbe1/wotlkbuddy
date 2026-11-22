@@ -1,3 +1,13 @@
+## v0.19 — Bottom-left telemetry and profile-driven Mage combat (experimental)
+
+The 3.3.5a RGB grid is now at the **bottom-left** to avoid bottom-right
+mouse-over tooltips. `horde-next` can drive *profile-defined KillMob objectives*
+when explicitly opted in with both `--enable-input --enable-combat`, using
+verified NPC IDs, current player/target telemetry, Detour navigation, Mage
+buff checks, Fireball, progress verification and bounded post-kill looting.
+Only Undead Mage KillMob objectives are supported and live combat is still
+untested. See [v0.19 combat instructions](docs/PROFILE_DRIVEN_MAGE_COMBAT_V019.md).
+
 ## v0.18.1 — generic quest pickup from unidentified 3.3.5a detail panels
 
 After a twice-verified unique NPC *available quest* menu selection, an opened
@@ -27,14 +37,13 @@ See [Profile-driven quest actions](docs/PROFILE_DRIVEN_QUEST_V018.md). Older
 quest-363 commands are kept for compatibility, but should not be copied to
 implement subsequent quests.
 
-## v0.17 — Quest-list turn-ins and bottom-right telemetry (historical)
+## v0.17 — Quest-list turn-ins (historical)
 
 WoW 3.3.5a NPCs can open a gossip/greeting **active quest list** before the quest
 progress frame. The guarded `horde-quest-363` turn-in now selects the unique
 exact-title **Rude Awakening** entry with stable observed UI state before
-attempting the verified progress/reward sequence. The addon telemetry panel is
-positioned at the **top center** in the current build, clear of the bottom-right
-mouse-over tooltip area; reinstall the addon and `/reload` after updating.
+attempting the verified progress/reward sequence. The telemetry panel now anchors bottom-left to avoid mouse-over tooltip occlusion;
+reinstall the addon and `/reload` after updating.
 If already at Sarvis, invoke `horde-quest-363` **without navigation flags**.
 Full instructions: [v0.17 Sarvis quest-list turn-in](docs/SARVIS_GOSSIP_TURNIN_V017.md).
 
