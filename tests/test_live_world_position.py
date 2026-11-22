@@ -77,6 +77,12 @@ class WorldPositionTests(unittest.TestCase):
         with self.assertRaisesRegex(WorldPositionError, 'GUID does not match'):
             observe_world_position(m, expected_guid=f'0x{GUID:016X}')
 
+    def test_in_world_uses_nonzero_not_exactly_one(self):
+        # CopilotBuddy ObjectManager.IsInGame checks byte != 0, not == 1.
+        m = FakeMemory()
+        m.u8(IN_WORLD_ADDRESS, 2)
+        self.assertEqual(observe_world_position(m, expected_guid=f'0x{GUID:016X}').map_id, 0)
+
     def test_refuses_other_character_even_if_object_exists(self):
         m = FakeMemory()
         m.u64(m.manager + LOCAL_GUID_OFFSET, GUID + 55)

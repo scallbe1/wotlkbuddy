@@ -85,7 +85,7 @@ def observe_world_position(memory: MemoryReader, *, expected_guid: str) -> World
     the player's GUID, return an error rather than another unit's coordinates.
     """
     expected = parse_unit_guid(expected_guid)
-    if memory.read(IN_WORLD_ADDRESS, 1)[0] != 1:
+    if memory.read(IN_WORLD_ADDRESS, 1)[0] == 0:
         raise WorldPositionError('WoW client reports not in game')
     map_id = memory.read_u32(WORLD_MAP_ID_ADDRESS)
     if map_id > 9999:
