@@ -372,6 +372,100 @@ def _horde_nav_plan(args: argparse.Namespace) -> None:
     print('No movement, combat or quest interaction was attempted. '
           'Spawn locations are not a traversable path.', file=_sys.stderr)
 
+def _horde_nav_deliver(args: argparse.Namespace) -> None:
+    """Attended, Detour-path-only Rude Awakening delivery and verified turn-in.
+
+    No guessing of 2-D map offsets. Current implementation stops on aggro;
+    fighting/loot are NOT integrated and must not be inferred from arrival.
+    """
+    from pathlib import Path
+    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.worlddata import (CreatureSpawnDatabase, prepare_quest_corridor,
+                                            resolve_creature_spawns, distance_world)
+    from wotlkbuddy.horde.interaction import KeyboardQuestInput
+    from wotlkbuddy.horde.turnin import turnin_rude_awakening
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import LiveControlError, WindowsKeyboard
+    from wotlkbuddy.live.world_position import verified_live_position
+    from wotlkbuddy.live.world_travel import validate_nav_path, follow_world_path
+    from wotlkbuddy.navigation.proxy import NavigationProxy
+    if not args.enable_input:
+        raise ValueError('No movement allowed without explicit --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    if not 15 <= args.max_seconds <= 600:
+        raise ValueError('--max-seconds must be 15..600')
+    dll = Path(args.nav_dll).expanduser().resolve()
+    if not dll.is_file():
+        raise FileNotFoundError('Navigation.dll missing: ' + str(dll))
+    if not (dll.parent / 'mmaps').is_dir():
+        raise FileNotFoundError('Matching mmaps/ folder missing next to Navigation.dll')
+    python32 = Path(args.python32).expanduser().resolve()
+    if not python32.is_file():
+        raise FileNotFoundError('Python 32-bit executable missing: ' + str(python32))
+    print('ATTENDED NAVMESH DELIVERY #363: live world XYZ -> Detour -> short keyboard pulses -> '
+          'guarded Sarvis turn-in. Combat/aggro ABORTS; no combat or loot driver exists. '
+          'Escape/focus loss stops input.', file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g}s.', file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    cap = lambda: capture_monitor(args.monitor)
+    initial = cap()
+    player = initial.player
+    if (initial.truncated or initial.resources is None or
+            initial.resources.class_token.upper() != 'MAGE' or
+            initial.resources.race_token.lower() not in ('scourge', 'undead') or
+            player.dead or player.in_combat):
+        raise LiveControlError('Expected active, living out-of-combat Undead Mage telemetry')
+    if not any(q.quest_id == 363 for q in initial.quests):
+        raise LiveControlError('Rude Awakening 363 is not active; no travel attempted')
+    pid, world = verified_live_position(initial, pid=args.pid)
+    if world.map_id != 0:
+        raise LiveControlError('Quest #363 navigation requires world map ID 0')
+    chosen = select_profile_from_loader(args.profiles_root, level=player.level, race='Undead')
+    profile = load_horde_profile(chosen)
+    with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db:
+        corridor = prepare_quest_corridor(profile, db, 363, world.map_id)
+    destination = corridor.turnin_xyz
+    if distance_world(world.position, destination) > 800:
+        raise LiveControlError('Character is too far from quest turn-in for a bounded run')
+    with NavigationProxy(python32, dll) as nav:
+        if not nav.ping():
+            raise LiveControlError('32-bit navigation worker did not respond')
+        path = nav.find_path(world.map_id, world.position, destination)
+    # Preflight BEFORE constructing the input driver. Invalid/partial/offmesh
+    # routes never send movement keys or try interacting with an NPC.
+    waypoints = validate_nav_path(path, world.position, destination)
+    print(f'Detour path verified: {len(path)} native points; '
+          f'{len(waypoints)-1} bounded travel legs; '
+          f'{distance_world(world.position, destination):.1f}y direct.', file=sys.stderr)
+    kb = WindowsKeyboard()
+    def sample():
+        snapshot = cap()
+        _, position = verified_live_position(snapshot, pid=pid)
+        return snapshot, position
+    report = follow_world_path(
+        waypoints, sample=sample, keyboard=kb,
+        stop_requested=kb.emergency_stop_requested,
+        expected_quest_id=363, expected_map_id=0,
+        max_seconds=args.max_seconds,
+        progress=lambda line: print(line, file=sys.stderr, flush=True),
+    )
+    print('World travel:', json.dumps(report.to_dict(), ensure_ascii=False))
+    if report.stopped_reason != 'complete':
+        raise LiveControlError('Travel stopped without quest turn-in: ' + report.stopped_reason)
+    # Existing, already-tested interaction checks actual name + quest detail,
+    # and confirms completion history; proximity alone is never success.
+    driver = KeyboardQuestInput(interact_key=args.interact_key)
+    turnin = turnin_rude_awakening(
+        profile, capture=cap, driver=driver,
+        character=player.name, expected_guid=player.guid,
+        timeout=10, progress=lambda line: print(line, file=sys.stderr, flush=True),
+    )
+    print('Quest turn-in:', json.dumps(turnin.to_dict(), ensure_ascii=False, indent=2))
+    if turnin.status not in ('turned_in', 'already_turned_in'):
+        raise LiveControlError('Turn-in not confirmed: ' + turnin.status + ': ' + turnin.explanation)
+
+
 def _horde_world_position(args: argparse.Namespace) -> None:
     """Read player world XYZ from memory with a live addon GUID cross-check.
 
@@ -781,6 +875,19 @@ def main(argv: list[str] | None = None) -> int:
     np.add_argument('--monitor', type=int, default=0)
     np.add_argument('--pid', type=int, help='Wow.exe PID if multiple instances run')
     np.set_defaults(func=_horde_nav_plan)
+    nd = sub.add_parser('horde-nav-deliver',
+                        help='ATTENDED: Detour world XYZ route + guarded quest #363 turn-in; abort on combat')
+    nd.add_argument('--profiles-root', required=True)
+    nd.add_argument('--spawns-db', help='Optional NPC spawn database; otherwise auto-detect/cache')
+    nd.add_argument('--nav-dll', required=True, help='x86 Navigation.dll with matching mmaps/ beside it')
+    nd.add_argument('--python32', required=True, help='Installed Python x86 executable for nav helper')
+    nd.add_argument('--interact-key', choices=['f','g'], default='f')
+    nd.add_argument('--enable-input', action='store_true', help='Explicitly arm movement and turn-in keys')
+    nd.add_argument('--max-seconds', type=float, default=240)
+    nd.add_argument('--countdown', type=float, default=5)
+    nd.add_argument('--monitor', type=int, default=0)
+    nd.add_argument('--pid', type=int, help='Wow.exe PID if multiple clients are running')
+    nd.set_defaults(func=_horde_nav_deliver)
     wp = sub.add_parser('horde-world-position',
                         help='Read-only live player world XYZ with addon GUID cross-check')
     wp.add_argument('--countdown', type=float, default=5)
