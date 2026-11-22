@@ -202,6 +202,9 @@ def _viewer(*, demo: bool = False) -> None:
         fg='#C7D2FE', bg='#111827')
     second.pack(fill='x')
     root.update_idletasks()
+    # Set NOACTIVATE and click-through *before* revealing the window: the HUD
+    # must never take WoW's foreground focus away from combat controls.
+    _enable_windows_clickthrough(root.winfo_id())
     root.deiconify()
     _enable_windows_clickthrough(root.winfo_id())
     # Child startup failures are now visible in the parent PowerShell stderr.
