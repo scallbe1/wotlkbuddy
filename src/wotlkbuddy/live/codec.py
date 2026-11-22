@@ -114,7 +114,9 @@ class QuestDialog:
     """Optional read-only state from the currently open NPC quest window."""
     kind: str  # none, gossip, detail, progress, reward
     quest_id: int  # 0 when not available
-    title: str = ''  # exact displayed title; blank for older addon versions
+    title: str = ''  # exact quest-frame title; blank in earlier addon versions
+    reward_choices: int | None = None  # None = unobserved; only 0 is safe for automatic turn-in
+    required_money: int | None = None  # None = unobserved, >0 requires user confirmation
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,7 @@ class ClientTelemetry:
     truncated: bool = False
     resources: PlayerResources | None = None
     dialog: QuestDialog | None = None
+    quest_completions: tuple[tuple[int, bool], ...] = ()  # verified server cache only
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -135,6 +138,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     truncated = False
     resources = None
     dialog = None
+    completion_states: dict[int, bool] = {}
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -191,7 +195,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise TelemetryError('Invalid resource values')
             resources = PlayerResources(*values, *(parts[8:] if len(parts) == 10 else ()))
         elif parts[0] == 'I':
-            if len(parts) not in (3, 4) or dialog is not None or parts[1] not in (
+            if len(parts) not in (3, 4, 6) or dialog is not None or parts[1] not in (
                     'none', 'gossip', 'detail', 'progress', 'reward'):
                 raise TelemetryError('Invalid or repeated quest dialog record')
             try:
@@ -202,7 +206,29 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             if (not 0 <= quest_id <= 999999 or len(title) > 100 or
                     (parts[1] in ('none', 'gossip') and (quest_id != 0 or title))):
                 raise TelemetryError('Invalid quest dialog ID/title for UI state')
-            dialog = QuestDialog(parts[1], quest_id, title)
+            choices = payment = None
+            if len(parts) == 6:
+                try:
+                    choices = int(parts[4])
+                    payment = int(parts[5])
+                except ValueError as exc:
+                    raise TelemetryError('Malformed reward counts') from exc
+                if not -1 <= choices <= 100 or not -1 <= payment <= 2_000_000_000:
+                    raise TelemetryError('Invalid reward counts')
+                if choices < 0: choices = None
+                if payment < 0: payment = None
+            dialog = QuestDialog(parts[1], quest_id, title, choices, payment)
+        elif parts[0] == 'C':
+            if len(parts) != 3:
+                raise TelemetryError('Invalid completed-quest status row')
+            try:
+                qid, flag = int(parts[1]), int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Malformed completed-quest status') from exc
+            if qid <= 0 or qid in completion_states or flag not in (-1, 0, 1):
+                raise TelemetryError('Invalid completed-quest record')
+            if flag != -1:  # -1 denotes unavailable, never pretend false
+                completion_states[qid] = flag == 1
         elif parts[0] == 'E':
             if len(parts) < 2:
                 raise TelemetryError('Malformed error marker')
@@ -220,4 +246,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     entries = tuple(QuestRecord(q.quest_id, q.level, q.complete, q.title,
                                 tuple(obj[q.quest_id])) for q in quests.values())
     return ClientTelemetry(sequence, player, entries, truncated=truncated,
-                           resources=resources, dialog=dialog)
+                           resources=resources, dialog=dialog,
+                           quest_completions=tuple(sorted(completion_states.items())))

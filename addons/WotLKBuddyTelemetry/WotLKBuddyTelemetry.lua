@@ -42,6 +42,32 @@ local function safe(value, maxLength)
     return string.sub(s, 1, maxLength or 100)
 end
 
+-- WotLK 3.3.5 completion history is a server response. Query it rather than
+-- assuming an absent journal entry means a completed quest.
+local completionCache = nil
+local lastCompletionQuery = 0
+local function queryCompletions()
+    if QueryQuestsCompleted and (GetTime() - lastCompletionQuery >= 1) then
+        lastCompletionQuery = GetTime()
+        pcall(QueryQuestsCompleted)
+    end
+end
+local questHistoryFrame = CreateFrame('Frame')
+questHistoryFrame:RegisterEvent('QUEST_QUERY_COMPLETE')
+questHistoryFrame:RegisterEvent('QUEST_FINISHED')
+questHistoryFrame:RegisterEvent('QUEST_LOG_UPDATE')
+questHistoryFrame:RegisterEvent('PLAYER_ENTERING_WORLD')
+questHistoryFrame:SetScript('OnEvent', function(_, event)
+    if event == 'QUEST_QUERY_COMPLETE' then
+        if GetQuestsCompleted then
+            local ok, flags = pcall(GetQuestsCompleted)
+            if ok and type(flags) == 'table' then completionCache = flags end
+        end
+    else
+        queryCompletions()
+    end
+end)
+
 local function tickData()
     local lines = {}
     local isTruncated = false
@@ -129,14 +155,30 @@ local function tickData()
     if (dialog == 'detail' or dialog == 'progress' or dialog == 'reward') and GetQuestID then
         dialogQuestID = tonumber(GetQuestID()) or 0
     end
-    -- Some WotLK 3.3.5 clients return GetQuestID() == 0 for visible
-    -- quest details. GetTitleText() exposes the title shown in QuestFrame.
-    -- Read it only while a quest panel is open; never export stale text.
+    -- On some WotLK 3.3.5 clients GetQuestID() returns 0 while the quest
+    -- detail frame is visible. GetTitleText() is supplied by the original
+    -- QuestFrame UI and identifies the displayed quest by its visible title.
+    -- Only include the title when a quest panel is actually visible; never
+    -- reuse stale text outside a quest frame.
     local dialogQuestTitle = ''
     if (dialog == 'detail' or dialog == 'progress' or dialog == 'reward') and GetTitleText then
         dialogQuestTitle = safe(GetTitleText(), 100)
     end
-    appendLine(table.concat({'I', dialog, tostring(dialogQuestID), dialogQuestTitle}, '\t'))
+    local rewardChoices, moneyRequired = -1, -1
+    if dialog == 'reward' then
+        if GetNumQuestChoices then rewardChoices = GetNumQuestChoices() or -1 end
+        if GetQuestMoneyToGet then moneyRequired = GetQuestMoneyToGet() or 0 end
+    end
+    appendLine(table.concat({'I', dialog, tostring(dialogQuestID), dialogQuestTitle,
+        tostring(rewardChoices), tostring(moneyRequired)}, '\t'))
+    local completed = -1
+    if IsQuestFlaggedCompleted then
+        local ok, value = pcall(IsQuestFlaggedCompleted, 363)
+        if ok and value ~= nil then completed = value and 1 or 0 end
+    elseif completionCache then
+        completed = completionCache[363] and 1 or 0
+    end
+    appendLine(table.concat({'C', '363', tostring(completed)}, '\t'))
     local entries = GetNumQuestLogEntries() or 0
     for i = 1, entries do
         local title, level, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)
@@ -209,4 +251,5 @@ SlashCmdList['WOTLKBUDDY'] = function(msg)
     end
 end
 
+queryCompletions()
 publish()

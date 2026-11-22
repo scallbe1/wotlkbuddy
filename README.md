@@ -289,11 +289,20 @@ interact with an already configured F/G key, and only accept **Rude Awakening
 This is deliberately a single-quest, attended integration test, **not** an
 unattended quest bot. See [Aarr's first quest](docs/FIRST_QUEST_V012.md).
 
-## v0.12.1 — WotLK quest-detail title fallback
+## v0.12.1 — zero-ID quest dialogue fallback
 
-The v0.12 client test with Aarr showed a quest DETAIL frame with ID 0.
-The updated read-only addon exports the current quest title using `GetTitleText()`.
-Quest 363 can now be accepted only when the NPC is confirmed as Undertaker Mordo
-and the open detail is confirmed on two fresh frames with either ID 363
-or ID 0 plus the **exact** title `Rude Awakening`. ID 0 without a
-matching title is never sufficient. Reinstall the addon and `/reload` first.
+WoW 3.3.5a may show the correct quest detail yet return `GetQuestID() == 0`.
+The v0.12.1 addon sends `GetTitleText()` in an extended `I` record, and the
+controller accepts quest 363 only after seeing a stable quest detail for the
+correct NPC with either ID 363 or **ID 0 plus exact title `Rude Awakening`**.
+It never accepts on ID 0 alone. Reinstall the addon and `/reload` before use.
+
+
+## v0.13 — Aarr's Rude Awakening delivery and guarded hand-in
+
+Adds an attended `horde-quest-363` command that (optionally) experiments with direct
+zone-map steering toward Shadow Priest Sarvis, then verifies quest progress and
+reward panels before requesting completion. The upgraded addon observes reward
+choice count, required money, and server-completed quest history. It refuses to
+report success based solely on quest-journal disappearance. For commands, opt-in
+risks, and limitations see [Rude Awakening v0.13](docs/RUDE_AWAKENING_V013.md).
