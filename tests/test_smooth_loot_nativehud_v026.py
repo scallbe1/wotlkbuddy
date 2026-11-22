@@ -99,7 +99,7 @@ class SmootherMovementLootTests(unittest.TestCase):
                 super().key_up(code)
         game=Timed()
         result=game.run([
-            Vec3(12,18,140),Vec3(22,18,140),Vec3(32,18,140)])
+            Vec3(12,18,140),Vec3(20,18,140),Vec3(28,18,140)])
         self.assertEqual(result.stopped_reason, 'complete')
         self.assertTrue(any(d >= .35 for d in game.holds), game.holds)
         self.assertLessEqual(max(game.holds), .53)
