@@ -227,6 +227,32 @@ local function tickData()
     end
     appendLine(table.concat({'I', dialog, tostring(dialogQuestID), dialogQuestTitle,
         tostring(rewardChoices), tostring(moneyRequired)}, '\t'))
+    -- Read actual reward options from the visible quest panel, rather than
+    -- assuming quest IDs have the same items/order on every server. GetItemInfo
+    -- may be uncached: report an unknown slot/level and let Python fail closed.
+    if dialog == 'reward' and rewardChoices and rewardChoices > 0 and
+            rewardChoices <= 12 and GetQuestItemInfo then
+        for i = 1, rewardChoices do
+            local ok, name, _, _, _, usable = pcall(GetQuestItemInfo, 'choice', i)
+            if not ok then name, usable = nil, nil end
+            local link = GetQuestItemLink and GetQuestItemLink('choice', i) or nil
+            local itemId = link and tonumber(string.match(link, 'item:(%d+)')) or 0
+            local itemLevel, equipSlot = -1, ''
+            if link and GetItemInfo then
+                local cached, _, _, level, _, _, _, _, slot =
+                    pcall(GetItemInfo, link)
+                if cached then
+                    itemLevel = tonumber(level) or -1
+                    equipSlot = safe(slot, 32)
+                end
+            end
+            local usableFlag = usable == nil and '-1' or (usable and '1' or '0')
+            if not appendLine(table.concat({'R', tostring(i), safe(name, 80),
+                usableFlag, equipSlot, tostring(itemLevel), tostring(itemId)}, '\t')) then
+                break
+            end
+        end
+    end
     -- Completed quest history is intentionally profile-agnostic: emit observed
     -- server flags and recent journal IDs, not hard-coded quest 363.
     local completionStates = {}
