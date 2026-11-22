@@ -165,6 +165,7 @@ def sell_at_verified_merchant(
     before_free = first.resources.free_bag_slots
     starting_money = first.resources.money_copper
     sold = []
+    close_requested = False
     try:
         for _ in range(max_sales):
             guard(s)
@@ -218,15 +219,38 @@ def sell_at_verified_merchant(
             npc_name, npc_id, before_free, s.resources.free_bag_slots,
             tuple(sold), s.resources.money_copper - starting_money)
         driver.chat('/click MerchantFrameCloseButton')
-        closed = _capture_fresh(
-            capture, s, guard, sleep=sleep, now=now)
-        if closed.merchant_open:
-            raise LiveControlError(
-                f'{npc_name}: merchant frame did not close after verified sales')
-        s = closed
-        return result
+        close_requested = True
+        # The addon is sampled asynchronously. A fresh sequence after a
+        # /click can still encode the merchant frame from immediately before
+        # the UI event. Require TWO consecutive closed samples, allowing
+        # bounded time for the client to publish the changed state.
+        deadline = now() + 8
+        closed_samples = 0
+        previous = s
+        while now() < deadline:
+            observed = _capture_fresh(
+                capture, previous, guard, sleep=sleep, now=now,
+                timeout=min(2, max(.5, deadline-now())))
+            if not observed.merchant_open:
+                closed_samples += 1
+                if closed_samples >= 2:
+                    s = observed
+                    log(f'{npc_name}: merchant window closed and verified')
+                    return result
+            else:
+                closed_samples = 0
+            previous = observed
+        raise LiveControlError(
+            f'{npc_name}: merchant close command sent, but two consecutive '
+            'closed telemetry frames were not observed within 8 seconds; '
+            f'{len(sold)} sales and {s.resources.free_bag_slots} free slots '
+            'were already independently confirmed')
     finally:
-        if s.merchant_open and driver.wow_is_foreground() and (
+        # Do not click again when the close action was already sent. A second
+        # close command after delayed telemetry is unnecessary and can change
+        # another UI state. Only attempt cleanup for earlier sale failures.
+        if (not close_requested and s.merchant_open and
+                driver.wow_is_foreground() and
                 not driver.emergency_stop_requested()):
             driver.chat('/click MerchantFrameCloseButton')
 
