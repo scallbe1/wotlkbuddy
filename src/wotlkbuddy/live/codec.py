@@ -227,6 +227,7 @@ class ClientTelemetry:
     trainer_open: bool = False
     trainer_services: tuple[TrainerService, ...] = ()
     gossip_services: tuple[GossipServiceOption, ...] = ()
+    gossip_services_complete: bool = False
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -553,4 +554,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            trainer_open=trainer_seen,
                            trainer_services=tuple(trainer_services.values()),
                            gossip_services=tuple(gossip_service_options[i]
-                             for i in sorted(gossip_service_options)))
+                             for i in sorted(gossip_service_options)),
+                           gossip_services_complete=gossip_service_total is not None)
