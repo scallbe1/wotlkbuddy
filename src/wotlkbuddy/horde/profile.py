@@ -254,18 +254,41 @@ def load_horde_profile(path: str | Path) -> HordeProfile:
 
 
 def load_horde_vendor_catalog(profiles_root: str | Path, *,
+                              selected_profile_path: str | Path | None = None,
                               max_files: int = 3000) -> tuple[VendorSpec, ...]:
-    """Index explicit Vendor NPC records across local Horde XML files.
+    """Index local Horde Vendor entries from the ACTUAL selected profile tree.
 
-    The selected profile can omit a town's vendors/trainers, even though
-    another installed Horde XML lists them. This read-only inventory traverses
-    *only* XML files under the configured Horde root; it never executes profile
-    scripts, accesses remote sources or uses arbitrary NPC name guesses.
+    The Auto-Loader may select a nested path such as
+    <profiles_root>/Profile v3/Horde/Starter Guides/...; it does not require
+    a top-level <profiles_root>/Horde. Resolve the closest Horde directory
+    from the selected profile that already passed Auto-Loader containment
+    checks. Fall back to the legacy root/Horde for other callers/tests.
+    Never walk Alliance or arbitrary directories just to discover vendors.
     """
     root = Path(profiles_root).expanduser().resolve()
-    horde = (root / 'Horde').resolve()
-    if not horde.is_dir() or not horde.is_relative_to(root):
-        raise HordeProfileError('Horde vendor catalog directory not available')
+    horde = None
+    if selected_profile_path is not None:
+        selected = Path(selected_profile_path).expanduser().resolve()
+        if not selected.is_relative_to(root) or not selected.is_file():
+            raise HordeProfileError(
+                'Selected profile must be an existing XML under profiles root')
+        for ancestor in selected.parents:
+            if not ancestor.is_relative_to(root):
+                break
+            if ancestor.name.casefold() == 'horde':
+                horde = ancestor
+                break
+        if horde is None:
+            raise HordeProfileError(
+                'Selected Horde profile is not in a Horde directory')
+    if horde is None:
+        candidate = (root / 'Horde').resolve()
+        if candidate.is_dir() and candidate.is_relative_to(root):
+            horde = candidate
+    if horde is None or not horde.is_dir() or not horde.is_relative_to(root):
+        raise HordeProfileError(
+            'Horde vendor catalog directory not available for selected '
+            'profile tree')
     results: dict[tuple[int, str, str, float, float, float, str], VendorSpec] = {}
     scanned = 0
     for path in sorted(horde.rglob('*.xml')):
