@@ -139,6 +139,14 @@ class AvailableQuestOption:
 
 
 @dataclass(frozen=True)
+class GossipServiceOption:
+    """Live typed service option from a 3.3.5a GossipFrame."""
+    index: int
+    kind: str
+    text: str
+
+
+@dataclass(frozen=True)
 class QuestRewardChoice:
     """A displayed quest reward option observed from the client's reward UI."""
     index: int
@@ -218,6 +226,7 @@ class ClientTelemetry:
     gear_scan_complete: bool = False
     trainer_open: bool = False
     trainer_services: tuple[TrainerService, ...] = ()
+    gossip_services: tuple[GossipServiceOption, ...] = ()
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -242,6 +251,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     trainer_seen = False
     trainer_count: int | None = None
     trainer_services: dict[int, TrainerService] = {}
+    gossip_service_total: int | None = None
+    gossip_service_options: dict[int, GossipServiceOption] = {}
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -369,6 +380,30 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             usable = None if parts[3] == '-1' else parts[3] == '1'
             reward_options[index] = QuestRewardChoice(
                 index, parts[2], usable, parts[4], level, item_id)
+        elif parts[0] == 'K':
+            if (len(parts) != 2 or dialog is None or dialog.kind != 'gossip'
+                    or gossip_service_total is not None):
+                raise TelemetryError('Invalid repeated gossip service count')
+            try:
+                gossip_service_total = int(parts[1])
+            except ValueError as exc:
+                raise TelemetryError('Malformed gossip service count') from exc
+            if not 0 <= gossip_service_total <= 32:
+                raise TelemetryError('Gossip service count out of range')
+        elif parts[0] == 'H':
+            if (len(parts) != 4 or dialog is None or dialog.kind != 'gossip'
+                    or gossip_service_total is None):
+                raise TelemetryError('Gossip service requires verified gossip frame')
+            try:
+                index = int(parts[1])
+            except ValueError as exc:
+                raise TelemetryError('Malformed gossip service index') from exc
+            kind, name = parts[2], parts[3]
+            if (not 1 <= index <= 32 or index in gossip_service_options
+                    or not kind or len(kind) > 24
+                    or not name or len(name) > 90):
+                raise TelemetryError('Invalid or duplicate gossip service option')
+            gossip_service_options[index] = GossipServiceOption(index, kind, name)
         elif parts[0] == 'A':
             if len(parts) not in (5, 6) or parts[1] not in ('gossip', 'greeting') or \
                     parts[3] not in ('0', '1') or not parts[4] or len(parts[4]) > 100:
@@ -479,6 +514,12 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
         raise TelemetryError('Missing player record')
     if trainer_seen and len(trainer_services) != trainer_count:
         raise TelemetryError('Incomplete trainer service list')
+    if gossip_service_options and gossip_service_total is None:
+        raise TelemetryError('Gossip service options missing count')
+    if gossip_service_total is not None and (
+            len(gossip_service_options) != gossip_service_total or
+            set(gossip_service_options) != set(range(1, gossip_service_total + 1))):
+        raise TelemetryError('Incomplete gossip service list')
     if (bag_armor or worn_armor) and not gear_scan_seen:
         raise TelemetryError('Gear scan records missing completeness flag')
     if not (0 <= player.health <= player.max_health and player.max_health >= 1):
@@ -510,4 +551,6 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            equipped_armor=tuple(worn_armor.values()),
                            gear_scan_complete=gear_scan_complete,
                            trainer_open=trainer_seen,
-                           trainer_services=tuple(trainer_services.values()))
+                           trainer_services=tuple(trainer_services.values()),
+                           gossip_services=tuple(gossip_service_options[i]
+                             for i in sorted(gossip_service_options)))
