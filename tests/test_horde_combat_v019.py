@@ -1,9 +1,13 @@
 """Offline tests for profile-driven Mage combat. No real client input."""
 from dataclasses import replace
 from dataclasses import dataclass
+from types import SimpleNamespace
+from unittest.mock import patch
 import unittest
 
 from wotlkbuddy.game.types import Vec3
+from wotlkbuddy.horde.worlddata import Spawn
+from wotlkbuddy.live.world_position import WorldPosition
 from wotlkbuddy.horde.combat import (creature_entry_from_guid, next_kill_objective,
                                      hunt_kill_objectives)
 from wotlkbuddy.horde.profile import (HordeProfile, QuestSpec, ObjectiveSpec,
@@ -153,6 +157,92 @@ class CombatTests(unittest.TestCase):
                 max_seconds=900, max_kills=3,
                 sleep=game.sleep, now=lambda: game.t)
         self.assertEqual(game.commands.count('/cast Fireball'), 1)
+
+    def test_skips_spawn_after_off_axis_navigation_and_resumes_quest(self):
+        class NoTargetUntilReroute(FakeGame):
+            target_allowed = False
+
+            def chat(self, command):
+                if command == '/targetenemy' and not self.target_allowed:
+                    self.commands.append(command)
+                    return
+                super().chat(command)
+
+        game = NoTargetUntilReroute()
+        attempts = []
+        locations = (Spawn(1501, 0, 40, 0, 0),
+                     Spawn(1501, 0, 65, 0, 0))
+        class NavWithPath(Nav):
+            def find_path(self, map_id, start, end):
+                return (start, end)
+            def segment_clear(self, map_id, start, end):
+                return True
+
+        def travel(legs, **kwargs):
+            attempts.append(legs[-1])
+            if len(attempts) == 1:
+                return SimpleNamespace(
+                    stopped_reason='Measured movement disagrees with client facing')
+            game.target_allowed = True
+            return SimpleNamespace(stopped_reason='complete')
+
+        def position(snapshot):
+            return (77, WorldPosition(snapshot.player.guid, 0, 0, 0, 0, 0, 0))
+
+        def no_target_location(snapshot):
+            raise ValueError('No observed target XYZ')
+
+        with patch('wotlkbuddy.horde.combat.nearest_objective_spawns',
+                   return_value=locations):
+            result = hunt_kill_objectives(
+                profile=PROFILE, quest_id=364, pid=77,
+                capture=game.capture, driver=game, nav=NavWithPath(),
+                spawns=None, target_xyz=no_target_location,
+                world_position=position, travel=travel,
+                max_seconds=900, max_kills=3,
+                sleep=game.sleep, now=lambda: game.t)
+        self.assertEqual(result.status, 'objectives_complete')
+        self.assertEqual(result.targets_defeated, 2)
+        self.assertEqual(len(attempts), 2)
+        self.assertNotEqual(attempts[0], attempts[1])
+
+    def test_stops_after_two_off_axis_nav_failures(self):
+        class NoTargets(FakeGame):
+            def chat(self, command):
+                if command == '/targetenemy':
+                    self.commands.append(command)
+                    return
+                super().chat(command)
+
+        game = NoTargets()
+        attempts = []
+        class NavWithPath(Nav):
+            def find_path(self, map_id, start, end):
+                return (start, end)
+            def segment_clear(self, map_id, start, end):
+                return True
+
+        def travel(legs, **kwargs):
+            attempts.append(legs[-1])
+            return SimpleNamespace(
+                stopped_reason='Measured movement disagrees with client facing')
+
+        def position(snapshot):
+            return (77, WorldPosition(snapshot.player.guid, 0, 0, 0, 0, 0, 0))
+
+        with patch('wotlkbuddy.horde.combat.nearest_objective_spawns',
+                   return_value=(Spawn(1501, 0, 40, 0, 0),
+                                 Spawn(1501, 0, 65, 0, 0))):
+            with self.assertRaisesRegex(LiveControlError,
+                                        'Two off-axis navigation failures'):
+                hunt_kill_objectives(
+                    profile=PROFILE, quest_id=364, pid=77,
+                    capture=game.capture, driver=game, nav=NavWithPath(),
+                    spawns=None, world_position=position, travel=travel,
+                    max_seconds=900, max_kills=3,
+                    sleep=game.sleep, now=lambda: game.t)
+        self.assertEqual(len(attempts), 2)
+        self.assertNotIn('/cast Fireball', game.commands)
 
     def test_stops_without_learned_fireball(self):
         g=FakeGame()
