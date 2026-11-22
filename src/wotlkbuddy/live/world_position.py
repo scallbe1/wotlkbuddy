@@ -162,3 +162,53 @@ def verified_live_position(snapshot: ClientTelemetry, *, pid: int | None = None,
                                              (after.x, after.y, after.z)) > 50:
         raise WorldPositionError('World coordinates changed implausibly between samples')
     return pid, after
+
+
+def observe_target_position(memory: MemoryReader, *, player_guid: str,
+                            target_guid: str) -> Vec3:
+    """Read world XYZ only for the unit selected in the GUID-checked addon.
+
+    Refuse a target missing from the object manager. Position offsets are the
+    same WoWObject coordinates verified for the player on the 12340 client.
+    """
+    own = parse_unit_guid(player_guid)
+    expected = parse_unit_guid(target_guid)
+    if own == expected:
+        raise WorldPositionError('The selected target is the local character')
+    # Validating player GUID and map first keeps this bound to the correct client.
+    own_position = observe_world_position(memory, expected_guid=player_guid)
+    root = memory.read_u32(MANAGER_ROOT)
+    manager = memory.read_u32(root + MANAGER_POINTER_OFFSET)
+    current = memory.read_u32(manager + FIRST_OBJECT_OFFSET)
+    seen: set[int] = set()
+    while current and not current & 1:
+        if (current in seen or len(seen) >= MAX_OBJECTS or
+                current < 0x10000 or current >= 0xFFFF0000):
+            raise WorldPositionError('Corrupt target object list')
+        seen.add(current)
+        if _u64(memory, current + OBJECT_GUID_OFFSET) == expected:
+            coordinates = tuple(memory.read_f32(current + WORLD_POSITION_OFFSET + 4*i)
+                                for i in range(3))
+            if any(not isfinite(v) or abs(v) > 100_000 for v in coordinates):
+                raise WorldPositionError('Invalid target object XYZ')
+            if _u64(memory, manager + LOCAL_GUID_OFFSET) != own or \
+                    memory.read_u32(WORLD_MAP_ID_ADDRESS) != own_position.map_id:
+                raise WorldPositionError('Character or map changed during target observation')
+            return Vec3(*coordinates)
+        next_ptr = memory.read_u32(current + NEXT_OBJECT_OFFSET)
+        if next_ptr == current:
+            break
+        current = next_ptr
+    raise WorldPositionError('Addon-selected NPC GUID is not in WoW object manager')
+
+
+def verified_target_position(snapshot: ClientTelemetry, *, pid: int) -> Vec3:
+    """Query the exact selected NPC from the same Wow.exe process as the player."""
+    from wotlkbuddy.game.win32 import ProcessMemory
+    if (snapshot.truncated or not snapshot.player.guid or
+            not snapshot.player.target_guid or
+            snapshot.combat_target is None or snapshot.combat_target.entry_id <= 0):
+        raise WorldPositionError('Verified creature target telemetry unavailable')
+    with ProcessMemory(pid, writable=False) as memory:
+        return observe_target_position(memory, player_guid=snapshot.player.guid,
+                                       target_guid=snapshot.player.target_guid)

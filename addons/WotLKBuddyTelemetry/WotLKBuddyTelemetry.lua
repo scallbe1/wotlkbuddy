@@ -1,5 +1,5 @@
 -- WotLKBuddy v0.3 read-only client telemetry; compatible with WoW 3.3.5a Lua 5.1.
--- Exports a checksum-validated, versioned byte stream as RGB pixels at the top-center.
+-- Exports a checksum-validated, versioned byte stream as RGB pixels at the bottom-left.
 -- Does not execute movement, combat, chat, quests, or privileged APIs.
 
 local SIDE = 4
@@ -11,7 +11,7 @@ local canvas = CreateFrame('Frame', 'WotLKBuddyTelemetryFrame', UIParent)
 canvas:SetWidth(COLS * SIDE)
 canvas:SetHeight(ROWS * SIDE)
 canvas:SetScale(1 / UIParent:GetEffectiveScale())
-canvas:SetPoint('TOP', UIParent, 'TOP', 0, -12)
+canvas:SetPoint('BOTTOMLEFT', UIParent, 'BOTTOMLEFT', 12, 12)
 canvas:SetFrameStrata('TOOLTIP')
 canvas:EnableMouse(false)
 
@@ -45,6 +45,7 @@ end
 -- WotLK 3.3.5 completion history is a server response. Query it rather than
 -- assuming an absent journal entry means a completed quest.
 local completionCache = nil
+local recentlyObservedQuestIds = {}
 local lastCompletionQuery = 0
 local function queryCompletions()
     if QueryQuestsCompleted and (GetTime() - lastCompletionQuery >= 1) then
@@ -137,6 +138,47 @@ local function tickData()
         tostring(free), tostring(capacity), tostring(durability),
         tostring(talents), tostring(GetMoney() or 0),
         safe(classToken, 18), safe(raceToken, 18)}, '\t'))
+    -- Combat observation. Creature entry is encoded in the 3.3.5a UnitGUID
+    -- as 0xF130 + six hex digits for entry + six for spawn ID. Never infer it
+    -- from localized NPC names or the currently selected target label.
+    local targetGuid = UnitExists('target') and UnitGUID('target') or ''
+    local targetEntry = 0
+    if type(targetGuid) == 'string' and string.match(targetGuid, '^0x[Ff]130%x%x%x%x%x%x%x%x%x%x%x%x$') then
+        targetEntry = tonumber(string.sub(targetGuid, 7, 12), 16) or 0
+    end
+    local targetHealth = UnitExists('target') and (UnitHealth('target') or 0) or 0
+    local targetMax = UnitExists('target') and (UnitHealthMax('target') or 0) or 0
+    local targetDead = UnitExists('target') and UnitIsDead('target') and 1 or 0
+    local canAttack = UnitExists('target') and UnitCanAttack('player', 'target') and 1 or 0
+    local targetRange = -1
+    if UnitExists('target') and IsSpellInRange then
+        local ok, value = pcall(IsSpellInRange, 'Fireball', 'target')
+        if ok and value ~= nil then targetRange = value == 1 and 1 or 0 end
+    end
+    appendLine(table.concat({'T', tostring(targetEntry), tostring(targetHealth),
+        tostring(targetMax), tostring(targetDead), tostring(canAttack),
+        tostring(targetRange)}, '\t'))
+    local function known(spellId)
+        if not IsSpellKnown then return -1 end
+        local ok, value = pcall(IsSpellKnown, spellId)
+        if not ok or value == nil then return -1 end
+        return value and 1 or 0
+    end
+    local arcane = 0
+    local armor = 0
+    for i = 1, 40 do
+        local name = UnitBuff('player', i)
+        if not name then break end
+        if name == 'Arcane Intellect' then arcane = 1 end
+        if name == 'Frost Armor' or name == 'Ice Armor' or name == 'Mage Armor' then armor = 1 end
+    end
+    appendLine(table.concat({'B', tostring(known(1459)), tostring(arcane),
+        tostring(known(168)), tostring(armor), tostring(known(133))}, '\t'))
+    local lootCount = 0
+    if LootFrame and LootFrame:IsShown() and GetNumLootItems then
+        lootCount = math.min(GetNumLootItems() or 0, 16)
+    end
+    appendLine(table.concat({'L', tostring(lootCount)}, '\t'))
     -- Read-only NPC dialogue state. GetQuestID() reads the open quest frame,
     -- not the quest log; 0 means the client did not expose a quest ID.
     local dialog = 'none'
@@ -182,12 +224,44 @@ local function tickData()
     end
     appendLine(table.concat({'I', dialog, tostring(dialogQuestID), dialogQuestTitle,
         tostring(rewardChoices), tostring(moneyRequired)}, '\t'))
-    local completed = -1
+    -- Completed quest history is intentionally profile-agnostic: emit observed
+    -- server flags and recent journal IDs, not hard-coded quest 363.
+    local completionStates = {}
+    if completionCache then
+        for id, done in pairs(completionCache) do
+            if type(id) == 'number' and id > 0 and done then
+                completionStates[id] = 1
+            end
+        end
+    end
     if IsQuestFlaggedCompleted then
-        local ok, value = pcall(IsQuestFlaggedCompleted, 363)
-        if ok and value ~= nil then completed = value and 1 or 0 end
-    elseif completionCache then
-        completed = completionCache[363] and 1 or 0
+        for id in pairs(recentlyObservedQuestIds) do
+            local ok, done = pcall(IsQuestFlaggedCompleted, id)
+            if ok and done ~= nil then completionStates[id] = done and 1 or 0 end
+        end
+    end
+    local completedIds = {}
+    for id in pairs(completionStates) do table.insert(completedIds, id) end
+    table.sort(completedIds)
+    -- Bound the historical flag block. At early levels all history fits; on
+    -- longer characters we prioritize recently seen quests first.
+    local emitted = {}
+    local recentIds = {}
+    for id in pairs(recentlyObservedQuestIds) do table.insert(recentIds,id) end
+    table.sort(recentIds)
+    local count = 0
+    for _, id in ipairs(recentIds) do
+        if completionStates[id] ~= nil and count < 100 then
+            appendLine(table.concat({'C', tostring(id), tostring(completionStates[id])}, '\t'))
+            emitted[id] = true
+            count = count + 1
+        end
+    end
+    for _, id in ipairs(completedIds) do
+        if not emitted[id] and count < 100 then
+            appendLine(table.concat({'C', tostring(id), tostring(completionStates[id])}, '\t'))
+            count = count + 1
+        end
     end
     -- Find the exact on-screen button associated with each *active* quest.
     -- GossipTitleButtonN's frame N is NOT the same as its GetID(): available
@@ -289,6 +363,7 @@ local function tickData()
     for i = 1, entries do
         local title, level, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)
         if not isHeader and questID and questID > 0 then
+            recentlyObservedQuestIds[questID] = true
             local qid = tostring(questID)
             local complete = (isComplete == 1) and '1' or '0'
             if not appendLine(table.concat({'Q', qid, tostring(level or 0), complete,
