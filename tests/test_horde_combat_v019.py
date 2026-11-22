@@ -111,6 +111,49 @@ class CombatTests(unittest.TestCase):
         self.assertEqual(g.commands.count('/cast Frost Armor'),1)
         self.assertEqual(g.commands.count('/cast Arcane Intellect'),1)
 
+    def test_resumes_hunting_after_credited_fireball_clears_target(self):
+        class ClearsTargetOnKill(FakeGame):
+            def chat(self, command):
+                super().chat(command)
+                if command == '/cast Fireball' and self.dead:
+                    self.target = 0
+                    self.dead = False
+
+        game = ClearsTargetOnKill()
+        def no_target_xyz(_snapshot):
+            raise ValueError('No target coordinates in offline test')
+        report = hunt_kill_objectives(
+            profile=PROFILE, quest_id=364, pid=77,
+            capture=game.capture, driver=game, nav=Nav(), spawns=None,
+            target_xyz=no_target_xyz, max_seconds=900, max_kills=3,
+            sleep=game.sleep, now=lambda: game.t)
+        self.assertEqual(report.status, 'objectives_complete')
+        self.assertEqual(report.targets_defeated, 2)
+        self.assertEqual(game.commands.count('/cast Fireball'), 2)
+        self.assertNotIn('F', game.commands)  # no looting an unselected corpse
+
+    def test_stops_on_lost_target_without_verified_quest_credit(self):
+        class DropsTargetWithoutKill(FakeGame):
+            def chat(self, command):
+                if command == '/cast Fireball':
+                    self.commands.append(command)
+                    self.target = 0
+                    self.dead = False
+                    self.health = 0
+                else:
+                    super().chat(command)
+
+        game = DropsTargetWithoutKill()
+        with self.assertRaisesRegex(LiveControlError,
+                                    'without confirmed quest kill credit'):
+            hunt_kill_objectives(
+                profile=PROFILE, quest_id=364, pid=77,
+                capture=game.capture, driver=game, nav=Nav(), spawns=None,
+                target_xyz=lambda _s: None,
+                max_seconds=900, max_kills=3,
+                sleep=game.sleep, now=lambda: game.t)
+        self.assertEqual(game.commands.count('/cast Fireball'), 1)
+
     def test_stops_without_learned_fireball(self):
         g=FakeGame()
         source=g.capture

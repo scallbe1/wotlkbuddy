@@ -69,6 +69,21 @@ The driver **does not automatically turn in** quest 364 after killing. Invoke
 `horde-next` again near the quest giver for the next profile action. The generic
 quest-turn-in adapter remains separate.
 
+## Recovering from an auto-cleared target after Fireball
+
+WoW may clear the selected creature GUID as a lethal Fireball lands. After
+a target change, the driver now waits for several fresh addon frames and checks
+the **specific** active KillMob journal objective for an increased kill count.
+Only an observed increase permits another target-search iteration. If the quest
+counter does not advance, it stops without casting at another creature.
+
+A corpse whose GUID is no longer selected is not approached for looting.
+This does not solve every case of ranged target acquisition or lost aggro.
+
+The server's live journal (for example, `0/8`) is authoritative when it differs
+from the profile XML count (for example, `x5`). The quest's actual completion
+flags drive movement to the next species.
+
 ## Stop conditions and known limitations
 
 - No client version other than compatible WoW 3.3.5a build 12340 is verified.
