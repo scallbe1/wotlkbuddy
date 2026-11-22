@@ -12,7 +12,7 @@
 
 Validated Detour routes still supply all waypoints, and travel still checks
 Escape, WoW foreground, health, combat, position, map and character GUID.
-Forward-key presses are now distance-adaptive up to 0.52s instead of the
+Forward-key presses are now distance-adaptive up to 0.45s instead of the
 fixed 0.20s pulse: longer straight segments use fewer stop/start cycles,
 while approaches to waypoints use short bounded taps. Turn calibration
 and terrain collision recovery remain guarded. This is not movement
