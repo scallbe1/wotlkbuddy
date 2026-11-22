@@ -1,9 +1,10 @@
-"""First live quest-pickup adapter for WoW 3.3.5a, guarded by observed UI state.
+"""Profile-driven quest-pickup adapter for WoW 3.3.5a with guarded UI identity.
 
 Uses only ordinary Windows keyboard input and the read-only RGB addon. It does
 not guess object IDs from names, auto-navigate, or execute arbitrary XML/Lua.
-Only a verified quest detail matching the requested ID, or (when the client
-returns ID 0) its exact expected quest title, can trigger AcceptQuest.
+A uniquely verified available-quest menu selection can establish the identity of
+an untagged QuestFrame detail panel on the same invocation. The panel alone
+never proves identity. All pickups require journal confirmation.
 """
 from __future__ import annotations
 
@@ -183,6 +184,11 @@ def pickup_planned_quest(
             raise LiveControlError('Escape or WoW focus lost; quest action stopped')
 
     last = initial
+    # An ID=0/title='' detail is common on this WotLK client. It can only
+    # inherit quest identity from our own fresh, unique available-quest click,
+    # never from an unknown panel that was already open when the command began.
+    selected_verified_menu = False
+
     def wait_for(predicate: Callable[[ClientTelemetry], bool]) -> ClientTelemetry | None:
         nonlocal last
         deadline = now() + timeout
@@ -214,12 +220,28 @@ def pickup_planned_quest(
         ui = state.dialog
         if ui is None or ui.kind != 'detail' or state.player.target_name != npc_name:
             return False
-        if ui.quest_id == quest_id:
-            return not ui.title or ui.title == selected.name
-        # ID 0 is an explicit unknown, not a different quest. In 3.3.5 the
-        # active quest title remains available via GetTitleText(). Require an
-        # exact title from the profile *and* the already-verified NPC target.
-        return ui.quest_id == 0 and bool(selected.name) and ui.title == selected.name
+        # Explicit contradictions are authoritative even after a verified click.
+        if ui.quest_id not in (0, quest_id) or ui.title not in ('', selected.name):
+            return False
+        if ui.quest_id == quest_id or ui.title == selected.name:
+            return True
+        # A blank client ID AND blank client title carry no identity alone.
+        # Only a unique, twice-observed, exact-title available quest from the
+        # profile, followed by our own click and this fresh detail panel, can
+        # authorize the fallback. Another process run must reverify afresh.
+        return selected_verified_menu
+
+    guard()
+    if (last.dialog and last.dialog.kind == 'detail' and
+            last.dialog.quest_id == 0 and last.dialog.title == ''):
+        notify('Already-open quest details have no ID/title; closing without '
+               'accepting, then verifying the quest from the NPC offer list')
+        driver.chat('/click QuestFrameCloseButton')
+        if wait_for(lambda s: s.dialog is not None and
+                    s.dialog.kind in ('none', 'gossip', 'greeting')) is None:
+            return result('dialog_reset_unverified',
+                          'Could not close unidentified quest detail; no acceptance attempted',
+                          target=True)
 
     guard()
     if matches_quest(last) or (last.dialog and last.dialog.kind in ('gossip', 'greeting')):
@@ -256,11 +278,19 @@ def pickup_planned_quest(
         notify(f'Selecting available quest {selected.name!r} from {npc_name}: {command}')
         guard()
         driver.chat(command)
+        selected_verified_menu = True
         dialog = wait_for(matches_quest)
         if dialog is None:
+            observed = ('none' if last.dialog is None else
+                        f'{last.dialog.kind} id={last.dialog.quest_id} '
+                        f'title={last.dialog.title!r}')
             return result('quest_selection_unverified',
-                          'NPC quest option clicked but correct quest detail did not appear',
-                          target=True)
+                          f'After {command}, last observed UI: {observed}; '
+                          'no acceptance attempted', target=True)
+        if dialog.dialog is not None and dialog.dialog.quest_id == 0 and \
+                dialog.dialog.title == '':
+            notify('Verified untagged detail from the unique quest-menu selection '
+                   '(the client omitted both ID and title)')
     if not matches_quest(dialog):
         return result('dialog_unverified',
                       f'Observed {dialog.dialog.kind} quest ID {dialog.dialog.quest_id} '
@@ -277,7 +307,10 @@ def pickup_planned_quest(
     if confirmed.player.target_name != npc_name:
         return result('npc_changed', 'Target changed before acceptance; refusing', target=False)
     evidence = (f'ID {quest_id}' if confirmed.dialog.quest_id == quest_id else
-                f'exact title {selected.name!r} (client returned quest ID 0)')
+                (f'exact title {selected.name!r} (client returned quest ID 0)'
+                 if confirmed.dialog.title == selected.name else
+                 f'unique verified offer of {selected.name!r} '
+                 '(client omitted ID and title)'))
     notify(f'Verified quest detail by {evidence}; accepting with fixed API command')
     driver.chat('/run AcceptQuest()')
     accepted = wait_for(lambda state: quest_id in {q.quest_id for q in state.quests})
