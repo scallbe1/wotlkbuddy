@@ -26,6 +26,9 @@ wotlkbuddy = "wotlkbuddy.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"wotlkbuddy.horde" = ["verified_vendor_services.tsv"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
