@@ -435,6 +435,17 @@ def hunt_kill_objectives(
             next_collect_objective(profile, s, quest_id) if collect_items
             else next_kill_objective(profile, s, quest_id))
         if current_objective is None:
+            if collect_items and active_tracked_item:
+                result = collected_results.get(active_tracked_item)
+                if (result is None or
+                        s.tracked_item_id != active_tracked_item or
+                        s.tracked_item_count is None or
+                        s.tracked_item_count < result[1]):
+                    raise LiveControlError(
+                        'Journal completed quest but final tracked '
+                        'quest-item inventory count cannot be confirmed')
+                collected_results[active_tracked_item] = (
+                    s.tracked_item_count, result[1])
             return HuntReport(
                 quest_id, s.player.name, kills, True, 'objectives_complete',
                 last_target, last_description,
