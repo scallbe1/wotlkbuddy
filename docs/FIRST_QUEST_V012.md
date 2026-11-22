@@ -35,7 +35,7 @@ controller; the test sends only bounded keyboard input. It will:
    and that the planner currently proposes quest 363 pickup.
 2. Type `/targetexact Undertaker Mordo` via WoW's chat; verify target name.
 3. Press F/G (must already be bound to Interact with Target).
-4. Read the live quest dialogue from the addon and verify **DETAIL / quest 363**.
+4. Read the live quest dialogue from the addon and verify **DETAIL / quest 363**, or an exact **Rude Awakening** title if the client returns quest ID 0. Require two consecutive matching telemetry frames.
 5. Only when verified, type the fixed `/run AcceptQuest()` command once.
 6. Check the quest journal actually contains quest 363. The result reports
    `accepted`, `already_in_journal`, or an explicit stop status.
