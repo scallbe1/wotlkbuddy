@@ -535,7 +535,12 @@ local function tickData()
     -- only one selected, verified slot and checks sale results.
     if MerchantFrame and MerchantFrame:IsShown() then
         local rows = {}
-        local saleScanComplete = GetContainerItemQuestInfo and 1 or 0
+        -- The buyback tab can ignore right-click sales; require the normal
+        -- merchant sell tab and a quest-item API before authorizing sales.
+        local saleScanComplete = (
+            GetContainerItemQuestInfo and
+            (not MerchantFrame.selectedTab or MerchantFrame.selectedTab == 1)
+            ) and 1 or 0
         local equipTypes = {
             INVTYPE_HEAD=1, INVTYPE_NECK=1, INVTYPE_SHOULDER=1,
             INVTYPE_BODY=1, INVTYPE_CHEST=1, INVTYPE_ROBE=1,
