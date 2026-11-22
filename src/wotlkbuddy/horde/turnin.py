@@ -136,12 +136,51 @@ def turnin_rude_awakening(
             return report('npc_not_targeted', 'Cannot target Sarvis; move closer')
 
     guard()
-    if not any(dialog_ok(last, kind) for kind in ('progress', 'reward')):
+    if not any(dialog_ok(last, kind) for kind in ('progress', 'reward')) and not \
+            (last.dialog and last.dialog.kind in ('gossip', 'greeting')):
         notify('Interacting with Shadow Priest Sarvis')
         driver.interact()
         observed = wait_for(lambda s: s.dialog is not None and s.dialog.kind != 'none')
         if observed is None:
             return report('npc_out_of_range', 'No dialog; NPC may not be within range', target=True)
+
+    # A multi-quest NPC first opens a list of active quests, not the individual
+    # progress/reward panel. This is exactly the Sarvis state seen in the live
+    # v0.16.1 test. Select by exact observed title and list index, never by
+    # guessing index 1 or selecting an available/new quest.
+    if last.dialog and last.dialog.kind in ('gossip', 'greeting'):
+        source = last.dialog.kind
+        matching = [option for option in last.quest_menu
+                    if option.source == source and option.title == expected_title]
+        if len(matching) != 1:
+            offered = [(o.index, o.title, o.complete) for o in last.quest_menu]
+            return report('quest_not_in_npc_menu',
+                          f'Expected one active quest {expected_title!r}; '
+                          f'observed {source} active quest entries {offered!r}', target=True)
+        chosen = matching[0]
+        if not chosen.complete:
+            return report('quest_in_menu_not_complete',
+                          f'NPC lists {expected_title!r} but not as complete; '
+                          'selection and turn-in were not attempted', target=True)
+        # Verify a second *fresh* telemetry frame: same character, target,
+        # list index/title and completed status before any selection command.
+        def same_menu(s: ClientTelemetry) -> bool:
+            return (s.player.target_name == npc_name and s.dialog is not None and
+                    s.dialog.kind == source and
+                    any(o == chosen for o in s.quest_menu) and
+                    len([o for o in s.quest_menu if o.title == expected_title]) == 1)
+        if wait_for(same_menu) is None:
+            return report('quest_menu_unverified',
+                          'Active quest list changed before selection; no input sent', target=True)
+        guard()
+        api = 'SelectGossipActiveQuest' if source == 'gossip' else 'SelectActiveQuest'
+        notify(f'Choosing verified active quest {expected_title!r} from {source} entry {chosen.index}')
+        driver.chat(f'/run {api}({chosen.index})')
+        selected = wait_for(lambda s: dialog_ok(s, 'progress') or dialog_ok(s, 'reward'))
+        if selected is None:
+            return report('quest_selection_unverified',
+                          'Selected the verified active quest but did not observe its '
+                          'progress/reward frame; no completion attempted', target=True)
 
     if dialog_ok(last, 'progress'):
         if wait_for(lambda s: dialog_ok(s, 'progress')) is None:
