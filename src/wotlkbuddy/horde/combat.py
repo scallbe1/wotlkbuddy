@@ -71,41 +71,82 @@ def next_kill_objective(profile: HordeProfile, snap: ClientTelemetry, quest_id: 
     raise LiveControlError('Objective flags all complete but quest not marked complete; refusing to guess')
 
 
-def next_collect_objective(profile: HordeProfile, snap: ClientTelemetry, quest_id: int):
-    """Return the first unfinished, profile-matched item objective.
+def next_collect_objective(
+    profile: HordeProfile, snap: ClientTelemetry, quest_id: int, *,
+    item_names: dict[int, str] | None = None,
+):
+    """Select source-profile CollectItem order, binding item to journal by name.
 
-    XML objective and journal order, type, count and item inventory identity
-    are independent checks. Combat/loot is only authorized after the source
-    Mob entries have also been verified; an item ID is never a creature ID.
+    Honorbuddy QuestOrder can list item IDs in a different order from <Quest>
+    objective definitions and the live quest journal. Never associate an
+    item ID with a journal objective merely by tuple position.
+    The client-reported GetItemInfo name binds the exact ItemId to a unique
+    GetQuestLogLeaderBoard description; before that name is available this
+    function returns a *provisional* candidate for tracking, not combat.
     """
-    spec = next((q for q in profile.quests if q.quest_id == quest_id), None)
+    quest_spec = next((q for q in profile.quests if q.quest_id == quest_id), None)
     journal = next((q for q in snap.quests if q.quest_id == quest_id), None)
-    if spec is None or journal is None:
+    if quest_spec is None or journal is None:
         raise LiveControlError(
             f'Quest {quest_id} lacks XML Quest specs or active journal entry')
     if journal.complete:
         return None
-    if not spec.objectives or len(spec.objectives) != len(journal.objectives):
+    if (not quest_spec.objectives or
+            len(quest_spec.objectives) != len(journal.objectives)):
         raise LiveControlError('CollectItem XML/journal objective count mismatch')
-    for objective, observed in zip(spec.objectives, journal.objectives):
-        if observed.done:
-            continue
-        if objective.kind != 'CollectItem' or objective.entry <= 0:
+    if any(obj.kind != 'CollectItem' for obj in quest_spec.objectives):
+        raise LiveControlError(
+            'Mixed non-collection quest objectives require a separate executor')
+    counts = {obj.count for obj in quest_spec.objectives}
+    for observed in journal.objectives:
+        parsed = objective_progress(observed.description)
+        if (observed.kind.lower() != 'item' or parsed is None
+                or parsed[1] not in counts or
+                not 0 <= parsed[0] <= parsed[1] or parsed[1] > 200):
             raise LiveControlError(
-                'Next unfinished quest objective is not CollectItem')
-        if observed.kind.lower() != 'item':
-            raise LiveControlError(
-                f'Expected journal item objective, got {observed.kind!r}')
-        amounts = objective_progress(observed.description)
-        if (amounts is None or amounts[1] != objective.count or
-                not 0 <= amounts[0] < amounts[1] or
-                amounts[1] > 200):
-            raise LiveControlError(
-                'Live item collection count conflicts with source XML')
-        return objective, observed
+                'Live item journal objective type/count conflicts with XML')
+
+    by_id = {obj.entry: obj for obj in quest_spec.objectives}
+    if len(by_id) != len(quest_spec.objectives):
+        raise LiveControlError('Duplicate item IDs in XML quest spec')
+    ordered = tuple(dict.fromkeys(
+        step.entry for step in profile.steps
+        if step.kind == 'objective' and step.quest_id == quest_id
+        and step.objective_type == 'CollectItem' and step.supported))
+    if not ordered or set(ordered) != set(by_id):
+        raise LiveControlError(
+            'Horde QuestOrder and Quest item objectives disagree')
+    names = dict(item_names or {})
+    if snap.tracked_item_id is not None and snap.tracked_item_name:
+        names[snap.tracked_item_id] = snap.tracked_item_name
+    for item_id in ordered:
+        spec = by_id[item_id]
+        item_name = names.get(item_id)
+        if item_name:
+            matched = [obj for obj in journal.objectives
+                       if obj.description.rpartition(':')[0].strip().casefold()
+                       == item_name.strip().casefold()]
+            if len(matched) != 1:
+                raise LiveControlError(
+                    f'Item {item_id} name {item_name!r} cannot uniquely '
+                    'match live quest journal objective')
+            observed = matched[0]
+            counts_for_item = objective_progress(observed.description)
+            if counts_for_item is None or counts_for_item[1] != spec.count:
+                raise LiveControlError('Named item objective count mismatch')
+            if observed.done:
+                continue
+            return spec, observed
+        # Item is not yet name-bound. This candidate only authorizes
+        # /wbttrack <ItemId>; the caller must rebind before any combat.
+        candidate = next((obj for obj in journal.objectives
+                          if not obj.done and
+                          objective_progress(obj.description)[1] == spec.count),
+                         None)
+        if candidate is not None:
+            return spec, candidate
     raise LiveControlError(
-        'Collection objective flags complete but quest not complete; '
-        'refusing to guess next step')
+        'No pending CollectItem stage can be verified against live journal')
 
 
 def objective_progress(description: str) -> tuple[int, int] | None:
