@@ -466,8 +466,15 @@ def follow_route(
                     key = 'turn-right' if difference > 0 else 'turn-left'
                     drift_x, drift_y = act(key, duration)
                     total_turns += 1
-                    if hypot(drift_x, drift_y) > 0.00035:
-                        raise LiveControlError('Unexpected translation during turn')
+                    # Telemetry is published ~0.5s apart. The first frame seen
+                    # after a turn can include the tail of the *preceding*
+                    # forward movement. That is not proof that W stayed down
+                    # during A/D, so do not stop on a small position delta.
+                    # Still reject a truly discontinuous position jump.
+                    if hypot(drift_x, drift_y) > 0.003:
+                        raise LiveControlError('Unexpected map position jump across turn')
+                    last_distance = hypot(destination.x - current.player.map_x,
+                                          destination.y - current.player.map_y)
                     # Turn-rate estimate is not exact; refresh the measured
                     # bearing from the next continuous walking segment.
                     bearing = None

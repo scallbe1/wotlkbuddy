@@ -122,6 +122,25 @@ class IntermittentForwardGame(HalfSecondTelemetryGame):
             super().sleep(duration)
 
 
+
+class TurnMotionTelemetryGame(HalfSecondTelemetryGame):
+    """Regression: a frame taken during A/D includes some late position change.
+
+    This represents WoW telemetry/forward-release phasing (and also a small
+    legitimate drift); it is *not* proof of being stuck or unsafe path motion.
+    """
+
+    def __init__(self, drift_rate=0.0014, **kwargs):
+        super().__init__(**kwargs)
+        self.drift_rate = drift_rate
+
+    def sleep(self, duration):
+        turning = self.key in (0x1E, 0x20)
+        super().sleep(duration)
+        if turning:
+            self.x += self.drift_rate * duration
+
+
 def mkroute(*points):
     return MapRoute('Darkshore', 1, 12,
                     (MapWaypoint(0.375, 0.420, 'start'),
@@ -340,6 +359,21 @@ class LiveFollowTests(unittest.TestCase):
         # not lifted every time the addon publishes a frame.
         self.assertLessEqual(report.moves, 3)
         self.assertGreater(report.forward_seconds, 4.0)
+        self.assertIsNone(g.key)
+
+    def test_small_reported_translation_during_turn_does_not_end_route(self):
+        g = TurnMotionTelemetryGame(heading=180)
+        result = follow(g, mkroute((0.381, 0.420)), max_seconds=120)
+        self.assertEqual(result.stopped_reason, 'complete', result)
+        self.assertEqual(result.waypoints_reached, 1)
+        self.assertGreater(result.turns, 0)
+        self.assertIsNone(g.key)
+
+    def test_large_position_jump_during_turn_still_stops(self):
+        g = TurnMotionTelemetryGame(heading=180, drift_rate=0.06)
+        result = follow(g, mkroute((0.381, 0.420)), max_seconds=120)
+        self.assertIn('position jump', result.stopped_reason.lower())
+        self.assertEqual(result.waypoints_reached, 0)
         self.assertIsNone(g.key)
 
     def test_stale_frames_stop_and_release_continuous_key(self):
