@@ -42,7 +42,8 @@ class LastCorpseGame(FakeGame):
         self.slots = 1
 
     def capture(self):
-        return replace(super().capture(), loot_count=self.slots)
+        return replace(super().capture(), loot_count=self.slots,
+                       loot_open=bool(self.slots))
 
 
 class SmootherMovementLootTests(unittest.TestCase):
