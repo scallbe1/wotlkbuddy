@@ -1,0 +1,149 @@
+-- WotLKBuddy v0.3 read-only client telemetry; compatible with WoW 3.3.5a Lua 5.1.
+-- Exports a checksum-validated, versioned byte stream as RGB pixels at the top-left.
+-- Does not execute movement, combat, chat, quests, or privileged APIs.
+
+local SIDE = 4
+local COLS = 48
+local ROWS = 20
+local CAPACITY = (COLS * ROWS - 6) * 3
+local MAGIC = {{255, 0, 255}, {0, 255, 255}, {255, 255, 0}, {0, 0, 0}}
+local canvas = CreateFrame('Frame', 'WotLKBuddyTelemetryFrame', UIParent)
+canvas:SetWidth(COLS * SIDE)
+canvas:SetHeight(ROWS * SIDE)
+canvas:SetScale(1 / UIParent:GetEffectiveScale())
+canvas:SetPoint('TOPLEFT', UIParent, 'TOPLEFT', 12, -12)
+canvas:SetFrameStrata('TOOLTIP')
+canvas:EnableMouse(false)
+
+local pixels = {}
+local previous = {}
+for n = 1, COLS * ROWS do
+    local texture = canvas:CreateTexture(nil, 'ARTWORK')
+    texture:SetWidth(SIDE)
+    texture:SetHeight(SIDE)
+    local col = (n - 1) % COLS
+    local row = math.floor((n - 1) / COLS)
+    texture:SetPoint('TOPLEFT', canvas, 'TOPLEFT', col * SIDE, -row * SIDE)
+    texture:SetTexture(0, 0, 0, 1)
+    pixels[n] = texture
+end
+
+local function setPixel(index, r, g, b)
+    local old = previous[index]
+    if old and old[1] == r and old[2] == g and old[3] == b then return end
+    pixels[index]:SetTexture(r / 255, g / 255, b / 255, 1)
+    previous[index] = {r, g, b}
+end
+
+local function safe(value, maxLength)
+    if value == nil then return '' end
+    local s = tostring(value)
+    s = string.gsub(s, '[\r\n\t]', ' ')
+    return string.sub(s, 1, maxLength or 100)
+end
+
+local function tickData()
+    local lines = {}
+    local isTruncated = false
+    local payloadBytes = 0
+    -- Always reserve room for a terminal truncation marker.
+    local function appendLine(line)
+        if payloadBytes + string.len(line) + 1 > CAPACITY - 20 then
+            isTruncated = true
+            return false
+        end
+        table.insert(lines, line)
+        payloadBytes = payloadBytes + string.len(line) + 1
+        return true
+    end
+    local hp = UnitHealth('player') or 0
+    local maxhp = UnitHealthMax('player') or 0
+    local px, py = GetPlayerMapPosition('player')
+    local guid = UnitGUID('player') or ''
+    local zone = GetZoneText() or ''
+    local combat = UnitAffectingCombat('player') and 1 or 0
+    local dead = UnitIsDeadOrGhost('player') and 1 or 0
+    local target = UnitExists('target') and (UnitGUID('target') or '') or ''
+    local playerLine = table.concat({
+        'P', safe(UnitName('player'), 50), safe(guid, 32),
+        tostring(UnitLevel('player') or 0), tostring(hp), tostring(maxhp),
+        tostring(combat), tostring(dead),
+        string.format('%.5f', px or 0), string.format('%.5f', py or 0),
+        tostring(GetCurrentMapContinent() or 0), tostring(GetCurrentMapZone() or 0),
+        safe(zone, 55), safe(target, 32),
+        safe(UnitName('target'), 50),
+    }, '\t')
+    appendLine(playerLine)
+    local entries = GetNumQuestLogEntries() or 0
+    for i = 1, entries do
+        local title, level, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)
+        if not isHeader and questID and questID > 0 then
+            local qid = tostring(questID)
+            local complete = (isComplete == 1) and '1' or '0'
+            if not appendLine(table.concat({'Q', qid, tostring(level or 0), complete,
+                safe(title, 70)}, '\t')) then break end
+            local objectiveCount = GetNumQuestLeaderBoards(i) or 0
+            for j = 1, objectiveCount do
+                local description, kind, finished = GetQuestLogLeaderBoard(j, i)
+                if not appendLine(table.concat({'O', qid, tostring(j),
+                    finished and '1' or '0', safe(kind, 20), safe(description, 90)}, '\t')) then
+                    break
+                end
+            end
+        end
+    end
+    if isTruncated then table.insert(lines, 'E\tTRUNCATED') end
+    return table.concat(lines, '\n') .. '\n'
+end
+
+local sequence = 0
+local function publish()
+    local ok, data = pcall(tickData)
+    if not ok then
+        data = 'E\tLUA_ERROR\t' .. safe(data, 80) .. '\n'
+    end
+    if string.len(data) > CAPACITY then data = 'E\tPAYLOAD_TOO_LONG\n' end
+    local length = string.len(data)
+    local checksum = 0
+    for i = 1, length do
+        checksum = (checksum + i * string.byte(data, i)) % 65536
+    end
+    sequence = (sequence + 1) % 256
+    for i = 1, 4 do setPixel(i, unpack(MAGIC[i])) end
+    setPixel(5, 3, length % 256, math.floor(length / 256))
+    setPixel(6, sequence, checksum % 256, math.floor(checksum / 256))
+    local index = 7
+    for i = 1, length, 3 do
+        setPixel(index, string.byte(data, i) or 0,
+            string.byte(data, i + 1) or 0, string.byte(data, i + 2) or 0)
+        index = index + 1
+    end
+    -- Clear unused cells so old payload cannot be misinterpreted as current data.
+    while index <= COLS * ROWS do
+        setPixel(index, 0, 0, 0)
+        index = index + 1
+    end
+end
+
+local elapsedTime = 0
+canvas:SetScript('OnUpdate', function(_, elapsed)
+    elapsedTime = elapsedTime + elapsed
+    if elapsedTime < 0.5 then return end
+    elapsedTime = 0
+    publish()
+end)
+
+SLASH_WOTLKBUDDY1 = '/wbt'
+SlashCmdList['WOTLKBUDDY'] = function(msg)
+    if msg == 'hide' then
+        canvas:Hide()
+        DEFAULT_CHAT_FRAME:AddMessage('WotLKBuddy telemetry hidden (/wbt show to resume).')
+    elseif msg == 'show' then
+        canvas:Show()
+        DEFAULT_CHAT_FRAME:AddMessage('WotLKBuddy telemetry visible.')
+    else
+        DEFAULT_CHAT_FRAME:AddMessage('WotLKBuddy telemetry: /wbt show or /wbt hide')
+    end
+end
+
+publish()

@@ -1,9 +1,12 @@
-"""CLI entry point. Simulated gameplay is the only implemented bot runtime."""
+"""CLI for offline bot simulation and read-only live WoW telemetry."""
 
 from __future__ import annotations
 
 import argparse
 import sys
+import json
+import time
+from dataclasses import asdict
 
 from wotlkbuddy.bots.grind import GrindBot
 from wotlkbuddy.bots.quest import QuestBot
@@ -120,6 +123,43 @@ def _check_nav(args: argparse.Namespace) -> None:
     del navigator
 
 
+
+def _install_telemetry(args: argparse.Namespace) -> None:
+    from wotlkbuddy.live.install import install_addon
+    destination = install_addon(args.wow_dir)
+    print(f'Installed WoW 3.3.5a read-only addon: {destination}')
+    print('Restart WoW (or enable addon at character-select and /reload).')
+    print('Then use /wbt show in the in-game chat.')
+
+
+def _live_watch(args: argparse.Namespace) -> None:
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.codec import TelemetryError
+    if args.seconds <= 0 or args.interval <= 0:
+        raise ValueError('--seconds and --interval must be positive')
+    deadline = time.monotonic() + args.seconds
+    last_sequence = None
+    last_error = None
+    count = 0
+    while time.monotonic() < deadline:
+        try:
+            result = capture_monitor(args.monitor)
+            if result.sequence != last_sequence:
+                last_sequence = result.sequence
+                count += 1
+                print(json.dumps(asdict(result), ensure_ascii=False), flush=True)
+                if result.truncated:
+                    print('WARNING: Quest list truncated by addon payload cap', file=sys.stderr)
+                last_error = None
+        except TelemetryError as exc:
+            if str(exc) != last_error:
+                print(f'Waiting for addon: {exc}', file=sys.stderr, flush=True)
+                last_error = str(exc)
+        time.sleep(args.interval)
+    if count == 0:
+        raise RuntimeError('No valid WoW addon telemetry received. See docs/LIVE_CLIENT.md')
+    print(f'Received {count} unique real-client telemetry frames (read-only).', file=sys.stderr)
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wotlkbuddy")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -142,6 +182,16 @@ def main(argv: list[str] | None = None) -> int:
     nav = sub.add_parser("navcheck", help="Load native Navigation.dll (Windows)")
     nav.add_argument("dll")
     nav.set_defaults(func=_check_nav)
+    install = sub.add_parser('install-addon', help='Install bundled read-only WoW addon')
+    install.add_argument('--wow-dir', required=True,
+                         help='WoW 3.3.5a client directory containing Wow.exe')
+    install.set_defaults(func=_install_telemetry)
+    watch = sub.add_parser('live-watch', help='Read real-client player/quest state from addon screen')
+    watch.add_argument('--seconds', type=float, default=30.0)
+    watch.add_argument('--interval', type=float, default=0.7)
+    watch.add_argument('--monitor', type=int, default=0,
+                       help='0 = all displays; 1 = primary display')
+    watch.set_defaults(func=_live_watch)
     args = parser.parse_args(argv)
     if getattr(args, "ticks", 0) < 0:
         parser.error("--ticks must be nonnegative")

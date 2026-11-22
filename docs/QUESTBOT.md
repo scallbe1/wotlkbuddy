@@ -1,6 +1,6 @@
-# WotLKBuddy QuestBot — v0.2.0
+# WotLKBuddy QuestBot — v0.3.0
 
-The quest bot is **offline-simulation only**. No in-game quest automation is
+The action-capable quest bot is **offline-simulation only**. No in-game quest automation is
 implemented or validated yet. Run `wotlkbuddy quest-simulate` to see the bot
 complete a full fictional quest chain using the same action model the live
 adapter is expected to implement.
@@ -86,3 +86,10 @@ build 12340:
 
 The quest port is intentionally separate from memory and Lua execution, so
 its logic can be tested without a WoW client.
+
+## v0.3.0 quest-journal observation
+
+The live addon/receiver can now **observe** active real-client quests and
+objective descriptions (see [LIVE_CLIENT.md](LIVE_CLIENT.md)). It is read-only;
+without verified world X/Y/Z, unit entry IDs, completed quest history and
+action dispatch, it cannot yet execute QuestBot profiles in game.
