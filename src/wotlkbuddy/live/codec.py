@@ -169,6 +169,36 @@ class MageBuffState:
 
 
 @dataclass(frozen=True)
+class BagArmor:
+    bag: int
+    slot: int
+    item_id: int
+    inventory_slot: int
+    item_level: int
+    required_level: int
+    score: int
+    equippable: bool
+    name: str
+
+
+@dataclass(frozen=True)
+class EquippedArmor:
+    inventory_slot: int
+    item_id: int
+    item_level: int
+    score: int
+
+
+@dataclass(frozen=True)
+class TrainerService:
+    index: int
+    name: str
+    rank: str
+    cost: int
+    required_level: int
+
+
+@dataclass(frozen=True)
 class ClientTelemetry:
     sequence: int
     player: PlayerRecord
@@ -183,6 +213,11 @@ class ClientTelemetry:
     mage_buffs: MageBuffState | None = None
     loot_count: int | None = None
     reward_choices: tuple[QuestRewardChoice, ...] = ()
+    bag_armor: tuple[BagArmor, ...] = ()
+    equipped_armor: tuple[EquippedArmor, ...] = ()
+    gear_scan_complete: bool = False
+    trainer_open: bool = False
+    trainer_services: tuple[TrainerService, ...] = ()
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -200,6 +235,13 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     buffs = None
     loot_count = None
     reward_options: dict[int, QuestRewardChoice] = {}
+    bag_armor: dict[tuple[int, int], BagArmor] = {}
+    worn_armor: dict[int, EquippedArmor] = {}
+    gear_scan_complete = False
+    gear_scan_seen = False
+    trainer_seen = False
+    trainer_count: int | None = None
+    trainer_services: dict[int, TrainerService] = {}
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -354,6 +396,66 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             if not 1 <= index <= 32 or not 0 <= button <= 32 or key in available:
                 raise TelemetryError('Out-of-range or duplicate available quest-list entry')
             available[key] = AvailableQuestOption(parts[1], index, parts[3], button or None)
+        elif parts[0] == 'U':
+            if len(parts) != 10:
+                raise TelemetryError('Invalid bag armor record')
+            try:
+                bag, slot, item_id, inventory_slot, level, required, score = map(
+                    int, parts[1:8])
+            except ValueError as exc:
+                raise TelemetryError('Malformed bag armor record') from exc
+            key = (bag, slot)
+            if (not 0 <= bag <= 4 or not 1 <= slot <= 36 or
+                    not 1 <= item_id < 2**31 or inventory_slot not in
+                    (1, 3, 5, 6, 7, 8, 9, 10, 15) or
+                    not 0 <= level <= 1000 or not 0 <= required <= 100 or
+                    not 0 <= score <= 1000000 or parts[8] not in ('0','1') or
+                    not parts[9] or len(parts[9]) > 55 or key in bag_armor):
+                raise TelemetryError('Invalid or duplicate bag armor')
+            bag_armor[key] = BagArmor(bag, slot, item_id, inventory_slot,
+                                      level, required, score, parts[8] == '1',
+                                      parts[9])
+        elif parts[0] == 'W':
+            if len(parts) != 5:
+                raise TelemetryError('Invalid equipped armor record')
+            try:
+                slot, item_id, level, score = map(int, parts[1:])
+            except ValueError as exc:
+                raise TelemetryError('Malformed equipped armor record') from exc
+            if (slot not in (1, 3, 5, 6, 7, 8, 9, 10, 15) or
+                    not 1 <= item_id < 2**31 or
+                    not 0 <= level <= 1000 or not 0 <= score <= 1000000 or
+                    slot in worn_armor):
+                raise TelemetryError('Invalid or duplicate equipped armor')
+            worn_armor[slot] = EquippedArmor(slot, item_id, level, score)
+        elif parts[0] == 'Z':
+            if len(parts) != 2 or parts[1] not in ('0','1') or gear_scan_seen:
+                raise TelemetryError('Invalid or repeated gear-scan status')
+            gear_scan_seen = True
+            gear_scan_complete = parts[1] == '1'
+        elif parts[0] == 'N':
+            if len(parts) != 3 or parts[1] != '1' or trainer_seen:
+                raise TelemetryError('Invalid or repeated trainer state')
+            try:
+                trainer_count = int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Malformed trainer service count') from exc
+            if not 0 <= trainer_count <= 120:
+                raise TelemetryError('Trainer service count out of range')
+            trainer_seen = True
+        elif parts[0] == 'Y':
+            if len(parts) != 6 or not trainer_seen:
+                raise TelemetryError('Trainer service without active trainer panel')
+            try:
+                index, cost, level = int(parts[1]), int(parts[4]), int(parts[5])
+            except ValueError as exc:
+                raise TelemetryError('Malformed trainer service') from exc
+            if (not 1 <= index <= 120 or index in trainer_services or
+                    not parts[2] or len(parts[2]) > 55 or len(parts[3]) > 25 or
+                    not 0 <= cost <= 2000000000 or not 0 <= level <= 100):
+                raise TelemetryError('Invalid or duplicate trainer service')
+            trainer_services[index] = TrainerService(index, parts[2], parts[3],
+                                                     cost, level)
         elif parts[0] == 'C':
             if len(parts) != 3:
                 raise TelemetryError('Invalid completed-quest status row')
@@ -375,6 +477,10 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             raise TelemetryError('Unexpected record type: ' + parts[0])
     if player is None:
         raise TelemetryError('Missing player record')
+    if trainer_seen and len(trainer_services) != trainer_count:
+        raise TelemetryError('Incomplete trainer service list')
+    if (bag_armor or worn_armor) and not gear_scan_seen:
+        raise TelemetryError('Gear scan records missing completeness flag')
     if not (0 <= player.health <= player.max_health and player.max_health >= 1):
         raise TelemetryError('Invalid player health values')
     if not (0 <= player.map_x <= 1 and 0 <= player.map_y <= 1):
@@ -399,4 +505,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            available_quest_menu=tuple(available.values()),
                            combat_target=target, mage_buffs=buffs,
                            loot_count=loot_count,
-                           reward_choices=tuple(reward_options[i] for i in sorted(reward_options)))
+                           reward_choices=tuple(reward_options[i] for i in sorted(reward_options)),
+                           bag_armor=tuple(bag_armor.values()),
+                           equipped_armor=tuple(worn_armor.values()),
+                           gear_scan_complete=gear_scan_complete,
+                           trainer_open=trainer_seen,
+                           trainer_services=tuple(trainer_services.values()))
