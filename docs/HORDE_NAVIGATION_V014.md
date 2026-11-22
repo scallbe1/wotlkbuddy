@@ -13,12 +13,16 @@ The upstream repositories contain different kinds of data, and none should be co
 
 ## Query confirmed NPC data (no live input)
 
-Get `datadb/CreatureSpawns.db` by cloning Likon69/CopilotBuddy or downloading that exact file from its public repository. Example with a local checkout:
+**v0.14.1:** No separate spawn DB installation is needed. The command reuses
+`~/CopilotBuddy/datadb/CreatureSpawns.db` if already present. Otherwise it
+retrieves a pinned upstream binary directly and verifies the Git blob SHA before
+saving it under `~/.cache/wotlkbuddy/CreatureSpawns.db`. The database is
+not redistributed in this repo because its upstream redistribution license is
+not stated. `--spawns-db` remains available for advanced local overrides.
 
 ```powershell
 py -3.12 -m wotlkbuddy horde-nav-plan `
   --profiles-root "$HOME\Questing-profiles" `
-  --spawns-db "$HOME\CopilotBuddy\datadb\CreatureSpawns.db" `
   --race Undead --level 1 --quest-id 363 --map-id 0
 ```
 

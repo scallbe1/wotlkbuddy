@@ -7,6 +7,11 @@ quest order NPCs. Always keep WORLD coordinates separate from UI map fractions.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
+import os
+import tempfile
+from urllib.error import URLError
+from urllib.request import urlopen
 from math import dist, isfinite
 from pathlib import Path
 import sqlite3
@@ -14,6 +19,72 @@ from urllib.parse import quote
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.profile import HordeProfile
+
+
+# Pinned to the exact upstream Git blob rather than an unversioned master URL.
+# The 16 MB upstream binary does not advertise a redistribution license, so
+# it is obtained directly from its author at runtime, never redistributed.
+SPAWNS_REPO_REVISION = 'c0cc1fcac7afd9095b409065497ff58048005d46'
+SPAWNS_GIT_BLOB_SHA = '6bb5578e8269d113574bbbdf9c3283d14d418733'
+SPAWNS_SIZE = 16_130_048
+SPAWNS_URL = (f'https://raw.githubusercontent.com/Likon69/CopilotBuddy/'
+              f'{SPAWNS_REPO_REVISION}/datadb/CreatureSpawns.db')
+
+
+def _valid_upstream_blob(path: Path) -> bool:
+    """Check byte length and Git blob SHA-1 for a pinned, unmodified source."""
+    if not path.is_file() or path.stat().st_size != SPAWNS_SIZE:
+        return False
+    digest = hashlib.sha1(b'blob ' + str(SPAWNS_SIZE).encode('ascii') + b'\0')
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest() == SPAWNS_GIT_BLOB_SHA
+
+
+def resolve_creature_spawns(explicit: str | Path | None = None, *,
+                            home: Path | None = None) -> Path:
+    """Find a local copy or fetch the pinned upstream DB into a persistent cache.
+
+    An explicitly provided path is always respected and NEVER downloaded into.
+    Reuse the existing CopilotBuddy checkout when present, else a verified
+    cache. Downloads are bounded, verified, and atomically moved into place.
+    """
+    if explicit is not None:
+        path = Path(explicit).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f'--spawns-db file not found: {path}')
+        return path
+    root = Path.home() if home is None else Path(home)
+    existing = root / 'CopilotBuddy' / 'datadb' / 'CreatureSpawns.db'
+    if existing.is_file():
+        return existing.resolve()   # existing user-supplied file; schema checked by reader
+    cached = root / '.cache' / 'wotlkbuddy' / 'CreatureSpawns.db'
+    if _valid_upstream_blob(cached):
+        return cached.resolve()
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix='.CreatureSpawns-', suffix='.tmp',
+                                         dir=cached.parent, delete=False) as out:
+            temporary = Path(out.name)
+            with urlopen(SPAWNS_URL, timeout=30) as response:
+                total = 0
+                while chunk := response.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > SPAWNS_SIZE:
+                        raise ValueError('Upstream CreatureSpawns.db exceeded pinned size')
+                    out.write(chunk)
+        if not _valid_upstream_blob(temporary):
+            raise ValueError('Upstream CreatureSpawns.db failed Git blob integrity verification')
+        os.replace(temporary, cached)
+        temporary = None
+    except (OSError, URLError, TimeoutError) as exc:
+        raise RuntimeError(f'Could not retrieve CopilotBuddy spawn data from {SPAWNS_URL}: {exc}') from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return cached.resolve()
 
 
 @dataclass(frozen=True)

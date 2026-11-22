@@ -288,7 +288,8 @@ def _horde_nav_plan(args: argparse.Namespace) -> None:
     """
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
     from wotlkbuddy.horde.worlddata import (CreatureSpawnDatabase, distance_world,
-                                            prepare_quest_corridor)
+                                            prepare_quest_corridor,
+                                            resolve_creature_spawns)
     from wotlkbuddy.navigation.proxy import NavigationProxy
     from wotlkbuddy.navigation.detour import DetourNavigator
     from pathlib import Path
@@ -298,7 +299,9 @@ def _horde_nav_plan(args: argparse.Namespace) -> None:
     chosen = select_profile_from_loader(args.profiles_root,
                                         level=args.level, race=args.race)
     profile = load_horde_profile(chosen)
-    with CreatureSpawnDatabase(args.spawns_db) as db:
+    db_path = resolve_creature_spawns(args.spawns_db)
+    print(f'Creature spawn data: {db_path}', file=_sys.stderr)
+    with CreatureSpawnDatabase(db_path) as db:
         corridor = prepare_quest_corridor(profile, db, args.quest_id, args.map_id)
     output = corridor.to_dict()
     output['source_profile'] = str(chosen)
@@ -700,8 +703,9 @@ def main(argv: list[str] | None = None) -> int:
     np = sub.add_parser('horde-nav-plan',
                         help='Read-only NPC world XYZ/spawn audit and optional Detour reference path')
     np.add_argument('--profiles-root', required=True)
-    np.add_argument('--spawns-db', required=True,
-                    help='CopilotBuddy/datadb/CreatureSpawns.db (read-only)')
+    np.add_argument('--spawns-db',
+                    help='Optional local DB path. Without it, reuse ~/CopilotBuddy/datadb '
+                         'or download a pinned verified upstream copy automatically and cache it')
     np.add_argument('--race', choices=['Undead', 'Orc', 'Troll', 'BloodElf'], default='Undead')
     np.add_argument('--level', type=int, default=1)
     np.add_argument('--quest-id', type=int, default=363)

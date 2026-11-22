@@ -338,3 +338,18 @@ Python worker, it can generate an **NPC-to-NPC reference navmesh path**, but
 **does not move the player**. See
 [Horde Navigation v0.14](docs/HORDE_NAVIGATION_V014.md) for commands, data
 provenance, and remaining combat/telemetry blockers.
+
+## v0.14.1 — zero-setup creature spawn data
+
+`horde-nav-plan` now automatically uses the existing `~/CopilotBuddy/datadb/CreatureSpawns.db`
+when present, otherwise fetches an *exact pinned upstream version* directly from
+`Likon69/CopilotBuddy` into `~/.cache/wotlkbuddy/CreatureSpawns.db` on the
+first run. It verifies the file length and Git blob SHA before caching. No
+manual download command or `--spawns-db` option is needed. You may still pass
+`--spawns-db` to use a specific local DB. The original 16 MB binary is not
+republished here because the upstream repository declares no explicit license
+for redistribution. This is a third-party source dependency, not navmesh data.
+
+```
+py -3.12 -m wotlkbuddy horde-nav-plan --profiles-root "$HOME\Questing-profiles" --race Undead --level 1 --quest-id 363 --map-id 0
+```
