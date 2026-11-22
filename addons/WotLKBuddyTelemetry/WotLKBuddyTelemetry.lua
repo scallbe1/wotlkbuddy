@@ -343,22 +343,9 @@ local function tickData()
             end
         end
     end
-    -- Keep the original quest-363 status for backward compatibility. The
-    -- completed-quest cache also exposes subsequent quest IDs without new
-    -- source-code constants when the server supplies them.
-    appendLine(table.concat({'C', '363', tostring(completed)}, '\t'))
-    if completionCache then
-        local ids = {}
-        for id, flagged in pairs(completionCache) do
-            if flagged and type(id) == 'number' and id > 0 and id ~= 363 then
-                table.insert(ids, id)
-            end
-        end
-        table.sort(ids)
-        for _, id in ipairs(ids) do
-            if not appendLine(table.concat({'C', tostring(id), '1'}, '\t')) then break end
-        end
-    end
+    -- Completion-state records have already been emitted once above from the
+    -- server-backed cache and recently observed quest IDs. Do not append
+    -- legacy quest-363 rows: their value was undefined and duplicated IDs.
     local entries = GetNumQuestLogEntries() or 0
     for i = 1, entries do
         local title, level, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)
