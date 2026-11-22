@@ -206,6 +206,30 @@ class CollectItemTests(unittest.TestCase):
                 sleep=game.sleep, now=game.now)
         self.assertNotIn('/cast Fireball',game.commands)
 
+    def test_item_name_missing_or_wrong_journal_never_authorizes_combat(self):
+        for case in ('name_uncached','journal_name_mismatch'):
+            with self.subTest(case=case):
+                game=CollectionGame()
+                original=game.capture
+                def capture():
+                    s=original()
+                    if case == 'name_uncached':
+                        return replace(s,tracked_item_name=None)
+                    q=s.quests[0]
+                    return replace(s, quests=(replace(q,objectives=(
+                        replace(q.objectives[0],
+                                description='Mystery Item: 0/2'),
+                        q.objectives[1])),))
+                with self.assertRaisesRegex(
+                        LiveControlError,
+                        'name not cached|cannot uniquely match'):
+                    hunt_kill_objectives(
+                        profile=profile(), quest_id=QID, pid=77,
+                        capture=capture, driver=game,nav=Nav(),spawns=None,
+                        collect_items=True,max_seconds=900,max_kills=10,
+                        sleep=game.sleep,now=game.now)
+                self.assertNotIn('/cast Fireball', game.commands)
+
     def test_item_tracker_required_before_first_pull(self):
         game=CollectionGame()
         original = game.capture
