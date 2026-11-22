@@ -202,11 +202,32 @@ def _horde_mage_plan(args: argparse.Namespace) -> None:
           file=sys.stderr)
 
 
-def _horde_next(args: argparse.Namespace) -> None:
-    """Run one observed profile action; never guess unsupported combat/quest steps.
+def _execute_profile_return(*, profile, quest_id, pid, capture, driver,
+                            nav_dll, python32, spawns_db, max_seconds=450):
+    """Reusable attended Detour delivery for complete profile quests."""
+    from pathlib import Path
+    from wotlkbuddy.horde.return_turnin import return_and_turnin
+    from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
+    from wotlkbuddy.navigation.proxy import NavigationProxy
+    from wotlkbuddy.live.control import LiveControlError
+    dll = Path(nav_dll).expanduser().resolve()
+    python = Path(python32).expanduser().resolve()
+    if not dll.is_file() or not (dll.parent / 'mmaps').is_dir() or not python.is_file():
+        raise ValueError('Return requires Navigation.dll, adjacent mmaps and x86 Python')
+    log = lambda line: print(line, file=sys.stderr, flush=True)
+    with CreatureSpawnDatabase(resolve_creature_spawns(spawns_db)) as db, \
+            NavigationProxy(python, dll) as nav:
+        result = return_and_turnin(
+            profile=profile, quest_id=quest_id, pid=pid, capture=capture,
+            driver=driver, nav=nav, spawns=db,
+            max_seconds=max_seconds, log=log)
+    print('Quest turn-in:', json.dumps(result.to_dict(), indent=2,
+                                        ensure_ascii=False))
+    return result
 
-    Does not walk to a distant NPC. The active character must be in range.
-    """
+
+def _horde_next(args: argparse.Namespace) -> None:
+    """Run a verified profile step; complete KillMob objectives and return to NPC."""
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
     from wotlkbuddy.horde.planner import plan_mage
     from wotlkbuddy.horde.interaction import KeyboardQuestInput, pickup_planned_quest
@@ -270,9 +291,19 @@ def _horde_next(args: argparse.Namespace) -> None:
                 max_seconds=args.max_seconds, max_kills=args.max_kills,
                 log=lambda line: print(line, file=sys.stderr, flush=True),
             )
-        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
-        if not report.objectives_complete:
-            raise RuntimeError('Objective hunt not completed: ' + report.status)
+            print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+            if not report.objectives_complete:
+                raise RuntimeError('Objective hunt not completed: ' + report.status)
+            # Continue in the *same attended session*: do not leave the
+            # player stranded after the final confirmed quest objective.
+            from wotlkbuddy.horde.return_turnin import return_and_turnin
+            handin = return_and_turnin(
+                profile=profile, quest_id=decision.quest_id, pid=_pid,
+                capture=cap, driver=driver, nav=nav, spawns=db,
+                max_seconds=450,
+                log=lambda line: print(line, file=sys.stderr, flush=True))
+            print('Quest turn-in:', json.dumps(
+                handin.to_dict(), indent=2, ensure_ascii=False))
         return
     if decision.action not in ('PICK_UP_QUEST', 'TURN_IN_QUEST'):
         print(f'Not executed: {decision.action} needs {decision.capability_needed}.',
@@ -288,6 +319,12 @@ def _horde_next(args: argparse.Namespace) -> None:
                   world_map_id=world.map_id, known_completed_quests=completed,
                   progress=log)
         successful = result.status in ('accepted', 'already_in_journal')
+    elif args.nav_dll and args.python32:
+        result = _execute_profile_return(
+            profile=profile, quest_id=decision.quest_id, pid=_pid,
+            capture=cap, driver=driver, nav_dll=args.nav_dll,
+            python32=args.python32, spawns_db=args.spawns_db)
+        successful = result.status in ('turned_in', 'already_turned_in')
     else:
         result = turnin_profile_quest(profile, quest_id=decision.quest_id,
                   capture=cap, driver=driver, expected_guid=snap.player.guid,
@@ -297,6 +334,37 @@ def _horde_next(args: argparse.Namespace) -> None:
     if not successful:
         raise RuntimeError(f'Profile quest action not confirmed: {result.status}: '
                            f'{result.explanation}')
+
+
+def _horde_return_turnin(args: argparse.Namespace) -> None:
+    """Explicit return/hand-in for an already complete, journal-verified quest."""
+    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.interaction import KeyboardQuestInput
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.world_position import verified_live_position
+    from wotlkbuddy.live.control import LiveControlError
+    if not args.enable_input:
+        raise ValueError('Return and turn-in require explicit --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    print(f'Switch to WoW now; returning completed quest {args.quest_id} '
+          f'in {args.countdown:g}s.', file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    cap = lambda: capture_monitor(args.monitor)
+    snap = cap()
+    if (snap.truncated or snap.player.dead or snap.player.in_combat or
+            not any(q.quest_id == args.quest_id and q.complete for q in snap.quests)):
+        raise LiveControlError('Requested quest is not verified complete or player is busy')
+    pid, _world = verified_live_position(snap, pid=args.pid)
+    chosen = select_profile_from_loader(args.profiles_root,
+                                        level=snap.player.level, race='Undead')
+    profile = load_horde_profile(chosen)
+    driver = KeyboardQuestInput(interact_key=args.interact_key)
+    _execute_profile_return(
+        profile=profile, quest_id=args.quest_id, pid=pid,
+        capture=cap, driver=driver, nav_dll=args.nav_dll,
+        python32=args.python32, spawns_db=args.spawns_db,
+        max_seconds=args.max_seconds)
 
 
 def _horde_quest_363(args: argparse.Namespace) -> None:
@@ -949,7 +1017,7 @@ def main(argv: list[str] | None = None) -> int:
     pickup.add_argument('--monitor', type=int, default=0)
     pickup.set_defaults(func=_horde_quest_pickup)
     next_step = sub.add_parser('horde-next',
-                               help='Read profile decision or execute one nearby NPC pickup/turn-in')
+                               help='Profile Mage combat, Detour quest return, verified hand-in')
     next_step.add_argument('--profiles-root', required=True)
     next_step.add_argument('--interact-key', choices=['f', 'g'], default='f')
     next_step.add_argument('--enable-input', action='store_true',
@@ -965,6 +1033,20 @@ def main(argv: list[str] | None = None) -> int:
     next_step.add_argument('--monitor', type=int, default=0)
     next_step.add_argument('--pid', type=int, help='WoW PID if multiple clients run')
     next_step.set_defaults(func=_horde_next)
+    return_quest = sub.add_parser('horde-return-turnin',
+                         help='Navigate to verified NPC and turn in one completed quest')
+    return_quest.add_argument('--profiles-root', required=True)
+    return_quest.add_argument('--quest-id', type=int, required=True)
+    return_quest.add_argument('--nav-dll', required=True)
+    return_quest.add_argument('--python32', required=True)
+    return_quest.add_argument('--spawns-db')
+    return_quest.add_argument('--interact-key', choices=['f', 'g'], default='f')
+    return_quest.add_argument('--enable-input', action='store_true')
+    return_quest.add_argument('--max-seconds', type=float, default=450)
+    return_quest.add_argument('--countdown', type=float, default=5)
+    return_quest.add_argument('--monitor', type=int, default=0)
+    return_quest.add_argument('--pid', type=int)
+    return_quest.set_defaults(func=_horde_return_turnin)
     deliver = sub.add_parser('horde-quest-363',
                              help='Attended Rude Awakening delivery and verified hand-in')
     deliver.add_argument('--profiles-root', required=True)
