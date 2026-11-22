@@ -100,6 +100,46 @@ This avoids repeatedly trying the same house spawn but does not guarantee
 that Detour can navigate out of every building. In a troublesome indoor area,
 stop and manually move the character back to open ground before restarting.
 
+## v0.20: Automatically return and hand in a completed quest
+
+The existing attended `horde-next --enable-input --enable-combat` session now
+continues from the last verified KillMob credit to the **profile-specified
+turn-in NPC** using Detour world-path navigation, then invokes the established
+name/title/menu/reward/history-verified hand-in driver. The game must remain
+foregrounded and the character alive and out of combat during travel.
+Movement stops on unexpected aggro or navigation trouble; no blind travel,
+teleportation, reward guessing or uncontrolled action loops are permitted.
+
+For a **quest already complete** in the journal, such as Aarr's
+`The Mindless Ones` (#364), use the explicit return command instead of
+repeating the hunting session:
+
+```powershell
+cd C:\Users\seanc\wotlkbuddy-v05
+git switch main
+git pull --ff-only
+py -3.12 -m pip install -e ".[live,dev]"
+py -3.12 -m wotlkbuddy horde-return-turnin `
+  --profiles-root "$HOME\Questing-profiles" `
+  --quest-id 364 `
+  --nav-dll "$HOME\CopilotNav\Navigation.dll" `
+  --python32 "$HOME\Python312-32\python.exe" `
+  --spawns-db "$HOME\CopilotBuddy\datadb\CreatureSpawns.db" `
+  --interact-key f `
+  --enable-input `
+  --countdown 5
+```
+
+The return point must be the quest's unique named TurnIn action in the
+selected Horde profile. A profile XYZ is preferred; if absent, the code
+cross-checks matching NPC spawn IDs and known pickup coordinates, failing
+closed on ambiguous destinations. The game journal must explicitly mark the
+quest complete. No addon changes are required for this Python-only feature.
+
+The turn-in routine still declines quest rewards requiring a choice or
+payment. After a successful hand-in, invoke `horde-next` again to plan the
+next quest; v0.20 does not chain unrelated quests unattended.
+
 ## Stop conditions and known limitations
 
 - No client version other than compatible WoW 3.3.5a build 12340 is verified.
