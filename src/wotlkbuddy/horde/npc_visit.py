@@ -15,6 +15,7 @@ from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_position import verified_live_position
 from wotlkbuddy.live.world_travel import validate_nav_path, follow_world_path
 from wotlkbuddy.horde.combat import creature_entry_from_guid
+from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 
 
 def visit_npc(
@@ -40,6 +41,16 @@ def visit_npc(
         raise LiveControlError('Active WoW PID changed')
     if driver.emergency_stop_requested() or not driver.wow_is_foreground():
         raise LiveControlError('Escape pressed or WoW not foregrounded')
+    # A quest/progress panel belongs to the *previous* NPC until closed.
+    # Target changes alone do not change the client UI owner. Never walk to
+    # another quest giver while that dialogue remains in the foreground.
+    if first.dialog is not None and first.dialog.kind != 'none':
+        first = dismiss_quest_dialog(
+            capture=capture, driver=driver, expected_guid=player.guid,
+            sleep=sleep, now=now, log=log)
+        actual_pid, world = world_position(first)
+        if actual_pid != pid:
+            raise LiveControlError('Active WoW PID changed during UI cleanup')
     matches = [spot for spot in spawns.find(npc_id, world.map_id, 100)
                if distance_world(world.position, spot.position) <= radius]
     if not matches:
