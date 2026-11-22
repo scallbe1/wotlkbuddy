@@ -225,13 +225,13 @@ class CollectItemTests(unittest.TestCase):
     def test_decode_item_count_and_reject_duplicates(self):
         base = (b'P\tAarr\t0x000000000000025F\t3\t50\t50\t0\t0\t'
                 b'0.5\t0.6\t2\t12\tDeathknell\t\t\n')
-        state = parse_payload(base+b'C\t3265\t3\n', 1)
+        state = parse_payload(base+b'J\t3265\t3\n', 1)
         self.assertEqual(state.tracked_item_id,3265)
         self.assertEqual(state.tracked_item_count,3)
         for extra in (
-            b'C\t3265\t2\nC\t3265\t2\n',
-            b'C\t-1\t0\n',
-            b'C\t3265\t-2\n',
+            b'J\t3265\t2\nJ\t3265\t2\n',
+            b'J\t-1\t0\n',
+            b'J\t3265\t-2\n',
         ):
             with self.assertRaises(TelemetryError):
                 parse_payload(base+extra,1)
