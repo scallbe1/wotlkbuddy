@@ -115,18 +115,18 @@ For a **quest already complete** in the journal, such as Aarr's
 repeating the hunting session:
 
 ```powershell
-cd C:\\Users\\seanc\\wotlkbuddy-v05
+cd C:\Users\seanc\wotlkbuddy-v05
 git switch main
 git pull --ff-only
 py -3.12 -m pip install -e ".[live,dev]"
-py -3.12 -m wotlkbuddy horde-return-turnin \`
-  --profiles-root "$HOME\\Questing-profiles" \`
-  --quest-id 364 \`
-  --nav-dll "$HOME\\CopilotNav\\Navigation.dll" \`
-  --python32 "$HOME\\Python312-32\\python.exe" \`
-  --spawns-db "$HOME\\CopilotBuddy\\datadb\\CreatureSpawns.db" \`
-  --interact-key f \`
-  --enable-input \`
+py -3.12 -m wotlkbuddy horde-return-turnin `
+  --profiles-root "$HOME\Questing-profiles" `
+  --quest-id 364 `
+  --nav-dll "$HOME\CopilotNav\Navigation.dll" `
+  --python32 "$HOME\Python312-32\python.exe" `
+  --spawns-db "$HOME\CopilotBuddy\datadb\CreatureSpawns.db" `
+  --interact-key f `
+  --enable-input `
   --countdown 5
 ```
 
