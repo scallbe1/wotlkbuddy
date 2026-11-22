@@ -129,7 +129,14 @@ local function tickData()
     if (dialog == 'detail' or dialog == 'progress' or dialog == 'reward') and GetQuestID then
         dialogQuestID = tonumber(GetQuestID()) or 0
     end
-    appendLine(table.concat({'I', dialog, tostring(dialogQuestID)}, '\t'))
+    -- Some WotLK 3.3.5 clients return GetQuestID() == 0 for visible
+    -- quest details. GetTitleText() exposes the title shown in QuestFrame.
+    -- Read it only while a quest panel is open; never export stale text.
+    local dialogQuestTitle = ''
+    if (dialog == 'detail' or dialog == 'progress' or dialog == 'reward') and GetTitleText then
+        dialogQuestTitle = safe(GetTitleText(), 100)
+    end
+    appendLine(table.concat({'I', dialog, tostring(dialogQuestID), dialogQuestTitle}, '\t'))
     local entries = GetNumQuestLogEntries() or 0
     for i = 1, entries do
         local title, level, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)
