@@ -139,6 +139,17 @@ class AvailableQuestOption:
 
 
 @dataclass(frozen=True)
+class QuestRewardChoice:
+    """A displayed quest reward option observed from the client's reward UI."""
+    index: int
+    name: str
+    usable: bool | None
+    equip_slot: str
+    item_level: int  # -1 if GetItemInfo was uncached
+    item_id: int  # 0 if no quest item link available
+
+
+@dataclass(frozen=True)
 class CombatTarget:
     entry_id: int
     health: int
@@ -171,6 +182,7 @@ class ClientTelemetry:
     combat_target: CombatTarget | None = None
     mage_buffs: MageBuffState | None = None
     loot_count: int | None = None
+    reward_choices: tuple[QuestRewardChoice, ...] = ()
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -187,6 +199,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     target = None
     buffs = None
     loot_count = None
+    reward_options: dict[int, QuestRewardChoice] = {}
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -281,7 +294,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 quest_id = int(parts[2])
             except ValueError as exc:
                 raise TelemetryError('Malformed quest dialog ID') from exc
-            title = parts[3] if len(parts) == 4 else ''
+            title = parts[3] if len(parts) in (4, 6) else ''
             if (not 0 <= quest_id <= 999999 or len(title) > 100 or
                     (parts[1] in ('none', 'gossip', 'greeting') and (quest_id != 0 or title))):
                 raise TelemetryError('Invalid quest dialog ID/title for UI state')
@@ -297,6 +310,23 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 if choices < 0: choices = None
                 if payment < 0: payment = None
             dialog = QuestDialog(parts[1], quest_id, title, choices, payment)
+        elif parts[0] == 'R':
+            if len(parts) != 7 or dialog is None or dialog.kind != 'reward':
+                raise TelemetryError('Reward option requires an active reward panel')
+            if parts[3] not in ('-1', '0', '1'):
+                raise TelemetryError('Invalid reward item usability')
+            try:
+                index, level, item_id = int(parts[1]), int(parts[5]), int(parts[6])
+            except ValueError as exc:
+                raise TelemetryError('Malformed reward item index/level/ID') from exc
+            if (not 1 <= index <= 12 or index in reward_options or
+                    not parts[2] or len(parts[2]) > 80 or
+                    len(parts[4]) > 32 or not -1 <= level <= 1000 or
+                    not 0 <= item_id < 2**31):
+                raise TelemetryError('Invalid or repeated reward option')
+            usable = None if parts[3] == '-1' else parts[3] == '1'
+            reward_options[index] = QuestRewardChoice(
+                index, parts[2], usable, parts[4], level, item_id)
         elif parts[0] == 'A':
             if len(parts) not in (5, 6) or parts[1] not in ('gossip', 'greeting') or \
                     parts[3] not in ('0', '1') or not parts[4] or len(parts[4]) > 100:
@@ -352,6 +382,10 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     if (menu or available) and (dialog is None or dialog.kind not in ('gossip', 'greeting') or
                  any(source != dialog.kind for source, _index in (*menu, *available))):
         raise TelemetryError('Quest-list entries do not match the active NPC UI')
+    if reward_options and (dialog is None or dialog.kind != 'reward' or
+                           dialog.reward_choices is None or
+                           any(index > dialog.reward_choices for index in reward_options)):
+        raise TelemetryError('Reward options conflict with active quest reward panel')
     buttons = [option.ui_button for option in (*menu.values(), *available.values())
                if option.ui_button is not None]
     if len(buttons) != len(set(buttons)):
@@ -364,4 +398,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            quest_menu=tuple(menu.values()),
                            available_quest_menu=tuple(available.values()),
                            combat_target=target, mage_buffs=buffs,
-                           loot_count=loot_count)
+                           loot_count=loot_count,
+                           reward_choices=tuple(reward_options[i] for i in sorted(reward_options)))

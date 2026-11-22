@@ -12,7 +12,7 @@ from typing import Callable
 
 from wotlkbuddy.horde.interaction import QuestInput
 from wotlkbuddy.horde.profile import HordeProfile
-from wotlkbuddy.live.codec import ClientTelemetry
+from wotlkbuddy.live.codec import ClientTelemetry, QuestRewardChoice
 from wotlkbuddy.live.control import LiveControlError
 
 
@@ -31,6 +31,42 @@ class QuestTurninReport:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def select_mage_reward(options: tuple[QuestRewardChoice, ...],
+                       count: int) -> QuestRewardChoice | None:
+    """Choose a unique, verified, equippable Mage option; never guess a UI index.
+
+    The priorities are deliberately simple: general Mage cloth gear first,
+    cloak/accessories next; higher item level breaks ties within a tier.
+    Unknown slots or ambiguous equal-scoring choices require manual selection.
+    """
+    if not 1 <= count <= 12 or len(options) != count or \
+            {o.index for o in options} != set(range(1, count + 1)):
+        return None
+    usable = [o for o in options if o.usable is True and o.name]
+    if len(usable) == 1:
+        return usable[0]
+    if not usable:
+        return None
+    priorities = {
+        'INVTYPE_HEAD': 40, 'INVTYPE_SHOULDER': 40, 'INVTYPE_CHEST': 40,
+        'INVTYPE_ROBE': 40, 'INVTYPE_WRIST': 40, 'INVTYPE_HAND': 40,
+        'INVTYPE_WAIST': 40, 'INVTYPE_LEGS': 40, 'INVTYPE_FEET': 40,
+        'INVTYPE_CLOAK': 30, 'INVTYPE_NECK': 30, 'INVTYPE_FINGER': 30,
+        'INVTYPE_TRINKET': 30, 'INVTYPE_HOLDABLE': 30,
+        'INVTYPE_RANGEDRIGHT': 30, 'INVTYPE_WEAPON': 30,
+        'INVTYPE_2HWEAPON': 30, 'INVTYPE_WEAPONMAINHAND': 30,
+    }
+    if any(o.equip_slot not in priorities or o.item_level < 0 for o in usable):
+        return None
+    ranked = sorted(usable, key=lambda o: (
+        priorities[o.equip_slot], o.item_level), reverse=True)
+    if len(ranked) > 1 and (
+            priorities[ranked[0].equip_slot], ranked[0].item_level) == (
+            priorities[ranked[1].equip_slot], ranked[1].item_level):
+        return None
+    return ranked[0]
 
 
 def turnin_profile_quest(
@@ -256,19 +292,45 @@ def turnin_profile_quest(
         return report('reward_unverified', 'Reward panel did not remain stable', target=True)
     dialog = reward.dialog
     assert dialog is not None
-    if dialog.reward_choices != 0 or dialog.required_money != 0:
+    if dialog.required_money != 0 or dialog.reward_choices is None:
         return report('reward_requires_choice_or_unknown',
                       f'Reward choices={dialog.reward_choices}, required money={dialog.required_money}; '
-                      'no automatic reward selection', target=True, dialog=True)
+                      'cannot safely submit reward', target=True, dialog=True)
     if not active(reward):
         return report('quest_missing_before_reward',
                       'Quest disappeared before reward submission', target=True, dialog=True)
+    choice = 0
+    if dialog.reward_choices:
+        selected = select_mage_reward(reward.reward_choices, dialog.reward_choices)
+        if selected is None:
+            offered = [(o.index, o.name, o.usable, o.equip_slot, o.item_level)
+                       for o in reward.reward_choices]
+            return report('reward_requires_choice_or_unknown',
+                          f'Cannot uniquely select a suitable Mage reward from {offered!r}; '
+                          'no reward submitted', target=True, dialog=True)
+        # Require *two* fresh, matching frames of actual reward item identities
+        # before choosing. A changed/missing option cannot carry authorization.
+        # Inspect the *very next* fresh frame. Waiting until any later
+        # matching frame could mistakenly accept a flickering option list.
+        stable = wait_for(lambda s: True)
+        if (stable is None or not dialog_ok(stable, 'reward') or
+                stable.dialog.reward_choices != dialog.reward_choices or
+                stable.dialog.required_money != 0 or
+                stable.reward_choices != reward.reward_choices or
+                not active(stable)):
+            return report('reward_unverified',
+                          'Reward option list changed or vanished before selection',
+                          target=True, dialog=True)
+        choice = selected.index
+        notify(f'Choosing verified Mage reward {selected.name!r} '
+               f'(item {selected.item_id or "unknown"}, option {choice}/'
+               f'{dialog.reward_choices}, equip {selected.equip_slot or "unknown"})')
     guard()
     if dialog.quest_id == 0 and not dialog.title:
         notify('Verified reward by fresh transition from the uniquely matched '
                f'{expected_title} selection (client omitted ID/title)')
-    notify('Reward panel verified: zero choices and zero required money; submitting reward')
-    driver.chat('/run GetQuestReward(0)')
+    notify(f'Reward panel verified; submitting GetQuestReward({choice})')
+    driver.chat(f'/run GetQuestReward({choice})')
     confirmed = wait_for(lambda s: history(s) is True and not active(s))
     if confirmed is not None:
         return report('turned_in', f'Quest {quest_id} confirmed in server completion history',
