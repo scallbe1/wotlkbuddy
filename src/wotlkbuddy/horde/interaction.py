@@ -119,7 +119,8 @@ class QuestPickupReport:
 
 def pickup_planned_quest(
     profile: HordeProfile, *, capture: Callable[[], ClientTelemetry], driver: QuestInput,
-    quest_id: int = 363, character: str = 'Aarr', race: str = 'Undead',
+    quest_id: int = 363, character: str | None = None,
+    expected_guid: str | None = None, race: str = 'Undead',
     world_map_id: int = 0, timeout: float = 5.0,
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
@@ -131,15 +132,19 @@ def pickup_planned_quest(
     be within target/interact range, and the WoW F/G interact bind must exist.
     The controller advances no more than one quest per invocation.
     """
-    if not 1 <= quest_id <= 999999 or not 1 <= len(character) <= 24:
+    if not 1 <= quest_id <= 999999 or (character is not None and
+            not 1 <= len(character) <= 24):
         raise ValueError('Invalid quest ID or expected character')
     if not isfinite(timeout) or not 1 <= timeout <= 15:
         raise ValueError('timeout must be 1..15 seconds')
     notify = progress or (lambda _: None)
     initial = capture()
     p = initial.player
-    if initial.truncated or p.name != character or p.dead or p.in_combat:
-        raise LiveControlError('Wrong character, truncated telemetry, death or combat; refusing pickup')
+    if (initial.truncated or not p.name or not p.guid or
+            (character is not None and p.name != character) or
+            (expected_guid is not None and p.guid != expected_guid) or
+            p.dead or p.in_combat):
+        raise LiveControlError('Character identity, truncated telemetry, death or combat; refusing pickup')
     if initial.resources is None or initial.resources.class_token.upper() != 'MAGE':
         raise LiveControlError('Mage class not verified; install v0.11+ addon and retry')
     if initial.resources.race_token.lower() not in ('scourge', 'undead'):

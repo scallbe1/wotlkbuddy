@@ -281,13 +281,13 @@ unspent talents, and class/race. No world-XYZ navigation, combat, NPC, loot,
 vendor, talent, or trainer execution is available yet. See
 [`docs/HORDE_MAGE_V011.md`](docs/HORDE_MAGE_V011.md) for usage and next steps.
 
-## v0.12 — Aarr's first guarded quest pickup
+## v0.12 — the Undead Mage's first guarded quest pickup
 
 Adds `horde-quest-pickup`: read actual quest-dialog state, target a quest giver,
 interact with an already configured F/G key, and only accept **Rude Awakening
 (363)** from **Undertaker Mordo** when the displayed quest ID is verified.
 This is deliberately a single-quest, attended integration test, **not** an
-unattended quest bot. See [Aarr's first quest](docs/FIRST_QUEST_V012.md).
+unattended quest bot. See [the Undead Mage's first quest](docs/FIRST_QUEST_V012.md).
 
 ## v0.12.1 — zero-ID quest dialogue fallback
 
@@ -298,7 +298,7 @@ correct NPC with either ID 363 or **ID 0 plus exact title `Rude Awakening`**.
 It never accepts on ID 0 alone. Reinstall the addon and `/reload` before use.
 
 
-## v0.13 — Aarr's Rude Awakening delivery and guarded hand-in
+## v0.13 — the Undead Mage's Rude Awakening delivery and guarded hand-in
 
 Adds an attended `horde-quest-363` command that (optionally) experiments with direct
 zone-map steering toward Shadow Priest Sarvis, then verifies quest progress and
@@ -306,3 +306,30 @@ reward panels before requesting completion. The upgraded addon observes reward
 choice count, required money, and server-completed quest history. It refuses to
 report success based solely on quest-journal disappearance. For commands, opt-in
 risks, and limitations see [Rude Awakening v0.13](docs/RUDE_AWAKENING_V013.md).
+
+
+## v0.13.1 — Deathknell direct-travel start fix
+
+`Outside known Deathknell start/finish map area` in v0.13 was an
+unreliable *absolute* map-percent check. The v0.13.1 command now prints
+the Undead Mage's observed map position and selects a bounded two-point experimental
+route, using published Tirisfal percentages when they align. If the client's
+map reference frame differs, the fallback uses the published *relative*
+Mordo-to-Sarvis offset anchored to the Undead Mage's current telemetry position.
+This assumes the active Mage is still near Mordo after pickup. Both approaches are
+rough estimates with **no collision avoidance**, and the relative offset
+may be inaccurate on different map projections. Watch the run and press
+Escape if blocked. The command still cannot guarantee interaction range.
+
+No addon reinstall needed when already on v0.13 telemetry. Use the same:
+
+```powershell
+py -3.12 -m wotlkbuddy horde-quest-363 --profiles-root "$HOME\Questing-profiles" --experimental-direct-travel --interact-key f --enable-input --countdown 5
+```
+
+## v0.13.2 — live character detection
+
+Horde starter quest pickup and delivery use the logged-in character identity,
+not a hard-coded name. Session interactions are bound to that character GUID.
+Creating a new Undead Mage requires no code changes or character configuration.
+See [quest delivery](docs/RUDE_AWAKENING_V013.md) for supported actions.

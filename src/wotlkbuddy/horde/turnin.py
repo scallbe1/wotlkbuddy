@@ -35,7 +35,8 @@ class QuestTurninReport:
 
 def turnin_rude_awakening(
     profile: HordeProfile, *, capture: Callable[[], ClientTelemetry],
-    driver: QuestInput, character: str = 'Aarr', timeout: float = 8.0,
+    driver: QuestInput, character: str | None = None,
+    expected_guid: str | None = None, timeout: float = 8.0,
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     progress: Callable[[str], None] | None = None,
@@ -57,9 +58,11 @@ def turnin_rude_awakening(
     npc_name, npc_id = step.npc_name, step.entry
     state = capture()
     player = state.player
-    if (state.truncated or player.name != character or player.dead or
-            player.in_combat or not player.guid):
-        raise LiveControlError('Wrong character, death, combat, or truncated telemetry')
+    if (state.truncated or not player.name or not player.guid or
+            (character is not None and player.name != character) or
+            (expected_guid is not None and player.guid != expected_guid) or
+            player.dead or player.in_combat):
+        raise LiveControlError('Character identity changed, death, combat, or truncated telemetry')
     if state.resources is None or state.resources.class_token.upper() != 'MAGE' or \
             state.resources.race_token.lower() not in ('scourge', 'undead'):
         raise LiveControlError('Verified Undead Mage telemetry required')
@@ -68,7 +71,7 @@ def turnin_rude_awakening(
 
     def report(status: str, explanation: str, *, target=False, dialog=False,
                submitted=False, history=False) -> QuestTurninReport:
-        return QuestTurninReport(character, quest_id, npc_name, npc_id, status,
+        return QuestTurninReport(player.name, quest_id, npc_name, npc_id, status,
                                  explanation, target, dialog, submitted, history)
 
     def guard() -> None:

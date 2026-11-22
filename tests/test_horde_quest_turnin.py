@@ -26,13 +26,15 @@ class Game:
         self.history_available = True
         self.handover_works = True
         self.interact_works = True
-        self.quest_id = 0  # Aarr's live client reports 0 for open quest
+        self.quest_id = 0  # Some 3.3.5 clients report 0 for open quest
         self.title = 'Rude Awakening'
         self.choices = 0
         self.money = 0
         self.time = 0.0
         self.seq = 0
         self.commands = []
+        self.character_name = 'StarterMage'
+        self.guid = 'GUID_StarterMage'
         self.focus = True
         self.stop = False
 
@@ -59,7 +61,7 @@ class Game:
 
     def capture(self):
         self.seq = (self.seq + 1) % 256
-        p = PlayerRecord('Aarr', 'GUID_Aarr', 1, 49, 49, False, False,
+        p = PlayerRecord(self.character_name, self.guid, 1, 49, 49, False, False,
                          .302, .715, 2, 12, 'Deathknell', '', self.target)
         resources = PlayerResources(100, 100, 15, 16, 100, 0, 0, 'MAGE', 'Scourge')
         return ClientTelemetry(self.seq, p, self.quests, resources=resources,
@@ -148,8 +150,20 @@ class TurninTests(unittest.TestCase):
             run(g)
         self.assertEqual(g.commands, [])
         g=Game()
-        with self.assertRaisesRegex(LiveControlError,'Wrong character'):
+        with self.assertRaisesRegex(LiveControlError,'Character identity'):
             turnin_rude_awakening(PROFILE,capture=g.capture,driver=g,character='Inka')
+
+    def test_new_character_guid_is_pinned_and_name_is_optional(self):
+        g = Game()
+        g.character_name = 'BrandNewMage'
+        g.guid = 'NEW_CHAR_GUID'
+        good = run(g)
+        self.assertEqual(good.character, 'BrandNewMage')
+        g = Game()
+        with self.assertRaisesRegex(LiveControlError, 'Character identity'):
+            turnin_rude_awakening(PROFILE, capture=g.capture, driver=g,
+                                  expected_guid='DELETED_CHARACTER_GUID')
+        self.assertEqual(g.commands, [])
 
     def test_wrong_profile_stops_without_keypress(self):
         g = Game()
@@ -161,7 +175,7 @@ class TurninTests(unittest.TestCase):
 
 
 class NewTelemetryTests(unittest.TestCase):
-    P=b'P\tAarr\tGUID\t1\t49\t49\t0\t0\t0.302\t0.717\t2\t12\tDeathknell\t\t\n'
+    P=b'P\tStarterMage\tGUID\t1\t49\t49\t0\t0\t0.302\t0.717\t2\t12\tDeathknell\t\t\n'
     def test_reward_choices_and_completed_flags(self):
         out=parse_payload(self.P + b'I\treward\t0\tRude Awakening\t0\t0\nC\t363\t1\n',3)
         self.assertEqual(out.dialog.reward_choices,0)

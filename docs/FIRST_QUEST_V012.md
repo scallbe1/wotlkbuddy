@@ -1,7 +1,7 @@
-# v0.12 — Aarr's first guarded quest pickup
+# v0.12 — the Undead Mage's first guarded quest pickup
 
 This introduces the **first actual quest interaction** (rather than only a
-read-only plan). It deliberately handles **Aarr**, an Undead Mage at level 1,
+read-only plan). It deliberately handles the currently logged-in character, an Undead Mage at level 1,
 and only the first quest **Rude Awakening (ID 363)** from **Undertaker Mordo
 (NPC entry 1568)**. It uses the real upstream Tirisfal profile, never guessed
 quest ID or a name from the local client.
@@ -14,7 +14,7 @@ quest ID or a name from the local client.
    driver does not change your keybindings. If your chosen key is bound to a
    different action, it will not open the quest window. For a fresh client, F
    may be bound to Assist: replace that binding if you choose F.
-3. Put Aarr within targeting/interacting distance of Undertaker Mordo in
+3. Put the current Mage within targeting/interacting distance of Undertaker Mordo in
    Deathknell. This version **does not yet walk to world X/Y/Z coordinates**.
    Ensure chat is closed and there is no modal window over WoW.
 4. Use an **English/US keyboard layout** for the first test. The driver types
@@ -25,17 +25,17 @@ quest ID or a name from the local client.
 
 ```powershell
 cd C:\Users\seanc\wotlkbuddy-v05
-py -3.12 -m wotlkbuddy horde-quest-pickup --profiles-root "$HOME\Questing-profiles" --character Aarr --interact-key f --enable-input --countdown 5
+py -3.12 -m wotlkbuddy horde-quest-pickup --profiles-root "$HOME\Questing-profiles" --interact-key f --enable-input --countdown 5
 ```
 
 Switch to WoW during the countdown. **Escape** or switching away stops the
 controller; the test sends only bounded keyboard input. It will:
 
-1. Verify Aarr's identity, class, race, safety state, quest/dialog telemetry,
+1. Verify the character's identity, class, race, safety state, quest/dialog telemetry,
    and that the planner currently proposes quest 363 pickup.
 2. Type `/targetexact Undertaker Mordo` via WoW's chat; verify target name.
 3. Press F/G (must already be bound to Interact with Target).
-4. Read the live quest dialogue from the addon and verify **DETAIL / quest 363**, or an exact **Rude Awakening** title if the client returns quest ID 0. Require two consecutive matching telemetry frames.
+4. Read the live quest dialogue from the addon and verify **DETAIL / quest 363** or exact quest title if the client reports quest ID 0.
 5. Only when verified, type the fixed `/run AcceptQuest()` command once.
 6. Check the quest journal actually contains quest 363. The result reports
    `accepted`, `already_in_journal`, or an explicit stop status.
@@ -54,7 +54,8 @@ state; Python sends the explicitly enabled input.
   no acceptance was issued. CopilotBuddy quest-greeting selection is future work.
 - `journal_not_confirmed`: acceptance was sent only once, but the quest did
   not appear in the journal within the confirmation interval.
-- Missing `I` telemetry: reinstall the **v0.12** addon and `/reload`.
+- Missing `I` telemetry: reinstall the **v0.12.1** addon and `/reload`.
+- `detail` with ID 0 and blank title: reinstall the updated addon; it now sends the visible quest title from `GetTitleText()`.
 
 The goal of this incremental test is to validate **actual NPC targeting,
 quest dialogue reading, and acceptance verification**, before connecting world
