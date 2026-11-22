@@ -28,7 +28,7 @@ def profile(*, sources=True):
         ObjectiveSpec('CollectItem', item, 2,
                       (Source('mob', mob, 'Profile mob'),) if sources else (),
                       ())
-        for item, mob in zip(ITEMS, MOBS))),)
+        for item, mob in reversed(tuple(zip(ITEMS, MOBS))))),)
     steps = tuple(
         OrderStep('objective', quest_id=QID, name='The Damned',
                   entry=item, objective_type='CollectItem', count=2)
@@ -123,7 +123,10 @@ class CollectionGame:
             loot_count=self.loot_slots, loot_open=self.loot_open,
             tracked_item_id=self.tracked if self.tracked else None,
             tracked_item_count=self.items.get(self.tracked)
-                if self.tracked else None)
+                if self.tracked else None,
+            tracked_item_name=(
+                {3265:'Scavenger Paw',3264:'Duskbat Wing'}.get(self.tracked)
+                if self.tracked else None))
 
 
 class CollectItemTests(unittest.TestCase):
@@ -138,6 +141,23 @@ class CollectItemTests(unittest.TestCase):
         no_sources = next_active_collect_quest(
             profile(sources=False), state, map_id=0)
         self.assertEqual(no_sources.sources, ())
+
+    def test_xml_objective_order_differs_from_quest_order_and_journal(self):
+        game = CollectionGame()
+        p = profile()
+        self.assertEqual([o.entry for o in p.quests[0].objectives],
+                         [3264,3265])
+        self.assertEqual([o.entry for o in p.steps],
+                         [3265,3264])
+        # The first eligible source must be the QuestOrder item, not
+        # whichever XML definition or journal objective appears first.
+        first = next_collect_objective(p, game.capture(), QID)
+        self.assertEqual(first[0].entry,3265)
+        game.tracked=3265
+        state = game.capture()
+        matched = next_collect_objective(p, state, QID)
+        self.assertEqual(matched[0].entry,3265)
+        self.assertIn('Scavenger Paw', matched[1].description)
 
     def test_rejects_incorrect_journal_item_count_and_type(self):
         game = CollectionGame()
@@ -225,9 +245,10 @@ class CollectItemTests(unittest.TestCase):
     def test_decode_item_count_and_reject_duplicates(self):
         base = (b'P\tAarr\t0x000000000000025F\t3\t50\t50\t0\t0\t'
                 b'0.5\t0.6\t2\t12\tDeathknell\t\t\n')
-        state = parse_payload(base+b'J\t3265\t3\n', 1)
+        state = parse_payload(base+b'J\t3265\t3\tScavenger Paw\n', 1)
         self.assertEqual(state.tracked_item_id,3265)
         self.assertEqual(state.tracked_item_count,3)
+        self.assertEqual(state.tracked_item_name,'Scavenger Paw')
         for extra in (
             b'J\t3265\t2\nJ\t3265\t2\n',
             b'J\t-1\t0\n',
