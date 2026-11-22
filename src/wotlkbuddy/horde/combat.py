@@ -434,12 +434,38 @@ def hunt_kill_objectives(
                 return s
         log(f'Looting verified corpse {dead_guid}')
         loot_attempts += 1
+        before_item_count = (
+            s.tracked_item_count if collect_items and
+            s.tracked_item_id is not None else None)
         driver.interact()
         s = fresh(s)
         if s.loot_open is not True:
+            # Auto-loot can put items into bags and immediately close the
+            # frame before the 0.5 s telemetry capture. Item quantity and
+            # live journal credit give independent evidence of success.
+            for wait in range(3):
+                if (collect_items and before_item_count is not None and
+                        s.tracked_item_id == active_tracked_item and
+                        s.tracked_item_count is not None and
+                        s.tracked_item_count > before_item_count):
+                    journal = qlog(s)
+                    objective = next(
+                        (q for q in journal.objectives if
+                         q.index == observed.index), None)
+                    if (objective is not None and
+                            objective_progress(objective.description) is not None
+                            and objective_progress(objective.description)[0] >=
+                            s.tracked_item_count):
+                        loot_confirmed += 1
+                        log(f'Auto-loot confirmed for item {active_tracked_item}: '
+                            f'{before_item_count} -> {s.tracked_item_count}; '
+                            'quest journal also advanced')
+                        return s
+                if wait < 2:
+                    s = fresh(s, .4)
             loot_skipped += 1
-            log('Loot skipped: interaction did not open the verified loot '
-                'frame (possibly out of reach, empty or already looted)')
+            log('Loot not confirmed: no loot frame or verified auto-loot '
+                'item/journal increase after interaction')
             return s
         if s.loot_count is None:
             loot_skipped += 1
