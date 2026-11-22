@@ -250,6 +250,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
     from wotlkbuddy.horde.training import train_available_mage_spells
     from wotlkbuddy.horde.npc_service_turnin import turnin_ready_quests_at_npc
+    from wotlkbuddy.live.status_hud import GoalActionHUD
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
     from wotlkbuddy.live.capture import capture_monitor
@@ -260,7 +261,13 @@ def _horde_progress(args: argparse.Namespace) -> None:
         raise ValueError('Post-quest input requires explicit --enable-input')
     if not 2 <= args.countdown <= 20:
         raise ValueError('--countdown must be between 2 and 20 seconds')
-    log = lambda line: print(line, file=sys.stderr, flush=True)
+    import atexit
+    hud = GoalActionHUD('Prepare profile progression', 'Switch to WoW',
+                        enabled=not args.no_hud)
+    atexit.register(hud.close)
+    def log(line):
+        print(line, file=sys.stderr, flush=True)
+        hud.note(line)
     log(f'Switch to WoW now; post-quest progression begins in {args.countdown:g}s.')
     time.sleep(args.countdown)
     cap = lambda: capture_monitor(args.monitor)
@@ -274,6 +281,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
     driver = KeyboardQuestInput(interact_key=args.interact_key)
     report = {}
     if args.only in ('all', 'gear'):
+        hud.set(goal='Equip better Mage armor', action='Checking bags and equipment')
         equipped = equip_mage_upgrades(capture=cap, driver=driver, log=log)
         report['equipped_item_ids'] = equipped
     if args.only in ('all', 'quests', 'train', 'vendor'):
@@ -304,6 +312,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                 bags_full = (state.resources.free_bag_slots <=
                              quest_profile.min_free_bag_slots)
                 if args.only == 'vendor' or bags_full:
+                    hud.set(goal='Find a merchant for bag space',
+                            action='Finding vendor from Horde XML')
                     merchants = nearby_service_npcs(
                         profile=quest_profile, spawns=db,
                         origin=current.position, map_id=current.map_id,
@@ -339,6 +349,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                 log(f'Unresolved, reachable profile quest givers: {len(givers)}')
                 quests = {}
                 for giver in givers[:12]:
+                    hud.set(goal=f'Accept quests from {giver.name}',
+                            action='Navigating to quest giver')
                     log(f'Profile quest giver: {giver.name} ({giver.entry}) '
                         f'from {giver.source}')
                     visit_npc(npc_name=giver.name, npc_id=giver.entry,
@@ -362,6 +374,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         'No nearby Mage TrainClass vendor found in local Horde '
                         'profile XML and corroborated by CreatureSpawns.db')
                 trainer = trainers[0]
+                hud.set(goal=f'Train Mage at {trainer.name}',
+                        action='Navigating to class trainer')
                 log(f'Profile-selected Mage trainer: {trainer.name} '
                     f'({trainer.entry}); source={trainer.source}')
                 visit_npc(npc_name=trainer.name, npc_id=trainer.entry,
@@ -371,6 +385,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                 # NPC services and quest turn-in are not mutually exclusive.
                 # Complete only ready quests explicitly targeting this verified
                 # NPC in the selected profile before opening class training.
+                hud.set(goal=f'Turn in ready quests at {trainer.name}',
+                        action='Checking journal and server quest state')
                 handed_in = turnin_ready_quests_at_npc(
                     profile=quest_profile, npc_name=trainer.name,
                     npc_id=trainer.entry, capture=cap, driver=driver, log=log)
@@ -380,9 +396,32 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         capture=cap, driver=driver, log=log)
                     if upgraded:
                         report['equipped_item_ids'] = tuple(upgraded)
+                hud.set(goal=f'Learn available Mage spells at {trainer.name}',
+                        action='Inspecting trainer services')
                 report['trained_spells'] = train_available_mage_spells(
                     npc_name=trainer.name, npc_id=trainer.entry,
                     capture=cap, driver=driver, log=log)
+                # Independently verify journal/history after *all* training
+                # UI has been closed. The intermediate "turned_in" report is
+                # authoritative at that instant, but an extra fresh frame
+                # gives useful evidence when the player sees no completion.
+                if handed_in:
+                    post = cap()
+                    flags = dict(post.quest_completions)
+                    still_active = {q.quest_id for q in post.quests}
+                    confirmations = {
+                        str(qid): {
+                            'server_history_complete': flags.get(qid) is True,
+                            'still_in_journal': qid in still_active,
+                        } for qid in handed_in}
+                    report['post_training_quest_verification'] = confirmations
+                    if any(not item['server_history_complete'] or
+                           item['still_in_journal']
+                           for item in confirmations.values()):
+                        raise LiveControlError(
+                            f'Quest hand-in contradicted by post-training '
+                            f'journal/history: {confirmations!r}')
+    hud.set(action='Workflow complete')
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
@@ -1231,6 +1270,8 @@ def main(argv: list[str] | None = None) -> int:
     progression.add_argument('--countdown', type=float, default=5)
     progression.add_argument('--monitor', type=int, default=0)
     progression.add_argument('--pid', type=int)
+    progression.add_argument('--no-hud', action='store_true',
+                             help='Disable click-through Goal/Action overlay')
     progression.set_defaults(func=_horde_progress)
     deliver = sub.add_parser('horde-quest-363',
                              help='Attended Rude Awakening delivery and verified hand-in')
