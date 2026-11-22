@@ -2,7 +2,7 @@
 
 Uses only ordinary Windows keyboard input and the read-only RGB addon. It does
 not guess object IDs from names, auto-navigate, or execute arbitrary XML/Lua.
-Only a verified *quest detail* with the exact quest ID can trigger AcceptQuest.
+Only a verified quest detail matching the ID, or when ID 0 the exact title, can trigger AcceptQuest.
 """
 from __future__ import annotations
 
@@ -198,8 +198,19 @@ def pickup_planned_quest(
         current = wait_for(lambda state: state.player.target_name == npc_name)
         if current is None:
             return result('npc_not_targeted', f'NPC not targetable; approach {npc_name} manually')
+    def matches_quest(state: ClientTelemetry) -> bool:
+        ui = state.dialog
+        if ui is None or ui.kind != 'detail' or state.player.target_name != npc_name:
+            return False
+        if ui.quest_id == quest_id:
+            return True
+        # An ID of 0 is unknown, not a different quest. In WotLK the active
+        # quest title is available via GetTitleText(). Require exact title
+        # AND the already-verified target before allowing an ID-0 fallback.
+        return ui.quest_id == 0 and bool(selected.name) and ui.title == selected.name
+
     guard()
-    if last.dialog and last.dialog.kind == 'detail' and last.dialog.quest_id == quest_id:
+    if matches_quest(last):
         dialog = last
     else:
         notify('Interacting with targeted quest giver')
@@ -207,14 +218,22 @@ def pickup_planned_quest(
         dialog = wait_for(lambda state: state.dialog is not None and state.dialog.kind != 'none')
     if dialog is None or dialog.dialog is None:
         return result('dialog_not_open', 'No quest dialogue detected; verify Interact with Target binding', target=True)
-    if dialog.dialog.kind != 'detail' or dialog.dialog.quest_id != quest_id:
-        return result('dialog_unverified', f'Observed {dialog.dialog.kind} quest '
-                      f'{dialog.dialog.quest_id}, expected detail for quest {quest_id}; '
+    if not matches_quest(dialog):
+        return result('dialog_unverified',
+                      f'Observed {dialog.dialog.kind} quest ID {dialog.dialog.quest_id} '
+                      f'title {dialog.dialog.title!r}, expected detail for ID {quest_id} '
+                      f'title {selected.name!r}; acceptance not attempted', target=True)
+    # Confirm a second fresh telemetry frame to reject a stale quest panel.
+    confirmed = wait_for(matches_quest)
+    if confirmed is None:
+        return result('dialog_unverified', 'Quest detail was not confirmed on a second telemetry frame; '
                       'acceptance not attempted', target=True)
-    if dialog.player.target_name != npc_name:
-        return result('npc_changed', 'Target changed before acceptance; refusing', target=False)
     guard()
-    notify(f'Verified quest {quest_id} detail; accepting with fixed API command')
+    if confirmed.player.target_name != npc_name:
+        return result('npc_changed', 'Target changed before acceptance; refusing', target=False)
+    evidence = (f'ID {quest_id}' if confirmed.dialog.quest_id == quest_id else
+                f'exact title {selected.name!r} (client returned quest ID 0)')
+    notify(f'Verified quest detail by {evidence}; accepting with fixed API command')
     driver.chat('/run AcceptQuest()')
     accepted = wait_for(lambda state: quest_id in {q.quest_id for q in state.quests})
     if accepted is None:
