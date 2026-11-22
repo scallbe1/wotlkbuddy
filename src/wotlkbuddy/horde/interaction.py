@@ -83,6 +83,7 @@ class KeyboardQuestInput:
         if (command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/run GetQuestReward(0)', '/click QuestFrameCloseButton') and
                 not re.fullmatch(r'/run Select(?:GossipActiveQuest|ActiveQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and
                 not re.fullmatch(r'/click (?:GossipTitleButton|QuestTitleButton)([1-9]|[12][0-9]|3[0-2])', command) and
+                not re.fullmatch(r'/run Select(?:GossipAvailableQuest|AvailableQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and
                 not (command.startswith('/targetexact ') and
                      _NPC_NAME.fullmatch(command[len('/targetexact '):]))):
             raise ValueError('Only verified quest-targeting and fixed quest API commands are allowed')
@@ -125,6 +126,7 @@ def pickup_planned_quest(
     quest_id: int = 363, character: str | None = None,
     expected_guid: str | None = None, race: str = 'Undead',
     world_map_id: int = 0, timeout: float = 5.0,
+    known_completed_quests: set[int] | None = None,
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     progress: Callable[[str], None] | None = None,
@@ -157,7 +159,8 @@ def pickup_planned_quest(
     if quest_id in {q.quest_id for q in initial.quests}:
         return QuestPickupReport(p.name, quest_id, 0, '', 'already_in_journal',
                                  'Quest already appears in journal', journal_confirmed=True)
-    decision = plan_mage(initial, profile, race=race, world_map_id=world_map_id)
+    decision = plan_mage(initial, profile, race=race, world_map_id=world_map_id,
+                         known_completed_quests=known_completed_quests)
     if decision.action != 'PICK_UP_QUEST' or decision.quest_id != quest_id:
         raise LiveControlError(f'Planner selected {decision.action} quest {decision.quest_id}, '
                                f'not pickup {quest_id}; refusing unintended action')
@@ -212,21 +215,52 @@ def pickup_planned_quest(
         if ui is None or ui.kind != 'detail' or state.player.target_name != npc_name:
             return False
         if ui.quest_id == quest_id:
-            return True
+            return not ui.title or ui.title == selected.name
         # ID 0 is an explicit unknown, not a different quest. In 3.3.5 the
         # active quest title remains available via GetTitleText(). Require an
         # exact title from the profile *and* the already-verified NPC target.
         return ui.quest_id == 0 and bool(selected.name) and ui.title == selected.name
 
     guard()
-    if matches_quest(last):
+    if matches_quest(last) or (last.dialog and last.dialog.kind in ('gossip', 'greeting')):
         dialog = last
     else:
-        notify('Interacting with targeted quest giver')
+        notify(f'Interacting with {npc_name} for quest {quest_id}')
         driver.interact()
         dialog = wait_for(lambda state: state.dialog is not None and state.dialog.kind != 'none')
     if dialog is None or dialog.dialog is None:
         return result('dialog_not_open', 'No quest dialogue detected; verify Interact with Target binding', target=True)
+    if dialog.dialog.kind in ('gossip', 'greeting'):
+        source = dialog.dialog.kind
+        matches = [option for option in dialog.available_quest_menu
+                   if option.source == source and option.title == selected.name]
+        if len(matches) != 1:
+            return result('quest_not_offered',
+                          f'Expected one available quest {selected.name!r} from {npc_name}; '
+                          f'observed {[x.title for x in dialog.available_quest_menu]!r}',
+                          target=True)
+        option = matches[0]
+        if wait_for(lambda s: (s.player.target_name == npc_name and
+                s.dialog is not None and s.dialog.kind == source and
+                len([x for x in s.available_quest_menu
+                     if x.source == source and x.title == selected.name]) == 1 and
+                option in s.available_quest_menu)) is None:
+            return result('quest_menu_unverified',
+                          'Available quest list changed; no selection attempted', target=True)
+        if option.ui_button is not None:
+            prefix = 'GossipTitleButton' if source == 'gossip' else 'QuestTitleButton'
+            command = f'/click {prefix}{option.ui_button}'
+        else:
+            api = 'SelectGossipAvailableQuest' if source == 'gossip' else 'SelectAvailableQuest'
+            command = f'/run {api}({option.index})'
+        notify(f'Selecting available quest {selected.name!r} from {npc_name}: {command}')
+        guard()
+        driver.chat(command)
+        dialog = wait_for(matches_quest)
+        if dialog is None:
+            return result('quest_selection_unverified',
+                          'NPC quest option clicked but correct quest detail did not appear',
+                          target=True)
     if not matches_quest(dialog):
         return result('dialog_unverified',
                       f'Observed {dialog.dialog.kind} quest ID {dialog.dialog.quest_id} '

@@ -1,3 +1,23 @@
+## v0.18 — Generic quest action execution from Horde XML
+
+`horde-next` uses the currently logged-in Mage and the `QuestOrder` entries in
+Likon69's starter profile to discover the next nearby NPC pickup or turn-in.
+It is read-only by default; add `--enable-input` to perform exactly one
+verified NPC action. Available quests in the NPC's live gossip/greeting menu
+are now reported by the RGB addon separately from active turn-in quests.
+The current profile's **next quest after 363 is 364**; its two kill-objective
+mob IDs are already in the XML, but combat remains unimplemented.
+Reinstall the addon and `/reload` once to provide available quest telemetry.
+
+```powershell
+py -3.12 -m wotlkbuddy horde-next --profiles-root "$HOME\Questing-profiles" --countdown 5
+py -3.12 -m wotlkbuddy horde-next --profiles-root "$HOME\Questing-profiles" --interact-key f --enable-input --countdown 5
+```
+
+See [Profile-driven quest actions](docs/PROFILE_DRIVEN_QUEST_V018.md). Older
+quest-363 commands are kept for compatibility, but should not be copied to
+implement subsequent quests.
+
 ## v0.17 — Quest-list turn-ins and bottom-right telemetry (current)
 
 WoW 3.3.5a NPCs can open a gossip/greeting **active quest list** before the quest
