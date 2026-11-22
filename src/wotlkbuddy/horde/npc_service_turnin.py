@@ -6,6 +6,7 @@ Never complete an unfinished quest or mistake service gossip for a turn-in.
 from __future__ import annotations
 
 from time import monotonic, sleep as real_sleep
+from dataclasses import replace
 from typing import Callable
 
 from wotlkbuddy.horde.profile import HordeProfile, condition_value
@@ -39,7 +40,7 @@ def turnin_ready_quests_at_npc(
     turned_in = []
     for step in profile.steps:
         if (step.kind != 'turnin' or not step.supported or step.quest_id <= 0
-                or step.entry != npc_id or step.npc_name != npc_name
+                or step.entry != npc_id or step.npc_name not in ('', npc_name)
                 or step.quest_id in seen):
             continue
         seen.add(step.quest_id)
@@ -71,8 +72,17 @@ def turnin_ready_quests_at_npc(
             continue
         log(f'{npc_name}: profile-matched ready turn-in {quest.title!r} '
             f'(quest {quest.quest_id}) before class training')
+        # Source XML can omit TurnInName while retaining the exact TurnInID.
+        # Filling that one missing field from the already verified target name
+        # is safe; the NPC entry and quest ID/title still come from the profile.
+        observed_profile = profile
+        if not step.npc_name:
+            updated_steps = tuple(
+                replace(item, npc_name=npc_name) if item is step else item
+                for item in profile.steps)
+            observed_profile = replace(profile, steps=updated_steps)
         result = turnin(
-            profile, quest_id=step.quest_id, capture=capture, driver=driver,
+            observed_profile, quest_id=step.quest_id, capture=capture, driver=driver,
             expected_guid=guid, sleep=sleep, now=now, progress=log)
         if result.status not in ('turned_in', 'already_turned_in'):
             raise LiveControlError(
