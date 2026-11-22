@@ -8,6 +8,7 @@ not describe NPC services or class eligibility on its own.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.profile import (
@@ -108,6 +109,37 @@ def _matching_kind(vendor: VendorSpec, role: str) -> bool:
     raise ValueError(f'Unsupported NPC service role {role!r}')
 
 
+def _curated_vendor_identities() -> tuple[tuple[int, str, str], ...]:
+    """Auditable NPC service identities; NO hardcoded positions or shortcuts.
+
+    A catalog ID alone cannot authorize navigation or sales. The selected
+    game's CreatureSpawns.db must independently corroborate a local, unique
+    spawn on the current map; live NPC/merchant UI must then be verified.
+    """
+    path = Path(__file__).with_name('verified_vendor_services.tsv')
+    if not path.is_file():
+        return ()
+    seen: set[int] = set()
+    entries: list[tuple[int, str, str]] = []
+    for line in path.read_text(encoding='utf-8').splitlines():
+        if not line.strip() or line.startswith('#'):
+            continue
+        fields = line.split('\t')
+        if len(fields) != 4:
+            continue
+        raw_id, name, role, source_url = fields
+        if (not raw_id.isdecimal() or not source_url.startswith('https://')
+                or role not in ('general', 'repair', 'food', 'vendor')
+                or not 1 <= len(name) <= 80):
+            continue
+        entry = int(raw_id)
+        if not 0 < entry < 2**24 or entry in seen:
+            continue
+        seen.add(entry)
+        entries.append((entry, name, role))
+    return tuple(entries)
+
+
 def nearby_service_npcs(
     *, profile: HordeProfile, spawns, origin: Vec3, map_id: int,
     role: str, profiles_root: str | None = None,
@@ -145,7 +177,25 @@ def nearby_service_npcs(
     if primary:
         return primary
     if profiles_root:
-        return candidates(load_horde_vendor_catalog(
+        other = candidates(load_horde_vendor_catalog(
             profiles_root, selected_profile_path=profile.source_path),
             'local Horde XML vendor catalog')
+        if other:
+            return other
+    if role == 'merchant':
+        discovered = []
+        for entry, name, service_kind in _curated_vendor_identities():
+            # Catalog provides only vendor ID/type: live spawn DB supplies
+            # the position, not guessed coordinates. Reject ambiguous
+            # multiple-spawn matches or locations outside our search radius.
+            location = _verified_spawn(
+                spawns, entry=entry, map_id=map_id,
+                origin=origin, anchor=None, radius=radius)
+            if location is not None:
+                discovered.append(NpcDestination(
+                    name, entry, location, distance_world(origin, location),
+                    'verified public 3.3.5a vendor service catalog + local spawn DB',
+                    role))
+        return tuple(sorted(
+            discovered, key=lambda v:(v.distance, v.entry, v.name)))
     return ()
