@@ -502,6 +502,14 @@ def _horde_progress(args: argparse.Namespace) -> None:
                             capture=cap, driver=driver, log=log)
                         if upgraded:
                             report['equipped_item_ids'] = tuple(upgraded)
+    final_state = cap()
+    if (final_state.truncated or
+            final_state.player.guid != first.player.guid):
+        raise LiveControlError('Character/telemetry changed before final level check')
+    report['character_level_before'] = first.player.level
+    report['character_level_after'] = final_state.player.level
+    report['levels_gained_this_run'] = max(
+        0, final_state.player.level - first.player.level)
     set_native_status('idle')
     hud.set(action='Workflow complete')
     print(json.dumps(report, indent=2, ensure_ascii=False))
