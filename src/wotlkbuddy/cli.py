@@ -248,7 +248,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
         next_active_kill_quest, next_active_collect_quest)
     from wotlkbuddy.horde.combat import hunt_kill_objectives
     from wotlkbuddy.horde.return_turnin import return_and_turnin
-    from wotlkbuddy.horde.merchant import free_bag_space
+    from wotlkbuddy.horde.merchant import (
+        free_bag_space, next_ready_profile_turnin)
     from wotlkbuddy.horde.npc_catalog import (
         nearby_profile_quest_givers, nearby_service_npcs)
     from wotlkbuddy.horde.npc_visit import visit_npc
@@ -454,22 +455,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
             delivered_ready_quest = False
             if args.only in ('all', 'objectives', 'collect', 'turnin'):
                 state, current = location()
-                pending = [
-                    q for q in state.quests
-                    if q.complete and
-                    not dict(state.quest_completions).get(q.quest_id, False)
-                    and any(
-                        step.kind == 'turnin' and step.supported and
-                        step.quest_id == q.quest_id and step.npc_name and
-                        step.entry > 0 for step in quest_profile.steps)]
-                if pending:
-                    # Preserve exact XML QuestOrder, not quest journal order.
-                    ordered = {
-                        step.quest_id: i
-                        for i, step in enumerate(quest_profile.steps)
-                        if step.kind == 'turnin'}
-                    pending.sort(key=lambda q: ordered.get(q.quest_id, 99999))
-                    quest = pending[0]
+                quest = next_ready_profile_turnin(quest_profile, state)
+                if quest is not None:
                     hud.set(goal=f'Turn in ready quest: {quest.title}',
                             action='Checking reward bag space')
                     ensure_reward_bag_space()
