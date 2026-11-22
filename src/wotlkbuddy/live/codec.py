@@ -220,6 +220,7 @@ class ClientTelemetry:
     combat_target: CombatTarget | None = None
     mage_buffs: MageBuffState | None = None
     loot_count: int | None = None
+    loot_open: bool | None = None
     reward_choices: tuple[QuestRewardChoice, ...] = ()
     bag_armor: tuple[BagArmor, ...] = ()
     equipped_armor: tuple[EquippedArmor, ...] = ()
@@ -244,6 +245,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     target = None
     buffs = None
     loot_count = None
+    loot_open = None
     reward_options: dict[int, QuestRewardChoice] = {}
     bag_armor: dict[tuple[int, int], BagArmor] = {}
     worn_armor: dict[int, EquippedArmor] = {}
@@ -332,7 +334,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             buffs = MageBuffState(known(parts[1]), parts[2] == '1',
                                   known(parts[3]), parts[4] == '1', known(parts[5]))
         elif parts[0] == 'L':
-            if len(parts) != 2 or loot_count is not None:
+            if len(parts) not in (2, 3) or loot_count is not None:
                 raise TelemetryError('Invalid or duplicate loot status')
             try:
                 loot_count = int(parts[1])
@@ -340,6 +342,12 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise TelemetryError('Malformed loot count') from exc
             if not 0 <= loot_count <= 16:
                 raise TelemetryError('Loot count is out of range')
+            if len(parts) == 3:
+                if parts[2] not in ('0', '1'):
+                    raise TelemetryError('Invalid loot frame visibility flag')
+                loot_open = parts[2] == '1'
+                if loot_count > 0 and not loot_open:
+                    raise TelemetryError('Loot slots reported while frame closed')
         elif parts[0] == 'I':
             if len(parts) not in (3, 4, 6) or dialog is not None or parts[1] not in (
                     'none', 'gossip', 'greeting', 'detail', 'progress', 'reward'):
@@ -546,7 +554,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            quest_menu=tuple(menu.values()),
                            available_quest_menu=tuple(available.values()),
                            combat_target=target, mage_buffs=buffs,
-                           loot_count=loot_count,
+                           loot_count=loot_count, loot_open=loot_open,
                            reward_choices=tuple(reward_options[i] for i in sorted(reward_options)),
                            bag_armor=tuple(bag_armor.values()),
                            equipped_armor=tuple(worn_armor.values()),
