@@ -46,7 +46,7 @@ def train_available_mage_spells(
     s = first
     # A trainer may also have quests or gossip options. Never assume that the
     # first Interact opens training; inspect the actual client UI instead.
-    for attempt in range(3):
+    for attempt in range(6):
         if s.trainer_open:
             break
         kind = s.dialog.kind if s.dialog else 'none'
