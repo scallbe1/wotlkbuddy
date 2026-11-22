@@ -110,7 +110,9 @@ def hunt_kill_objectives(
     last_description = ''
     no_credit = 0
     recently_visited: dict[tuple[int, int, int], int] = {}
-    scan_attempts = 0
+    # A verified position can be used to choose another Detour spawn route
+    # after an off-axis collision. Never retry the same problematic spawn.
+    navigation_mismatches = 0
 
     def guard(s: ClientTelemetry) -> None:
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()):
@@ -401,7 +403,37 @@ def hunt_kill_objectives(
         if d < 0.1:
             raise LiveControlError('Already at spawn but no target could be acquired')
         staging = Vec3(goal.x+dx/d*10,goal.y+dy/d*10,goal.z)
-        s = navigate(s, staging)
+        try:
+            s = navigate(s, staging)
+        except LiveControlError as exc:
+            # The low-level world follower already released all movement keys
+            # on a heading mismatch. Do NOT relax that collision/telemetry
+            # guard. Recheck identity, map and actual position, then exclude
+            # this spawn for the remainder of the session. The outer loop can
+            # search other verified, navmesh-routed spawn candidates.
+            if 'Measured movement disagrees with client facing' not in str(exc):
+                raise
+            s = capture()
+            guard(s)
+            current_pid, current_world = world_position(s)
+            if current_pid != pid or current_world.map_id != world.map_id:
+                raise LiveControlError('Cannot verify map/PID after interrupted navigation') from exc
+            if s.player.in_combat:
+                raise LiveControlError(
+                    'Combat began during off-axis navigation; refusing alternate routing'
+                ) from exc
+            navigation_mismatches += 1
+            recently_visited[key] = 2
+            log(f'Off-axis movement near spawn {key}; actual player position='
+                f'({current_world.x:.2f},{current_world.y:.2f},{current_world.z:.2f}). '
+                f'Excluding this spawn; alternative-route attempt '
+                f'{navigation_mismatches}/2')
+            if navigation_mismatches >= 2:
+                raise LiveControlError(
+                    'Two off-axis navigation failures; stopped to avoid repeated '
+                    'indoor/collision routing'
+                ) from exc
+            continue
         if s.player.in_combat and (s.combat_target is None or
                 s.combat_target.entry_id != expected):
             raise LiveControlError('Attacked by non-objective mob while traveling')
