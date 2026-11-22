@@ -223,6 +223,7 @@ class ClientTelemetry:
     loot_open: bool | None = None
     tracked_item_id: int | None = None
     tracked_item_count: int | None = None
+    tracked_item_name: str | None = None
     reward_choices: tuple[QuestRewardChoice, ...] = ()
     bag_armor: tuple[BagArmor, ...] = ()
     equipped_armor: tuple[EquippedArmor, ...] = ()
@@ -250,6 +251,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     loot_open = None
     tracked_item_id = None
     tracked_item_count = None
+    tracked_item_name = None
     reward_options: dict[int, QuestRewardChoice] = {}
     bag_armor: dict[tuple[int, int], BagArmor] = {}
     worn_armor: dict[int, EquippedArmor] = {}
@@ -338,7 +340,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             buffs = MageBuffState(known(parts[1]), parts[2] == '1',
                                   known(parts[3]), parts[4] == '1', known(parts[5]))
         elif parts[0] == 'J':
-            if (len(parts) != 3 or tracked_item_id is not None
+            if (len(parts) not in (3, 4) or tracked_item_id is not None
                     or not parts[1].isdigit() or not parts[2].isdigit()):
                 raise TelemetryError('Invalid or repeated quest item tracking')
             tracked_item_id = int(parts[1])
@@ -346,6 +348,11 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             if (not 1 <= tracked_item_id <= 999999 or
                     not 0 <= tracked_item_count <= 200000):
                 raise TelemetryError('Out-of-range quest item tracking')
+            if len(parts) == 4:
+                if (len(parts[3]) > 65 or '\\t' in parts[3] or
+                        '\\r' in parts[3] or '\\n' in parts[3]):
+                    raise TelemetryError('Invalid quest item name')
+                tracked_item_name = parts[3] or None
         elif parts[0] == 'L':
             if len(parts) not in (2, 3) or loot_count is not None:
                 raise TelemetryError('Invalid or duplicate loot status')
@@ -570,6 +577,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            loot_count=loot_count, loot_open=loot_open,
                            tracked_item_id=tracked_item_id,
                            tracked_item_count=tracked_item_count,
+                           tracked_item_name=tracked_item_name,
                            reward_choices=tuple(reward_options[i] for i in sorted(reward_options)),
                            bag_armor=tuple(bag_armor.values()),
                            equipped_armor=tuple(worn_armor.values()),
