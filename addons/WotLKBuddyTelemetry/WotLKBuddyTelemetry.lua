@@ -72,6 +72,16 @@ questHistoryFrame:SetScript('OnEvent', function(_, event)
     end
 end)
 
+-- The controller can request ONE exact quest-item inventory count. The
+-- addon does not choose items or perform any actions; it only observes bags.
+local trackedQuestItemId = 0
+SLASH_WOTLKBUDDYTRACK1 = '/wbttrack'
+SlashCmdList['WOTLKBUDDYTRACK'] = function(message)
+    local id = tonumber(message or '')
+    if not id or id ~= math.floor(id) or id < 0 or id > 999999 then return end
+    trackedQuestItemId = id
+end
+
 local function tickData()
     local lines = {}
     local isTruncated = false
@@ -104,6 +114,16 @@ local function tickData()
         safe(UnitName('target'), 50),
     }, '\t')
     appendLine(playerLine)
+    -- Inventory tracking is read only. Match ItemId exactly against source
+    -- Horde XML and report current inventory count in each fresh frame.
+    if trackedQuestItemId > 0 and GetItemCount then
+        local counted = GetItemCount(trackedQuestItemId, false)
+        if type(counted) == 'number' and counted >= 0 and
+                counted == math.floor(counted) and counted <= 200000 then
+            appendLine(table.concat({'C', tostring(trackedQuestItemId),
+                tostring(counted)}, '\t'))
+        end
+    end
     -- Optional status extension: no new protocol version is required. If the
     -- status line cannot fit, the existing truncation marker prevents guessing.
     local mana = UnitMana('player') or 0
