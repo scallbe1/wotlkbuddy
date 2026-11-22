@@ -1,6 +1,18 @@
+## v0.9 practical waypoint travel
+
+The `live-follow` command replaces tiny two-waypoint calibration tests with ordinary
+walk/turn/check navigation over a previously recorded trail. Run
+`live-record`, then `route-from-trail`, and finally `live-follow --enable-input`.
+Read [Practical Travel v0.9](docs/PRACTICAL_TRAVEL_V09.md) for instructions,
+limitations, and stop controls. The old short-range commands remain available.
+
+This uses normalized **zone map coordinates**, not world XYZ, and **cannot**
+detect obstacles or interact with quest givers/enemies. Do not treat it as
+an unattended quest bot.
+
 # WotLKBuddy
 
-**Version 0.8.0 — live telemetry, bounded movement, heading feedback, and experimental two-leg route steering.**
+**Version 0.6.0 — live telemetry, bounded movement, quest progress, and heading calibration.**
 
 A Python-first framework for a future WotLK 3.3.5a (client build 12340)
 automation application. The architecture and feature targets are informed by

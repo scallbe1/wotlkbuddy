@@ -317,6 +317,51 @@ def _live_route(args: argparse.Namespace) -> None:
           file=sys.stderr)
 
 
+def _make_map_route(args: argparse.Namespace) -> None:
+    """Convert a manually walked telemetry trail to a replayable map path."""
+    from wotlkbuddy.live.travel import route_from_trail
+    from pathlib import Path
+    route = route_from_trail(args.input, spacing=args.spacing)
+    destination = Path(args.output)
+    with destination.open('x', encoding='utf-8') as file:
+        json.dump(route.to_dict(), file, indent=2, ensure_ascii=False)
+        file.write('\n')
+    print(f'Created {destination} with {len(route.waypoints)} map points in {route.zone}.')
+    print('Review the path and walk it on safe, unobstructed ground before live-follow.')
+
+
+def _follow_map_route(args: argparse.Namespace) -> None:
+    """Attend a route replay with periodic steering and status checks."""
+    from wotlkbuddy.live.travel import load_route, MapRoute, follow_route
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import WindowsKeyboard
+    route = load_route(args.route)
+    if args.reverse:
+        route = MapRoute(route.zone, route.continent, route.map_zone,
+                         tuple(reversed(route.waypoints)), route.character)
+    if not args.enable_input:
+        raise ValueError('Refusing movement without explicit --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20')
+    print('ROUTE FOLLOW: no terrain/obstacle sensing. Only use a route you have '
+          'already walked and verified safe. Escape or switching windows stops. '
+          'No quest interactions will be executed.', file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g} seconds.',
+          file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    kb = WindowsKeyboard()
+    report = follow_route(
+        route, keyboard=kb, capture=lambda: capture_monitor(args.monitor),
+        stop_requested=kb.emergency_stop_requested,
+        arrival_radius=args.arrival_radius, turn_rate=args.turn_rate,
+        max_step_seconds=args.step_seconds, max_seconds=args.max_seconds,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+    )
+    print(json.dumps(report.to_dict(), ensure_ascii=False))
+    print(f'Route: {report.waypoints_reached}/{report.waypoints_requested} reached; '
+          f'{report.stopped_reason}', file=sys.stderr)
+
+
 def _live_record(args: argparse.Namespace) -> None:
     """Record manual route positions and observed quest progress, without input."""
     from wotlkbuddy.live.capture import capture_monitor
@@ -456,6 +501,26 @@ def main(argv: list[str] | None = None) -> int:
     trail.add_argument('--output', default='route.jsonl',
                        help='New JSONL output file (will not overwrite existing)')
     trail.set_defaults(func=_live_record)
+    trailroute = sub.add_parser('route-from-trail',
+                                help='Convert existing live-record JSONL into a waypoint route')
+    trailroute.add_argument('--input', required=True, help='Previously recorded JSONL trail')
+    trailroute.add_argument('--output', required=True, help='New JSON waypoint route')
+    trailroute.add_argument('--spacing', type=float, default=0.003,
+                            help='Distance between saved waypoints in zone-map coordinates')
+    trailroute.set_defaults(func=_make_map_route)
+    follow = sub.add_parser('live-follow',
+                            help='Follow a prerecorded zone-map route with simple steering')
+    follow.add_argument('--route', required=True, help='JSON waypoint route')
+    follow.add_argument('--enable-input', action='store_true',
+                        help='Explicit opt-in to send movement keys')
+    follow.add_argument('--reverse', action='store_true', help='Follow recorded route backwards')
+    follow.add_argument('--arrival-radius', type=float, default=0.00045)
+    follow.add_argument('--turn-rate', type=float, default=180.4)
+    follow.add_argument('--step-seconds', type=float, default=0.8)
+    follow.add_argument('--max-seconds', type=float, default=120)
+    follow.add_argument('--countdown', type=float, default=5)
+    follow.add_argument('--monitor', type=int, default=0)
+    follow.set_defaults(func=_follow_map_route)
     args = parser.parse_args(argv)
     if getattr(args, "ticks", 0) < 0:
         parser.error("--ticks must be nonnegative")
