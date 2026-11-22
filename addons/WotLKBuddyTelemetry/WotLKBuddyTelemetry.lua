@@ -591,7 +591,10 @@ local statusFrame = CreateFrame('Frame', 'WotLKBuddyStatusHUD', UIParent)
 statusFrame:SetWidth(370)
 statusFrame:SetHeight(53)
 statusFrame:ClearAllPoints()
-statusFrame:SetPoint('TOPLEFT', UIParent, 'TOPLEFT', 16, -155)
+-- Anchor below the RGB telemetry grid near the top center-right.
+-- Relative anchoring follows the grid across UI scales and resolutions,
+-- leaving the upper-left player/party portrait area unobstructed.
+statusFrame:SetPoint('TOP', canvas, 'BOTTOM', 0, -10)
 statusFrame:SetFrameStrata('HIGH')
 statusFrame:EnableMouse(false)
 statusFrame:SetBackdrop({bgFile='Interface\\Buttons\\WHITE8X8'})
