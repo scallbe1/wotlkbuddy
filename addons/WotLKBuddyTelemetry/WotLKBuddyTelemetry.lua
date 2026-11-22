@@ -227,6 +227,37 @@ local function tickData()
     end
     appendLine(table.concat({'I', dialog, tostring(dialogQuestID), dialogQuestTitle,
         tostring(rewardChoices), tostring(moneyRequired)}, '\t'))
+    -- Gossip service options are distinct from available/active quest titles.
+    -- 3.3.5a GetGossipOptions returns alternating (text, type) values.
+    -- Export a COMPLETE numbered list only if it fits; Python must not
+    -- guess that the first option is always training or merchant service.
+    if dialog == 'gossip' and GetNumGossipOptions and GetGossipOptions then
+        local count = GetNumGossipOptions() or 0
+        if count >= 0 and count <= 32 then
+            local pairValues = {GetGossipOptions()}
+            local rows = {}
+            local valid = true
+            for i = 1, count do
+                local name = pairValues[2*i - 1]
+                local kind = pairValues[2*i]
+                if type(name) ~= 'string' or name == '' or
+                        type(kind) ~= 'string' or kind == '' then
+                    valid = false
+                    break
+                end
+                table.insert(rows, table.concat({'H', tostring(i),
+                    safe(kind, 24), safe(name, 90)}, '\t'))
+            end
+            local needed = 7
+            for _, row in ipairs(rows) do
+                needed = needed + string.len(row) + 1
+            end
+            if valid and payloadBytes + needed <= CAPACITY - 20 then
+                appendLine(table.concat({'K', tostring(count)}, '\t'))
+                for _, row in ipairs(rows) do appendLine(row) end
+            end
+        end
+    end
     -- Read actual reward options from the visible quest panel, rather than
     -- assuming quest IDs have the same items/order on every server. GetItemInfo
     -- may be uncached: report an unknown slot/level and let Python fail closed.
