@@ -29,6 +29,9 @@ class FakeGame:
         self.stop = False
         self.events = []
         self.seq = 0
+        self._next_frame = 0.5
+        self._visible_x = self.x
+        self._visible_y = self.y
         self.interrupt_at = None
         self.blur_at = None
 
@@ -48,18 +51,17 @@ class FakeGame:
     def key_up(self, code):
         if code != self.key:
             raise AssertionError('Mismatched key release')
-        held = self.time - self.pressed_at
         self.events.append(('up', code))
-        if code == 0x11:
-            self.x += self.speed * held * cos(radians(self.heading))
-            self.y += self.speed * held * sin(radians(self.heading))
-        elif code == 0x1E:
-            self.heading -= self.turn_rate * held
-        elif code == 0x20:
-            self.heading += self.turn_rate * held
         self.key = None
 
     def sleep(self, duration):
+        if self.key == 0x11:
+            self.x += self.speed * duration * cos(radians(self.heading))
+            self.y += self.speed * duration * sin(radians(self.heading))
+        elif self.key == 0x1E:
+            self.heading -= self.turn_rate * duration
+        elif self.key == 0x20:
+            self.heading += self.turn_rate * duration
         self.time += duration
         if self.interrupt_at is not None and self.time >= self.interrupt_at:
             self.stop = True
@@ -67,9 +69,15 @@ class FakeGame:
             self.focus = False
 
     def capture(self):
-        self.seq = (self.seq + 1) % 256
+        if self.time == 0 and self.key is None:
+            self._visible_x, self._visible_y = self.x, self.y
+        if self.time + 1e-9 >= self._next_frame:
+            ticks = 1 + int((self.time - self._next_frame + 1e-9) // 0.5)
+            self._next_frame += ticks * 0.5
+            self.seq = (self.seq + ticks) % 256
+            self._visible_x, self._visible_y = self.x, self.y
         p = PlayerRecord('Inka', 'guid-1', 12, 217, 217,
-                         self.in_combat, False, self.x, self.y,
+                         self.in_combat, False, self._visible_x, self._visible_y,
                          1, 12, 'Darkshore', '', '')
         return ClientTelemetry(self.seq, p, ())
 
@@ -96,23 +104,22 @@ class HalfSecondTelemetryGame(FakeGame):
 
 
 class IntermittentForwardGame(HalfSecondTelemetryGame):
-    """One forward command produces no observable displacement."""
+    """One half-second of forward movement is unexpectedly ineffective."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.forward_attempts = 0
+        self.paused_once = False
 
-    def key_up(self, code):
-        if code == 0x11:
-            self.forward_attempts += 1
-            if self.forward_attempts == 2:
-                saved_speed = self.speed
-                self.speed = 0
-                try:
-                    return super().key_up(code)
-                finally:
-                    self.speed = saved_speed
-        return super().key_up(code)
+    def sleep(self, duration):
+        if self.key == 0x11 and 1.0 <= self.time < 1.5:
+            saved_speed = self.speed
+            self.speed = 0
+            try:
+                super().sleep(duration)
+            finally:
+                self.speed = saved_speed
+        else:
+            super().sleep(duration)
 
 
 def mkroute(*points):
@@ -304,8 +311,8 @@ class LiveFollowTests(unittest.TestCase):
     def test_no_displacement_requires_three_post_input_samples(self):
         g = HalfSecondTelemetryGame(speed=0)
         report = follow(g, mkroute((.380, .42)))
-        self.assertIn('No movement confirmed', report.stopped_reason)
-        self.assertEqual(report.moves, 3)
+        self.assertIn('unconfirmed', report.stopped_reason)
+        self.assertEqual(report.moves, 1)
         self.assertIsNone(g.key)
 
     def test_half_second_published_frames_after_full_turn(self):
@@ -319,8 +326,48 @@ class LiveFollowTests(unittest.TestCase):
     def test_single_inconclusive_forward_after_turn_does_not_claim_stuck(self):
         g = IntermittentForwardGame(heading=180)
         report = follow(g, mkroute((.381, .42)))
-        self.assertNotIn('No movement confirmed', report.stopped_reason)
-        self.assertGreaterEqual(report.moves, 3)
+        self.assertNotIn('unconfirmed for 2s', report.stopped_reason)
+        self.assertGreaterEqual(report.moves, 1)
+        self.assertIsNone(g.key)
+
+    def test_long_straight_walk_has_few_key_down_events(self):
+        g = HalfSecondTelemetryGame(heading=0)
+        report = follow(g, mkroute((.381, .42), (.387, .42)),
+                        resume=True, max_seconds=120)
+        self.assertEqual(report.stopped_reason, 'complete', report)
+        self.assertEqual(report.waypoints_reached, 2)
+        # Forward key is held across multiple 0.5-second screen updates,
+        # not lifted every time the addon publishes a frame.
+        self.assertLessEqual(report.moves, 3)
+        self.assertGreater(report.forward_seconds, 4.0)
+        self.assertIsNone(g.key)
+
+    def test_stale_frames_stop_and_release_continuous_key(self):
+        g = HalfSecondTelemetryGame(heading=0)
+        original = g.capture
+        started = None
+        def frozen_capture():
+            nonlocal started
+            snap = original()
+            if started is None:
+                started = snap
+            return started
+        report = follow_route(mkroute((.380, .42)), keyboard=g,
+                              capture=frozen_capture, now=lambda: g.time,
+                              sleep=g.sleep, stop_requested=g.emergency_stop_requested)
+        self.assertIn('Telemetry stopped', report.stopped_reason)
+        self.assertIsNone(g.key)
+
+    def test_continuous_forward_key_released_on_combat(self):
+        g = HalfSecondTelemetryGame(heading=0)
+        original = g.sleep
+        def inject_combat(duration):
+            original(duration)
+            if g.time >= 1.5:
+                g.in_combat = True
+        g.sleep = inject_combat
+        report = follow(g, mkroute((.385, .42)))
+        self.assertIn('combat', report.stopped_reason)
         self.assertIsNone(g.key)
 
     def test_post_keyup_wait_retains_emergency_stop(self):
