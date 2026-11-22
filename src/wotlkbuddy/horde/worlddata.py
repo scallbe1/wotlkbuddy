@@ -1,0 +1,144 @@
+"""Read-only NPC-spawn lookup and quest corridor preparation.
+
+Likon69/CopilotBuddy datadb/CreatureSpawns.db provides creature positions,
+not path traversability. Likon69/Questing-profiles provides world XYZ for
+quest order NPCs. Always keep WORLD coordinates separate from UI map fractions.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from math import dist, isfinite
+from pathlib import Path
+import sqlite3
+from urllib.parse import quote
+
+from wotlkbuddy.game.types import Vec3
+from wotlkbuddy.horde.profile import HordeProfile
+
+
+@dataclass(frozen=True)
+class Spawn:
+    entry: int
+    map_id: int
+    x: float
+    y: float
+    z: float
+
+    @property
+    def position(self) -> Vec3:
+        return Vec3(self.x, self.y, self.z)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+class CreatureSpawnDatabase:
+    """Never modifies the upstream SQLite DB. Refuse an unexpected schema."""
+
+    def __init__(self, path: str | Path) -> None:
+        path = Path(path).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f'Creature spawn database missing: {path}')
+        # URI is read-only, including on Windows. Parameterized SQL queries only.
+        url = 'file:' + quote(path.as_posix(), safe='/:') + '?mode=ro'
+        self._conn = sqlite3.connect(url, uri=True)
+        try:
+            cols = {row[1] for row in self._conn.execute('PRAGMA table_info(spawns)')}
+            required = {'entry', 'map_id', 'x', 'y', 'z'}
+            if not required <= cols:
+                raise ValueError('Invalid CreatureSpawns.db schema: spawns table lacks '
+                                 + ', '.join(sorted(required - cols)))
+        except Exception:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def __enter__(self) -> CreatureSpawnDatabase:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+    def find(self, entry: int, map_id: int, limit: int = 50) -> tuple[Spawn, ...]:
+        if entry <= 0 or not 0 <= map_id <= 9999 or not 1 <= limit <= 100:
+            raise ValueError('Invalid creature entry, map ID, or spawn limit')
+        rows = self._conn.execute(
+            'SELECT x, y, z FROM spawns WHERE entry = ? AND map_id = ? LIMIT ?',
+            (entry, map_id, limit),
+        ).fetchall()
+        if any(len(r) != 3 or any(not isfinite(float(v)) for v in r) for r in rows):
+            raise ValueError('Spawn DB contains non-finite world coordinates')
+        return tuple(Spawn(entry, map_id, *map(float, r)) for r in rows)
+
+
+def distance_world(first: Vec3, second: Vec3) -> float:
+    return dist((first.x, first.y, first.z), (second.x, second.y, second.z))
+
+
+@dataclass(frozen=True)
+class QuestCorridor:
+    quest_id: int
+    map_id: int
+    giver_name: str
+    giver_entry: int
+    giver_xyz: Vec3
+    turnin_name: str
+    turnin_entry: int
+    turnin_xyz: Vec3
+    giver_db_distance: float | None = None
+    turnin_db_distance: float | None = None
+    giver_db_xyz: Vec3 | None = None
+    turnin_db_xyz: Vec3 | None = None
+    giver_spawns: int = 0
+    turnin_spawns: int = 0
+
+    def to_dict(self) -> dict:
+        return {'quest_id': self.quest_id, 'map_id': self.map_id,
+                'giver': {'name': self.giver_name, 'entry': self.giver_entry,
+                          'world_xyz': [self.giver_xyz.x, self.giver_xyz.y, self.giver_xyz.z],
+                          'spawn_count': self.giver_spawns,
+                          'nearest_db_distance_yards': self.giver_db_distance,
+                          'nearest_db_world_xyz': ([self.giver_db_xyz.x, self.giver_db_xyz.y,
+                                                    self.giver_db_xyz.z] if self.giver_db_xyz else None)},
+                'turnin': {'name': self.turnin_name, 'entry': self.turnin_entry,
+                           'world_xyz': [self.turnin_xyz.x, self.turnin_xyz.y, self.turnin_xyz.z],
+                           'spawn_count': self.turnin_spawns,
+                           'nearest_db_distance_yards': self.turnin_db_distance,
+                           'nearest_db_world_xyz': ([self.turnin_db_xyz.x, self.turnin_db_xyz.y,
+                                                     self.turnin_db_xyz.z] if self.turnin_db_xyz else None)}}
+
+
+def prepare_quest_corridor(profile: HordeProfile, db: CreatureSpawnDatabase,
+                           quest_id: int, map_id: int = 0) -> QuestCorridor:
+    """Produce a *reference* NPC-to-NPC route request, not the player's position.
+
+    Never overwrite profile coordinates with ambiguous spawns. Multiple
+    identical NPC entries can exist across the map. Report nearest-distance
+    evidence and let a navmesh planner validate traversability independently.
+    """
+    pickup = next((s for s in profile.steps if s.kind == 'pickup' and
+                   s.quest_id == quest_id and s.world_position and s.npc_name), None)
+    turnin = next((s for s in profile.steps if s.kind == 'turnin' and
+                   s.quest_id == quest_id and s.world_position and s.npc_name), None)
+    if pickup is None or turnin is None:
+        raise ValueError(f'Quest {quest_id} has no complete pickup/turn-in world XYZ in profile')
+    givens = db.find(pickup.entry, map_id)
+    turns = db.find(turnin.entry, map_id)
+    def nearest(points: tuple[Spawn, ...], position: Vec3) -> Spawn | None:
+        return min(points, key=lambda s: distance_world(s.position, position), default=None)
+    giver_match = nearest(givens, pickup.world_position)
+    turnin_match = nearest(turns, turnin.world_position)
+    return QuestCorridor(quest_id, map_id, pickup.npc_name, pickup.entry,
+                         pickup.world_position, turnin.npc_name, turnin.entry,
+                         turnin.world_position,
+                         (distance_world(giver_match.position, pickup.world_position)
+                          if giver_match is not None else None),
+                         (distance_world(turnin_match.position, turnin.world_position)
+                          if turnin_match is not None else None),
+                         giver_match.position if giver_match is not None else None,
+                         turnin_match.position if turnin_match is not None else None,
+                         len(givens), len(turns))

@@ -40,6 +40,18 @@ class DetourNavigator:
         if not dll_path.is_file():
             raise FileNotFoundError(dll_path)
         self._dll = ctypes.CDLL(str(dll_path))  # cdecl, not WinDLL/stdcall
+        # Native Navigation-C- loads the mmap directory next to the DLL;
+        # merely resolving function pointers does not initialize any terrain.
+        mesh_dir = dll_path.parent / 'mmaps'
+        if not mesh_dir.is_dir() or not any(mesh_dir.glob('*.mmap')) or not any(mesh_dir.glob('*.mmtile')):
+            raise FileNotFoundError('Expected matching .mmap and .mmtile terrain files in '
+                                    + str(mesh_dir) + '; do not use server MMAP v4 blindly')
+        self._dll.Nav_LoadMaps.argtypes = []
+        self._dll.Nav_LoadMaps.restype = ctypes.c_bool
+        self._dll.Nav_UnloadMaps.argtypes = []
+        self._dll.Nav_UnloadMaps.restype = None
+        self._dll.EnsureTiles_C.argtypes = [c_uint32, XYZ, c_int]
+        self._dll.EnsureTiles_C.restype = None
         self._dll.CalculatePath_C.argtypes = [
             c_uint32, XYZ, XYZ, ctypes.c_bool, POINTER(c_int),
         ]
@@ -49,9 +61,28 @@ class DetourNavigator:
 
         self._dll.FindNearestPoint_C.argtypes = [c_uint32, XYZ, POINTER(XYZ)]
         self._dll.FindNearestPoint_C.restype = ctypes.c_bool
+        if not self._dll.Nav_LoadMaps():
+            raise RuntimeError('Navigation.dll could not load the adjacent mmaps; '
+                               'verify terrain format and DLL bitness')
+        self._loaded = True
+
+    def close(self) -> None:
+        if getattr(self, '_loaded', False):
+            self._dll.Nav_UnloadMaps()
+            self._loaded = False
+
+    def __enter__(self) -> DetourNavigator:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
 
     def find_path(self, map_id: int, start: Vec3, end: Vec3,
                   *, smooth: bool = True) -> list[Vec3]:
+        if map_id < 0:
+            raise ValueError('Invalid world map ID')
+        self._dll.EnsureTiles_C(map_id, XYZ.from_vec(start), 1)
+        self._dll.EnsureTiles_C(map_id, XYZ.from_vec(end), 1)
         length = c_int()
         points = self._dll.CalculatePath_C(
             map_id, XYZ.from_vec(start), XYZ.from_vec(end), smooth, byref(length)
@@ -66,6 +97,9 @@ class DetourNavigator:
             self._dll.FreePathArr_C(ctypes.cast(points, c_void_p))
 
     def nearest_point(self, map_id: int, position: Vec3) -> Vec3 | None:
+        if map_id < 0:
+            raise ValueError('Invalid world map ID')
+        self._dll.EnsureTiles_C(map_id, XYZ.from_vec(position), 1)
         out = XYZ()
         ok = self._dll.FindNearestPoint_C(map_id, XYZ.from_vec(position), byref(out))
         return out.as_vec() if ok else None
