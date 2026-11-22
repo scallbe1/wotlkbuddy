@@ -21,6 +21,7 @@ from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 def visit_npc(
     *, npc_name: str, npc_id: int, pid: int, capture: Callable[[], ClientTelemetry],
     driver, nav, spawns, radius: float = 160,
+    destination_hint=None,
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     world_position: Callable[[ClientTelemetry], tuple[int, object]] | None = None,
@@ -53,9 +54,17 @@ def visit_npc(
             raise LiveControlError('Active WoW PID changed during UI cleanup')
     matches = [spot for spot in spawns.find(npc_id, world.map_id, 100)
                if distance_world(world.position, spot.position) <= radius]
+    if destination_hint is not None:
+        # The source profile's NPC position was independently matched against
+        # the spawn DB by the NPC catalog. Preserve that identity throughout
+        # navigation instead of silently picking a different nearby spawn.
+        matches = [spot for spot in matches
+                   if distance_world(destination_hint, spot.position) <= 10]
     if not matches:
-        raise LiveControlError(f'No nearby verified spawn of {npc_name} ({npc_id})')
-    matches.sort(key=lambda spot: distance_world(world.position, spot.position))
+        raise LiveControlError(f'No verified nearby spawn of {npc_name} ({npc_id})')
+    matches.sort(key=lambda spot: distance_world(
+        destination_hint if destination_hint is not None else world.position,
+        spot.position))
     dest = matches[0].position
     if any(distance_world(dest, other.position) > 10 for other in matches):
         raise LiveControlError(

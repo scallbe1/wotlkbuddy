@@ -236,13 +236,15 @@ def _execute_profile_return(*, profile, quest_id, pid, capture, driver,
 
 
 def _horde_progress(args: argparse.Namespace) -> None:
-    """Attended post-quest equipment, nearby quest pickup and Mage training.
+    """Attended profile-driven quest pickup, Mage training and vendor routing.
 
-    Each action requires live validation; never reruns an already handed-in
-    quest or assumes an NPC/quest title on a customized server.
+    All service identities and destinations originate from local Horde XML,
+    cross-checked against the local creature spawn DB. No fixed NPC catalog.
     """
     from pathlib import Path
     from wotlkbuddy.horde.gear import equip_mage_upgrades
+    from wotlkbuddy.horde.npc_catalog import (
+        nearby_profile_quest_givers, nearby_service_npcs)
     from wotlkbuddy.horde.npc_visit import visit_npc
     from wotlkbuddy.horde.quest_offers import accept_npc_offers
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
@@ -260,53 +262,114 @@ def _horde_progress(args: argparse.Namespace) -> None:
     log = lambda line: print(line, file=sys.stderr, flush=True)
     log(f'Switch to WoW now; post-quest progression begins in {args.countdown:g}s.')
     time.sleep(args.countdown)
-    cap=lambda: capture_monitor(args.monitor)
-    first=cap()
+    cap = lambda: capture_monitor(args.monitor)
+    first = cap()
     if (first.truncated or first.player.dead or first.player.in_combat or
             first.resources is None or
             first.resources.class_token.upper() != 'MAGE' or
-            first.resources.race_token.lower() not in ('scourge','undead')):
+            first.resources.race_token.lower() not in ('scourge', 'undead')):
         raise LiveControlError('Only a verified living out-of-combat Undead Mage is supported')
-    pid, world=verified_live_position(first, pid=args.pid)
-    if world.map_id != 0:
-        raise LiveControlError('This Deathknell progression run requires world map ID 0')
-    driver=KeyboardQuestInput(interact_key=args.interact_key)
-    report={}
-    if args.only in ('all','gear'):
-        equipped=equip_mage_upgrades(capture=cap, driver=driver, log=log)
-        report['equipped_item_ids']=equipped
-    if args.only in ('all','quests','train'):
-        dll=Path(args.nav_dll).expanduser().resolve()
-        py32=Path(args.python32).expanduser().resolve()
-        if not dll.is_file() or not (dll.parent/'mmaps').is_dir() or not py32.is_file():
+    pid, world = verified_live_position(first, pid=args.pid)
+    driver = KeyboardQuestInput(interact_key=args.interact_key)
+    report = {}
+    if args.only in ('all', 'gear'):
+        equipped = equip_mage_upgrades(capture=cap, driver=driver, log=log)
+        report['equipped_item_ids'] = equipped
+    if args.only in ('all', 'quests', 'train', 'vendor'):
+        if not args.nav_dll or not args.python32:
+            raise ValueError('NPC navigation requires --nav-dll and --python32')
+        dll = Path(args.nav_dll).expanduser().resolve()
+        py32 = Path(args.python32).expanduser().resolve()
+        if not dll.is_file() or not (dll.parent / 'mmaps').is_dir() or not py32.is_file():
             raise ValueError('NPC visits need Navigation.dll, adjacent mmaps and x86 Python')
+        profiles_root = str(Path(args.profiles_root or
+                                (Path.home() / 'Questing-profiles')).expanduser())
+        chosen = select_profile_from_loader(
+            profiles_root, level=first.player.level, race='Undead')
+        quest_profile = load_horde_profile(chosen)
+        log(f'NPC services and quest profile: {quest_profile.name}')
         with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
-                NavigationProxy(py32,dll) as nav:
-            if args.only in ('all','quests'):
-                # Direct QuestFrame details on single-offer NPCs do not have
-                # a gossip offer list. Resolve and verify that NPC + quest
-                # title/ID against the same starter profile horde-next uses.
-                profiles_root = (args.profiles_root or
-                                 str(Path.home() / 'Questing-profiles'))
-                chosen = select_profile_from_loader(
-                    profiles_root, level=first.player.level, race='Undead')
-                quest_profile = load_horde_profile(chosen)
-                log(f'Quest pickup verification profile: {quest_profile.name}')
-                quests={}
-                for name,entry in (('Shadow Priest Sarvis',1569),('Novice Elreth',1661)):
-                    visit_npc(npc_name=name, npc_id=entry, pid=pid, capture=cap,
-                              driver=driver, nav=nav, spawns=db, log=log)
-                    quests[name]=accept_npc_offers(
-                        npc_name=name, npc_id=entry, capture=cap, driver=driver,
-                        max_quests=4, profile=quest_profile, log=log)
-                report['accepted_quests']=quests
-            if args.only in ('all','train'):
-                name,entry='Isabella',2124
-                visit_npc(npc_name=name, npc_id=entry, pid=pid, capture=cap,
-                          driver=driver, nav=nav, spawns=db, log=log)
-                report['trained_spells']=train_available_mage_spells(
-                    npc_name=name, npc_id=entry, capture=cap, driver=driver,
-                    log=log)
+                NavigationProxy(py32, dll) as nav:
+
+            def location():
+                state = cap()
+                live_pid, coords = verified_live_position(state, pid=pid)
+                if live_pid != pid:
+                    raise LiveControlError('WoW PID changed between NPC actions')
+                return state, coords
+
+            if args.only in ('all', 'vendor'):
+                state, current = location()
+                bags_full = (state.resources.free_bag_slots <=
+                             quest_profile.min_free_bag_slots)
+                if args.only == 'vendor' or bags_full:
+                    merchants = nearby_service_npcs(
+                        profile=quest_profile, spawns=db,
+                        origin=current.position, map_id=current.map_id,
+                        role='merchant', profiles_root=profiles_root, radius=600)
+                    if not merchants:
+                        raise LiveControlError(
+                            'No nearby merchant defined in Horde Vendor XML '
+                            'and corroborated by CreatureSpawns.db')
+                    merchant = merchants[0]
+                    log(f'Profile-selected merchant: {merchant.name} '
+                        f'({merchant.entry}); source={merchant.source}')
+                    visit_npc(npc_name=merchant.name, npc_id=merchant.entry,
+                              pid=pid, capture=cap, driver=driver, nav=nav,
+                              spawns=db, radius=600,
+                              destination_hint=merchant.position, log=log)
+                    report['vendor'] = {
+                        'name': merchant.name, 'entry': merchant.entry,
+                        'source': merchant.source,
+                        'status': 'reached; selling not yet implemented'}
+                    if args.only == 'all' and bags_full:
+                        # Do not pretend a merchant visit has emptied bags:
+                        # no item-safe sale/merchant-UI verifier exists yet.
+                        print(json.dumps(report, indent=2, ensure_ascii=False))
+                        raise LiveControlError(
+                            'Bags at profile threshold: reached profile merchant, '
+                            'but safe automatic item selling is not implemented')
+
+            if args.only in ('all', 'quests'):
+                state, current = location()
+                givers = nearby_profile_quest_givers(
+                    profile=quest_profile, telemetry=state, spawns=db,
+                    origin=current.position, map_id=current.map_id, radius=160)
+                log(f'Unresolved, reachable profile quest givers: {len(givers)}')
+                quests = {}
+                for giver in givers[:12]:
+                    log(f'Profile quest giver: {giver.name} ({giver.entry}) '
+                        f'from {giver.source}')
+                    visit_npc(npc_name=giver.name, npc_id=giver.entry,
+                              pid=pid, capture=cap, driver=driver, nav=nav,
+                              spawns=db, radius=240,
+                              destination_hint=giver.position, log=log)
+                    quests[giver.name] = accept_npc_offers(
+                        npc_name=giver.name, npc_id=giver.entry, capture=cap,
+                        driver=driver, max_quests=4,
+                        profile=quest_profile, log=log)
+                report['accepted_quests'] = quests
+
+            if args.only in ('all', 'train'):
+                state, current = location()
+                trainers = nearby_service_npcs(
+                    profile=quest_profile, spawns=db,
+                    origin=current.position, map_id=current.map_id,
+                    role='train', profiles_root=profiles_root, radius=600)
+                if not trainers:
+                    raise LiveControlError(
+                        'No nearby Mage TrainClass vendor found in local Horde '
+                        'profile XML and corroborated by CreatureSpawns.db')
+                trainer = trainers[0]
+                log(f'Profile-selected Mage trainer: {trainer.name} '
+                    f'({trainer.entry}); source={trainer.source}')
+                visit_npc(npc_name=trainer.name, npc_id=trainer.entry,
+                          pid=pid, capture=cap, driver=driver, nav=nav,
+                          spawns=db, radius=600,
+                          destination_hint=trainer.position, log=log)
+                report['trained_spells'] = train_available_mage_spells(
+                    npc_name=trainer.name, npc_id=trainer.entry,
+                    capture=cap, driver=driver, log=log)
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
@@ -1143,7 +1206,7 @@ def main(argv: list[str] | None = None) -> int:
     return_quest.set_defaults(func=_horde_return_turnin)
     progression = sub.add_parser('horde-progress',
                        help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
-    progression.add_argument('--only', choices=['all','gear','quests','train'],
+    progression.add_argument('--only', choices=['all','gear','quests','train','vendor'],
                              default='all')
     progression.add_argument('--profiles-root',
                              help='Horde quest profile root (defaults to ~/Questing-profiles)')
