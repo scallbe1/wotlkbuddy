@@ -120,6 +120,15 @@ class QuestDialog:
 
 
 @dataclass(frozen=True)
+class QuestMenuOption:
+    """Observed active quest entry from a 3.3.5a NPC greeting/gossip list."""
+    source: str  # gossip: SelectGossipActiveQuest, greeting: SelectActiveQuest
+    index: int   # UI index, not a quest ID
+    complete: bool
+    title: str
+
+
+@dataclass(frozen=True)
 class ClientTelemetry:
     sequence: int
     player: PlayerRecord
@@ -128,6 +137,7 @@ class ClientTelemetry:
     resources: PlayerResources | None = None
     dialog: QuestDialog | None = None
     quest_completions: tuple[tuple[int, bool], ...] = ()  # verified server cache only
+    quest_menu: tuple[QuestMenuOption, ...] = ()  # active quest list, never available quests
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -139,6 +149,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     resources = None
     dialog = None
     completion_states: dict[int, bool] = {}
+    menu: dict[tuple[str, int], QuestMenuOption] = {}
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -196,7 +207,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             resources = PlayerResources(*values, *(parts[8:] if len(parts) == 10 else ()))
         elif parts[0] == 'I':
             if len(parts) not in (3, 4, 6) or dialog is not None or parts[1] not in (
-                    'none', 'gossip', 'detail', 'progress', 'reward'):
+                    'none', 'gossip', 'greeting', 'detail', 'progress', 'reward'):
                 raise TelemetryError('Invalid or repeated quest dialog record')
             try:
                 quest_id = int(parts[2])
@@ -204,7 +215,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise TelemetryError('Malformed quest dialog ID') from exc
             title = parts[3] if len(parts) == 4 else ''
             if (not 0 <= quest_id <= 999999 or len(title) > 100 or
-                    (parts[1] in ('none', 'gossip') and (quest_id != 0 or title))):
+                    (parts[1] in ('none', 'gossip', 'greeting') and (quest_id != 0 or title))):
                 raise TelemetryError('Invalid quest dialog ID/title for UI state')
             choices = payment = None
             if len(parts) == 6:
@@ -218,6 +229,18 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 if choices < 0: choices = None
                 if payment < 0: payment = None
             dialog = QuestDialog(parts[1], quest_id, title, choices, payment)
+        elif parts[0] == 'A':
+            if len(parts) != 5 or parts[1] not in ('gossip', 'greeting') or \
+                    parts[3] not in ('0', '1') or not parts[4] or len(parts[4]) > 100:
+                raise TelemetryError('Invalid active quest-list entry')
+            try:
+                index = int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Malformed active quest-list index') from exc
+            key = parts[1], index
+            if index < 1 or index > 32 or key in menu:
+                raise TelemetryError('Out-of-range or duplicate active quest-list entry')
+            menu[key] = QuestMenuOption(parts[1], index, parts[3] == '1', parts[4])
         elif parts[0] == 'C':
             if len(parts) != 3:
                 raise TelemetryError('Invalid completed-quest status row')
@@ -243,8 +266,12 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
         raise TelemetryError('Invalid player health values')
     if not (0 <= player.map_x <= 1 and 0 <= player.map_y <= 1):
         raise TelemetryError('Invalid normalized map coordinates')
+    if menu and (dialog is None or dialog.kind not in ('gossip', 'greeting') or
+                 any(source != dialog.kind for source, _index in menu)):
+        raise TelemetryError('Quest-list entries do not match the active NPC UI')
     entries = tuple(QuestRecord(q.quest_id, q.level, q.complete, q.title,
                                 tuple(obj[q.quest_id])) for q in quests.values())
     return ClientTelemetry(sequence, player, entries, truncated=truncated,
                            resources=resources, dialog=dialog,
-                           quest_completions=tuple(sorted(completion_states.items())))
+                           quest_completions=tuple(sorted(completion_states.items())),
+                           quest_menu=tuple(menu.values()))

@@ -1,5 +1,5 @@
 -- WotLKBuddy v0.3 read-only client telemetry; compatible with WoW 3.3.5a Lua 5.1.
--- Exports a checksum-validated, versioned byte stream as RGB pixels at the top-left.
+-- Exports a checksum-validated, versioned byte stream as RGB pixels at the bottom-right.
 -- Does not execute movement, combat, chat, quests, or privileged APIs.
 
 local SIDE = 4
@@ -11,7 +11,7 @@ local canvas = CreateFrame('Frame', 'WotLKBuddyTelemetryFrame', UIParent)
 canvas:SetWidth(COLS * SIDE)
 canvas:SetHeight(ROWS * SIDE)
 canvas:SetScale(1 / UIParent:GetEffectiveScale())
-canvas:SetPoint('TOPLEFT', UIParent, 'TOPLEFT', 12, -12)
+canvas:SetPoint('BOTTOMRIGHT', UIParent, 'BOTTOMRIGHT', -12, 12)
 canvas:SetFrameStrata('TOOLTIP')
 canvas:EnableMouse(false)
 
@@ -147,6 +147,8 @@ local function tickData()
             dialog = 'progress'
         elseif QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown() then
             dialog = 'reward'
+        elseif QuestFrameGreetingPanel and QuestFrameGreetingPanel:IsShown() then
+            dialog = 'greeting'
         end
     elseif GossipFrame and GossipFrame:IsShown() then
         dialog = 'gossip'
@@ -177,6 +179,32 @@ local function tickData()
         if ok and value ~= nil then completed = value and 1 or 0 end
     elseif completionCache then
         completed = completionCache[363] and 1 or 0
+    end
+    -- Active quest-list entries are different from the quest progress/reward
+    -- panel. The 3.3.5a GossipFrame API returns four fields per active quest:
+    -- title, level, isLowLevel, isComplete. QuestFrameGreetingPanel uses
+    -- GetActiveTitle(i) -> title, isComplete. Report only active quest entries;
+    -- never choose a quest from the available/new quest list by accident.
+    if dialog == 'gossip' and GetNumGossipActiveQuests and GetGossipActiveQuests then
+        local count = math.min(GetNumGossipActiveQuests() or 0, 32)
+        local options = {GetGossipActiveQuests()}
+        for i = 1, count do
+            local title = options[(i - 1) * 4 + 1]
+            local isComplete = options[(i - 1) * 4 + 4]
+            if title then
+                appendLine(table.concat({'A', 'gossip', tostring(i),
+                    isComplete and '1' or '0', safe(title, 100)}, '\t'))
+            end
+        end
+    elseif dialog == 'greeting' and GetNumActiveQuests and GetActiveTitle then
+        local count = math.min(GetNumActiveQuests() or 0, 32)
+        for i = 1, count do
+            local title, isComplete = GetActiveTitle(i)
+            if title then
+                appendLine(table.concat({'A', 'greeting', tostring(i),
+                    isComplete and '1' or '0', safe(title, 100)}, '\t'))
+            end
+        end
     end
     appendLine(table.concat({'C', '363', tostring(completed)}, '\t'))
     local entries = GetNumQuestLogEntries() or 0

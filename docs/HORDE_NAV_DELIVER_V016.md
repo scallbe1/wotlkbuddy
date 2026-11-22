@@ -1,3 +1,8 @@
+> **v0.17 update:** An NPC may show a gossip/greeting list before the quest
+> progress panel. The quest hand-in handler now selects the uniquely matching
+> active quest by title before continuing. See
+> [v0.17 quest-list turn-in](SARVIS_GOSSIP_TURNIN_V017.md).
+
 # v0.16 — Attended Horde Mage world-navmesh delivery (quest 363)
 
 This is an **experimental, attended** world-X/Y/Z route follower for the active
