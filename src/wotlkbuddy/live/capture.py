@@ -1,12 +1,26 @@
-"""Screen-only receiver for the WotLKBuddy WoW 3.3.5a telemetry addon.
+"""Read WotLKBuddy telemetry from screen pixels, without accessing WoW memory.
 
-The addon renders 4x4 physical-pixel RGB tiles at the upper-left corner.
-This receiver reads the screen; it never opens or modifies Wow.exe memory.
+WoW can rescale UI textures during rendering. A nominal 4x4 addon texel may
+occupy 5.4 physical screenshot pixels, so physical sampling pitch must be
+calibrated from the on-screen marker instead of assumed to equal CELL.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from wotlkbuddy.live.codec import (CELL, COLS, MAGIC, ROWS, ClientTelemetry,
                                    TelemetryError, decode_pixels, parse_payload)
+
+
+@dataclass(frozen=True, slots=True)
+class _Layout:
+    x: float
+    y: float
+    pitch_x: float
+    pitch_y: float
+
+
+_last_layout: _Layout | None = None
 
 
 def _bgra_pixel(buffer: bytes, width: int, height: int, x: int, y: int) -> tuple[int, int, int]:
@@ -17,57 +31,141 @@ def _bgra_pixel(buffer: bytes, width: int, height: int, x: int, y: int) -> tuple
     return r, g, b
 
 
-def find_origin(buffer: bytes, width: int, height: int) -> tuple[int, int]:
-    """Locate the 4-color marker anywhere on the selected display.
-
-    Raw `bytes.find` is substantially quicker than Python-per-pixel scanning.
-    Header matching is exact: screenshot filtering, HDR and overlays may break it.
-    """
-    if width < CELL * COLS or height < CELL * ROWS or len(buffer) != width * height * 4:
-        raise TelemetryError('Invalid screenshot dimensions / pixel layout')
-    pattern = b'\xff\x00\xff'  # magenta in BGRA ordering
-    pos = 0
-    while True:
-        found = buffer.find(pattern, pos)
-        if found < 0:
-            break
-        pos = found + 3
-        if found % 4 != 0:
-            continue
-        pixel_index = found // 4
-        x, y = pixel_index % width, pixel_index // width
-        if x + COLS * CELL > width + CELL or y + ROWS * CELL > height + CELL:
-            continue
-        if any(_bgra_pixel(buffer, width, height, x + i * CELL, y) != rgb
-               for i, rgb in enumerate(MAGIC)):
-            continue
-        # Found somewhere inside the first tile, not necessarily its top-left.
-        while x > 0 and _bgra_pixel(buffer, width, height, x - 1, y) == MAGIC[0]:
-            x -= 1
-        while y > 0 and _bgra_pixel(buffer, width, height, x, y - 1) == MAGIC[0]:
-            y -= 1
-        if x + COLS * CELL <= width and y + ROWS * CELL <= height:
-            return x, y
-    raise TelemetryError('Telemetry marker not visible; install/enable addon and keep WoW on screen')
+def _sample(buffer: bytes, width: int, height: int, layout: _Layout,
+            col: int, row: int) -> tuple[int, int, int]:
+    x = int(layout.x + (col + 0.5) * layout.pitch_x)
+    y = int(layout.y + (row + 0.5) * layout.pitch_y)
+    return _bgra_pixel(buffer, width, height, x, y)
 
 
-def decode_bgra_frame(buffer: bytes, width: int, height: int) -> ClientTelemetry:
-    """Read one complete checksum-validated frame from a captured BGRA screen."""
-    x0, y0 = find_origin(buffer, width, height)
-    def sample(col: int, row: int) -> tuple[int, int, int]:
-        return _bgra_pixel(buffer, width, height,
-                           x0 + col * CELL + CELL // 2,
-                           y0 + row * CELL + CELL // 2)
-    sequence, payload = decode_pixels(sample)
+def _decode(buffer: bytes, width: int, height: int, layout: _Layout) -> ClientTelemetry:
+    def pixel(col: int, row: int) -> tuple[int, int, int]:
+        return _sample(buffer, width, height, layout, col, row)
+    sequence, payload = decode_pixels(pixel)
     return parse_payload(payload, sequence)
 
 
+def _origins(buffer: bytes, width: int, height: int):
+    """Yield distinct marker upper-left corners and first-row tile pitch hints."""
+    pattern = b'\xff\x00\xff'  # magenta in BGRA format
+    seen: set[tuple[int, int]] = set()
+    offset = 0
+    while True:
+        hit = buffer.find(pattern, offset)
+        if hit < 0:
+            return
+        offset = hit + len(pattern)
+        if hit % 4:
+            continue
+        pixel_number = hit // 4
+        x, y = pixel_number % width, pixel_number // width
+        if x > width - COLS * 2 or y > height - ROWS * 2:
+            continue
+        # Keep only the upper-left pixel of each solid magenta marker tile.
+        if x and _bgra_pixel(buffer, width, height, x - 1, y) == MAGIC[0]:
+            continue
+        if y and _bgra_pixel(buffer, width, height, x, y - 1) == MAGIC[0]:
+            continue
+        if (x, y) in seen:
+            continue
+        seen.add((x, y))
+
+        # Calibrate with cyan and yellow: both occur immediately after magenta.
+        # Searching for their left edges works with fractional tile sizes.
+        cyan = yellow = None
+        for xx in range(x + 2, min(x + 32, width)):
+            rgb = _bgra_pixel(buffer, width, height, xx, y)
+            if rgb == MAGIC[1] and cyan is None:
+                cyan = xx
+            if rgb == MAGIC[2] and yellow is None:
+                yellow = xx
+        if cyan is None or yellow is None or not (x < cyan < yellow):
+            continue
+        pitch = (yellow - x) / 2.0
+        if 2.5 <= pitch <= 12:
+            yield (x, y, pitch)
+
+
+def find_origin(buffer: bytes, width: int, height: int) -> tuple[int, int]:
+    """Locate the marker (without assuming its rendered tile width is 4 px)."""
+    if width < COLS * 2 or height < ROWS * 2 or len(buffer) != width * height * 4:
+        raise TelemetryError('Invalid screenshot dimensions / pixel layout')
+    for x, y, _pitch in _origins(buffer, width, height):
+        return (x, y)
+    raise TelemetryError('Telemetry marker not visible; keep the WoW window unobstructed')
+
+
+def _pitches(estimate: float, increment: float, steps: int):
+    """Try likely scales first, then progressively farther pitches."""
+    rounded = round(estimate / increment) * increment
+    yield rounded
+    for step in range(1, steps + 1):
+        low, high = rounded - step * increment, rounded + step * increment
+        if low >= 2.5:
+            yield round(low, 5)
+        if high <= 12:
+            yield round(high, 5)
+
+
+def decode_bgra_frame(buffer: bytes, width: int, height: int) -> ClientTelemetry:
+    """Auto-calibrate fractional pixel pitch and validate data with checksum."""
+    global _last_layout
+    if len(buffer) != width * height * 4:
+        raise TelemetryError('Invalid screenshot dimensions / pixel layout')
+    if _last_layout is not None:
+        try:
+            return _decode(buffer, width, height, _last_layout)
+        except TelemetryError:
+            _last_layout = None  # Changed game window scale/position or mixed frame.
+
+    had_marker = False
+    # A handful of origin candidates suffices; false positives fail checksum.
+    for x, y, estimate in _origins(buffer, width, height):
+        had_marker = True
+        for x_shift in (0.0, -1.0, -0.5, 0.5):
+            x_origin = x + x_shift
+            for y_shift in (0.0, -1.0, -0.5, 0.5):
+                y_origin = y + y_shift
+                for px in _pitches(estimate, 0.05, 20):
+                    if x_origin + COLS * px > width + 2:
+                        continue
+                    # First-row header and first payload cell are known. Reject
+                    # most incorrect scales without sampling the whole payload.
+                    row0 = _Layout(x_origin, y_origin, px, px)
+                    try:
+                        header = [_sample(buffer, width, height, row0, col, 0)
+                                  for col in range(7)]
+                    except TelemetryError:
+                        continue
+                    if tuple(header[:4]) != MAGIC or header[4][0] != 3:
+                        continue
+                    if header[6][0] not in (ord('P'), ord('E')) or header[6][1] != 9:
+                        continue
+                    size = header[4][1] + 256 * header[4][2]
+                    if not 1 <= size <= (COLS * ROWS - 6) * 3:
+                        continue
+                    for py in _pitches(estimate, 0.05, 20):
+                        if y_origin + ROWS * py > height + 2:
+                            continue
+                        layout = _Layout(x_origin, y_origin, px, py)
+                        try:
+                            result = _decode(buffer, width, height, layout)
+                            _last_layout = layout
+                            return result
+                        except TelemetryError:
+                            continue
+    if not had_marker:
+        raise TelemetryError('Telemetry marker not visible; keep WoW unobstructed')
+    raise TelemetryError('Telemetry marker found but no valid checksum; '
+                         'check for mixed frames, UI effects, or a changed addon')
+
+
 def capture_monitor(monitor_index: int = 0) -> ClientTelemetry:
-    """Capture a monitor; index 0 is all monitors, index 1 is primary monitor."""
+    """Capture one monitor; 0 means all screens, 1 means primary."""
     try:
         import mss
     except ImportError as exc:
-        raise RuntimeError('Install the screen capture dependency: pip install -e ".[live]"') from exc
+        raise RuntimeError('Install screenshot capture: pip install -e ".[live]"') from exc
     with mss.mss() as screen:
         if not 0 <= monitor_index < len(screen.monitors):
             raise ValueError(f'Invalid monitor index {monitor_index}; available 0..{len(screen.monitors) - 1}')

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from math import ceil
 
 from wotlkbuddy.live.capture import decode_bgra_frame, find_origin
 from wotlkbuddy.live.codec import (COLS, ROWS, CELL, TelemetryError,
@@ -25,6 +26,25 @@ def screenshot(payload: bytes, origin=(9, 7), size=(260, 130)) -> bytearray:
             for x in range(x0, x0 + CELL):
                 off = 4 * (y * width + x)
                 result[off:off + 4] = bytes((b, g, r, 255))
+    return result
+
+
+def scaled_screenshot(payload: bytes, *, pitch: float, origin=(13, 35),
+                      size=(410, 180)) -> bytearray:
+    """Emulate WoW texture scaling with a fractional screenshot pixel pitch."""
+    width, height = size
+    result = bytearray(bytes((34, 34, 34, 255)) * (width * height))
+    cells = encode_pixels(payload, sequence=27)
+    x0, y0 = origin
+    for y in range(y0, min(height, ceil(y0 + ROWS * pitch))):
+        row = int((y - y0) / pitch)
+        for x in range(x0, min(width, ceil(x0 + COLS * pitch))):
+            col = int((x - x0) / pitch)
+            if row >= ROWS or col >= COLS:
+                continue
+            r, g, b = cells[row * COLS + col]
+            at = 4 * (y * width + x)
+            result[at:at+4] = bytes((b, g, r, 255))
     return result
 
 
@@ -84,6 +104,34 @@ class CodecTests(unittest.TestCase):
         result = decode_bgra_frame(shot, 260, 130)
         self.assertEqual(result.sequence, 17)
         self.assertEqual(result.quests[0].title, "Stormpike's Order")
+
+    def test_fractionally_scaled_wow_ui_decodes(self):
+        # A 4x4 addon tile can occupy ~5.4 physical pixels in WoW.
+        shot = scaled_screenshot(P + Q, pitch=5.4)
+        result = decode_bgra_frame(shot, 410, 180)
+        self.assertEqual(result.sequence, 27)
+        self.assertEqual(result.player.level, 16)
+        self.assertEqual(result.quests[0].quest_id, 1338)
+
+    def test_window_moved_or_rescaled_recalibrates(self):
+        first = scaled_screenshot(P + Q, pitch=5.4)
+        second = scaled_screenshot(P + Q, pitch=3.6, origin=(34, 11))
+        self.assertEqual(decode_bgra_frame(first, 410, 180).player.level, 16)
+        self.assertEqual(decode_bgra_frame(second, 410, 180).player.level, 16)
+
+    def test_bad_checksum_still_rejected_when_scaled(self):
+        shot = scaled_screenshot(P + Q, pitch=5.4)
+        # Corrupt an interior byte in the payload without touching the marker.
+        x0, y0, pitch = 13, 35, 5.4
+        col, row = 2, 1
+        # Corrupt every raster pixel belonging to this data tile.
+        # An incomplete corruption can still be decoded from intact pixels.
+        for yy in range(int(y0 + row * pitch), ceil(y0 + (row + 1) * pitch)):
+            for xx in range(int(x0 + col * pitch), ceil(x0 + (col + 1) * pitch)):
+                at = 4 * (yy * 410 + xx)
+                shot[at:at+4] = bytes((255, 0, 0, 255))
+        with self.assertRaisesRegex(TelemetryError, 'checksum'):
+            decode_bgra_frame(shot, 410, 180)
 
     def test_missing_addon_fails(self):
         shot = bytearray(bytes((12, 25, 31, 255)) * (260 * 130))

@@ -1,6 +1,6 @@
 # WotLKBuddy
 
-**Version 0.3.0 — real-client read-only player/quest journal telemetry plus offline QuestBot.**
+**Version 0.3.1 — real-client read-only player/quest journal telemetry plus offline QuestBot.**
 
 A Python-first framework for a future WotLK 3.3.5a (client build 12340)
 automation application. The architecture and feature targets are informed by
@@ -8,12 +8,14 @@ automation application. The architecture and feature targets are informed by
 new implementation and currently contains no upstream C# sources, .NET code,
 or vendored native binaries.
 
-## v0.3.0 — read-only live client telemetry
+## v0.3.1 — read-only live client telemetry
 
 The first live-client **observation** interface is implemented. An optional
 WoW 3.3.5a Lua addon publishes player HP, level, combat/death status, map-relative
 position, target identity, and active quest journal IDs/titles/objectives as
-colored pixels. Python captures and checksum-validates the strip and prints
+colored pixels. Python auto-calibrates the displayed pixel pitch (including
+fractional scaling, such as a nominal 4px tile rendered at 5.4px), captures and
+checksum-validates the strip and prints
 JSONL. No client memory offsets, injection, key presses or game actions are
 used; the **bot cannot yet play WoW**. See [docs/LIVE_CLIENT.md](docs/LIVE_CLIENT.md)
 for the exact Windows installation/test steps.
@@ -166,4 +168,4 @@ feature branches, automated tests and reviewable pull requests.
 
 The application is Python-first; an optional external C++ Detour DLL remains
 for navigation during the migration. Strict 100% Python including navigation
-would require a separate replacement of Detour/Recast (not done in v0.3.0).
+would require a separate replacement of Detour/Recast (not done in v0.3.1).
