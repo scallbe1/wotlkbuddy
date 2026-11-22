@@ -258,6 +258,34 @@ def _live_heading(args: argparse.Namespace) -> None:
         print('NOTE: Observed bearing did not match requested turn direction; '
               'check key bindings, map projection or telemetry noise.', file=sys.stderr)
 
+def _live_waypoint(args: argparse.Namespace) -> None:
+    """Human-approved relative waypoint test, never a QuestBot runner action."""
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import WindowsKeyboard
+    from wotlkbuddy.live.waypoint import guarded_waypoint
+    if not args.enable_input:
+        raise ValueError('Refusing input: explicitly pass --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    print('EXPERIMENTAL short-range waypoint steering. No collision or terrain sensing. '
+          'Use ONLY on clear, flat, safe ground, with room in every direction. '
+          'Escape or switching windows aborts held keys.', file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g} seconds.',
+          file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    keyboard = WindowsKeyboard()
+    report = guarded_waypoint(
+        offset_x=args.offset_x, offset_y=args.offset_y,
+        capture=lambda: capture_monitor(args.monitor), keyboard=keyboard,
+        forward_duration=args.forward_duration, tolerance=args.tolerance,
+        turn_rate_deg_s=args.turn_rate,
+        stop_requested=keyboard.emergency_stop_requested,
+    )
+    print(json.dumps(report.to_dict(), ensure_ascii=False))
+    print(f'Waypoint experiment stopped: {report.stopped_reason}; '
+          f'forward={report.forward_pulses}, turns={report.turn_pulses}.',
+          file=sys.stderr)
+
 
 def _live_record(args: argparse.Namespace) -> None:
     """Record manual route positions and observed quest progress, without input."""
@@ -362,6 +390,21 @@ def main(argv: list[str] | None = None) -> int:
     heading.add_argument('--countdown', type=float, default=5)
     heading.add_argument('--monitor', type=int, default=0)
     heading.set_defaults(func=_live_heading)
+    waypoint = sub.add_parser('live-waypoint',
+                              help='EXPERIMENTAL short-range relative-map waypoint test')
+    waypoint.add_argument('--enable-input', action='store_true',
+                          help='Required approval for this one short movement test')
+    waypoint.add_argument('--offset-x', type=float, required=True,
+                          help='Target offset from current normalized map X coordinate')
+    waypoint.add_argument('--offset-y', type=float, required=True,
+                          help='Target offset from current normalized map Y coordinate')
+    waypoint.add_argument('--forward-duration', type=float, default=0.12)
+    waypoint.add_argument('--tolerance', type=float, default=0.00013)
+    waypoint.add_argument('--turn-rate', type=float, default=180.0,
+                          help='Initial apparent degrees per second; live feedback corrects it')
+    waypoint.add_argument('--countdown', type=float, default=5)
+    waypoint.add_argument('--monitor', type=int, default=0)
+    waypoint.set_defaults(func=_live_waypoint)
     trail = sub.add_parser('live-record', help='Record manually walked route and quest events')
     trail.add_argument('--seconds', type=float, default=90)
     trail.add_argument('--interval', type=float, default=0.7)
