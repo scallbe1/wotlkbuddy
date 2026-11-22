@@ -1,3 +1,12 @@
+## v0.18.1 — generic quest pickup from unidentified 3.3.5a detail panels
+
+After a twice-verified unique NPC *available quest* menu selection, an opened
+quest detail may report ID 0 and an empty title. The generic pickup adapter now
+uses the verified same-run selection to establish quest identity, still requires
+two fresh detail observations and journal confirmation, and rejects mismatches.
+An unidentified detail left open from a prior run is closed and reverified.
+See [the v0.18.1 retry guide](docs/PROFILE_QUEST_UNTAGGED_PICKUP_V0181.md).
+
 ## v0.18 — Generic quest action execution from Horde XML
 
 `horde-next` uses the currently logged-in Mage and the `QuestOrder` entries in
