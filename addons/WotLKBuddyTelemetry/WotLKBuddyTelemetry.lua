@@ -120,8 +120,12 @@ local function tickData()
         local counted = GetItemCount(trackedQuestItemId, false)
         if type(counted) == 'number' and counted >= 0 and
                 counted == math.floor(counted) and counted <= 200000 then
+            -- GetItemInfo may initially return nil until the client caches
+            -- the item. Keep reporting the ID and quantity, but never
+            -- invent a journal item name when the lookup is unavailable.
+            local itemName = GetItemInfo and GetItemInfo(trackedQuestItemId)
             appendLine(table.concat({'J', tostring(trackedQuestItemId),
-                tostring(counted)}, '\t'))
+                tostring(counted), safe(itemName, 65)}, '\t'))
         end
     end
     -- Optional status extension: no new protocol version is required. If the
