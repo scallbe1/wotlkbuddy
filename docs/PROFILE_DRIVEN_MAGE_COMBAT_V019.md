@@ -140,6 +140,30 @@ The turn-in routine still declines quest rewards requiring a choice or
 payment. After a successful hand-in, invoke `horde-next` again to plan the
 next quest; v0.20 does not chain unrelated quests unattended.
 
+## v0.20.1: Mage reward selection from the live quest panel
+
+When a verified quest reward panel offers multiple items, the Lua addon now
+emits the *current* reward choices (index, name, item ID, usability, equipment
+slot and item level) in `R` telemetry records. The Python turn-in driver checks
+for a complete list, two stable observed frames, zero required payment and a
+**unique** Mage-friendly option before submitting `GetQuestReward(index)`.
+
+The Mage policy prefers ordinary usable armor pieces over cloaks and
+accessories, with higher item level breaking a tie; a single confirmed usable
+choice can also be selected. Ambiguous items, unusable equipment, absent cache
+data and changing reward lists still stop before submission. The decision uses
+live game UI, never hard-codes quest 364 item order.
+
+For *The Mindless Ones*, the standard rewards are Flax Gloves (hands) and
+Battered Cloak (back). When the game's live items match those slots, the Mage
+policy selects **Flax Gloves**, then requires server completion history to
+confirm hand-in.
+
+This version **does change the WoW addon**. After merging, reinstall the
+addon and use `/reload` followed by `/wbt show`, then run the existing
+`horde-return-turnin --quest-id 364` command while in range of Sarvis.
+The return command skips movement if already close to the giver.
+
 ## Stop conditions and known limitations
 
 - No client version other than compatible WoW 3.3.5a build 12340 is verified.
