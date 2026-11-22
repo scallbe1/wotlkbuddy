@@ -203,13 +203,13 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
     Navigation is only possible with a recorded path or explicit experimental
     direct steering on Deathknell's 2D zone map. No navmesh is inferred.
     """
-    from math import hypot
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.delivery import plan_deathknell_delivery
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.horde.turnin import turnin_rude_awakening
     from wotlkbuddy.live.capture import capture_monitor
     from wotlkbuddy.live.control import WindowsKeyboard, LiveControlError
-    from wotlkbuddy.live.travel import (MapWaypoint, MapRoute, load_route, follow_route)
+    from wotlkbuddy.live.travel import (load_route, follow_route)
     if not args.enable_input:
         raise ValueError('Requires --enable-input')
     if not 2 <= args.countdown <= 20:
@@ -220,9 +220,9 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
           'Quest delivery has no combat objective. Escape/focus loss aborts.',
           file=sys.stderr)
     if args.experimental_direct_travel:
-        print('WARNING: EXPERIMENTAL DIRECT STEERING to published Tirisfal map point '
-              '(30.8,66.2), not obstacle-aware or a verified walkable path. '
-              'Watch Aarr and press Escape if obstructed.', file=sys.stderr)
+        print('WARNING: EXPERIMENTAL DIRECT STEERING; target may use a relative Mordo->Sarvis '
+              'map offset if your client map does not match published Tirisfal percentages. '
+              'No obstacle avoidance. Watch Aarr and press Escape if obstructed.', file=sys.stderr)
     elif not args.recorded_route:
         print('No navigation requested: Aarr must already be in interaction range '
               'of Shadow Priest Sarvis.', file=sys.stderr)
@@ -246,18 +246,14 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
             if route.character and route.character != 'Aarr':
                 raise LiveControlError('Recorded route belongs to another character')
         else:
-            # Classic Tirisfal map: Mordo (~30.2,71.7); Sarvis (~30.8,66.2).
-            # These are map percentages, NOT converted world XYZ. This is a
-            # deliberate direct-line experiment with no obstacle sensing.
-            start = (p.map_x, p.map_y)
-            if hypot(start[0] - .302, start[1] - .717) > .024 and \
-                    hypot(start[0] - .308, start[1] - .662) > .012:
-                raise LiveControlError('Outside known Deathknell start/finish map area; '
-                                       'direct travel refused. Use --recorded-route')
-            route = MapRoute(p.zone_name, p.continent, p.map_zone,
-                             (MapWaypoint(*start, label='current location'),
-                              MapWaypoint(.308, .662, 'Shadow Priest Sarvis area')),
-                             'Aarr')
+            # Use *observed* coordinates. Published 2D Tirisfal percentages
+            # are not a reliable absolute start-location check on every client.
+            # The fallback is a bounded relative displacement from the point
+            # where Aarr just picked up the quest, not a terrain-safe path.
+            plan = plan_deathknell_delivery(initial)
+            route = plan.route
+            print('Observed Aarr: ' + plan.observation, file=sys.stderr, flush=True)
+            print('Direct travel: ' + plan.description, file=sys.stderr, flush=True)
         kb = WindowsKeyboard()
         report = follow_route(route, capture=cap, keyboard=kb,
                               stop_requested=kb.emergency_stop_requested,

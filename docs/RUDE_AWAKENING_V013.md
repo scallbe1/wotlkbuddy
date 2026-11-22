@@ -19,7 +19,7 @@ Update/install branch and addon before testing, then `/reload` in WoW. Keep the 
 py -3.12 -m wotlkbuddy horde-quest-363 --profiles-root "$HOME\Questing-profiles" --experimental-direct-travel --interact-key f --enable-input --countdown 5
 ```
 
-**Important:** `--experimental-direct-travel` is *explicitly unverified direct-line 2D steering* from the current Aarr position to published Sarvis zone-map location ≈(30.8, 66.2). It is NOT Detour/navmesh pathfinding, and does not know fences, stairs, mobs, buildings, or terrain. It is only allowed from the vicinity of the starter/finish locations. It may get stuck at a fence or building and stop. Observe the character in WoW; Escape or switch windows to abort. It may stop within map-coordinate tolerance but outside NPC interaction range. This is not an autonomous 1–60 quest runner.
+**Important:** `--experimental-direct-travel` is *explicitly unverified direct-line 2D steering* from the current Aarr position to published Sarvis zone-map location ≈(30.8, 66.2). It is NOT Detour/navmesh pathfinding, and does not know fences, stairs, mobs, buildings, or terrain. It is only allowed with Aarr in Deathknell; v0.13.1 uses observed map coordinates and an approximate relative displacement when published coordinates disagree. It assumes Aarr is still near Mordo following pickup. It may get stuck at a fence or building and stop. Observe the character in WoW; Escape or switch windows to abort. It may stop within map-coordinate tolerance but outside NPC interaction range. This is not an autonomous 1–60 quest runner.
 
 An optional route already walked and recorded by Aarr may be supplied instead:
 

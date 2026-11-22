@@ -306,3 +306,23 @@ reward panels before requesting completion. The upgraded addon observes reward
 choice count, required money, and server-completed quest history. It refuses to
 report success based solely on quest-journal disappearance. For commands, opt-in
 risks, and limitations see [Rude Awakening v0.13](docs/RUDE_AWAKENING_V013.md).
+
+
+## v0.13.1 — Deathknell direct-travel start fix
+
+":[Outside known Deathknell start/finish map area]" in v0.13 was an
+unreliable *absolute* map-percent check. The v0.13.1 command now prints
+Aarr's observed map position and selects a bounded two-point experimental
+route, using published Tirisfal percentages when they align. If the client's
+map reference frame differs, the fallback uses the published *relative*
+Mordo-to-Sarvis offset anchored to Aarr's current telemetry position.
+This assumes Aarr is still near Mordo after pickup. Both approaches are
+rough estimates with **no collision avoidance**, and the relative offset
+may be inaccurate on different map projections. Watch the run and press
+Escape if blocked. The command still cannot guarantee interaction range.
+
+No addon reinstall needed when already on v0.13 telemetry. Use the same:
+
+```powershell
+py -3.12 -m wotlkbuddy horde-quest-363 --profiles-root "$HOME\Questing-profiles" --experimental-direct-travel --interact-key f --enable-input --countdown 5
+```
