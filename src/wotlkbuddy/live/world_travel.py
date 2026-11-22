@@ -329,7 +329,7 @@ def follow_world_path(
                     # 8 yards/s and stop with a safety margin; this does NOT
                     # assume the player will move exactly that far.
                     forward_duration = min(
-                        0.52, max(0.18,
+                        0.45, max(0.18,
                                   0.75*(dxy-arrival_yards)/8.0))
                     pulse('forward', forward_duration)
                     moves += 1
