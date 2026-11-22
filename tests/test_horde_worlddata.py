@@ -5,6 +5,7 @@ than shipping the original CopilotBuddy CreatureSpawns.db file.
 """
 from pathlib import Path
 import sqlite3
+from contextlib import closing
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -31,7 +32,7 @@ class WorldDataTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.db_file = Path(self.tmp.name) / 'CreatureSpawns.db'
-        with sqlite3.connect(self.db_file) as conn:
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
             conn.execute('CREATE TABLE spawns (entry INTEGER, map_id INTEGER, x REAL, y REAL, z REAL)')
             conn.executemany('INSERT INTO spawns VALUES(?,?,?,?,?)', [
                 (1568,0,1671.89,1678.29,120.802),
@@ -54,7 +55,7 @@ class WorldDataTests(unittest.TestCase):
                 db.find(1569,0,limit=200)
             with self.assertRaises(sqlite3.OperationalError):
                 db._conn.execute('DELETE FROM spawns')
-        with sqlite3.connect(self.db_file) as conn:
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM spawns').fetchone()[0],4)
 
     def test_real_profile_coords_are_not_replaced_by_arbitrary_duplicate_spawns(self):
@@ -85,7 +86,7 @@ class WorldDataTests(unittest.TestCase):
 
     def test_malformed_or_missing_sqlite_schema_fails(self):
         other=Path(self.tmp.name)/'bad.db'
-        with sqlite3.connect(other) as conn:
+        with closing(sqlite3.connect(other)) as conn, conn:
             conn.execute('CREATE TABLE stuff(x INTEGER)')
         with self.assertRaisesRegex(ValueError,'schema'):
             CreatureSpawnDatabase(other)
