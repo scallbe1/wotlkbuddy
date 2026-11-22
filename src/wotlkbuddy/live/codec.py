@@ -139,6 +139,25 @@ class AvailableQuestOption:
 
 
 @dataclass(frozen=True)
+class CombatTarget:
+    entry_id: int
+    health: int
+    max_health: int
+    dead: bool
+    attackable: bool
+    fireball_in_range: bool | None
+
+
+@dataclass(frozen=True)
+class MageBuffState:
+    knows_intellect: bool | None
+    intellect_active: bool
+    knows_frost_armor: bool | None
+    armor_active: bool
+    knows_fireball: bool | None
+
+
+@dataclass(frozen=True)
 class ClientTelemetry:
     sequence: int
     player: PlayerRecord
@@ -149,6 +168,9 @@ class ClientTelemetry:
     quest_completions: tuple[tuple[int, bool], ...] = ()  # verified server cache only
     quest_menu: tuple[QuestMenuOption, ...] = ()  # active turn-in options
     available_quest_menu: tuple[AvailableQuestOption, ...] = ()  # quest pickup options
+    combat_target: CombatTarget | None = None
+    mage_buffs: MageBuffState | None = None
+    loot_count: int | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -162,6 +184,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     completion_states: dict[int, bool] = {}
     menu: dict[tuple[str, int], QuestMenuOption] = {}
     available: dict[tuple[str, int], AvailableQuestOption] = {}
+    target = None
+    buffs = None
+    loot_count = None
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -217,6 +242,37 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                     not -1 <= durability <= 100 or not -1 <= talents <= 100 or money < 0):
                 raise TelemetryError('Invalid resource values')
             resources = PlayerResources(*values, *(parts[8:] if len(parts) == 10 else ()))
+        elif parts[0] == 'T':
+            if len(parts) != 7 or target is not None:
+                raise TelemetryError('Invalid or duplicate combat target')
+            try:
+                entry, hp, maximum = map(int, parts[1:4])
+                if parts[4] not in ('0','1') or parts[5] not in ('0','1') or \
+                        parts[6] not in ('-1','0','1') or not 0 <= entry < 2**24 or \
+                        not 0 <= hp <= maximum or maximum < 0:
+                    raise ValueError('Invalid target record')
+                target = CombatTarget(entry, hp, maximum, parts[4] == '1',
+                                      parts[5] == '1',
+                                      None if parts[6] == '-1' else parts[6] == '1')
+            except ValueError as exc:
+                raise TelemetryError('Malformed combat target') from exc
+        elif parts[0] == 'B':
+            if len(parts) != 6 or buffs is not None or any(v not in ('-1','0','1')
+                                                          for v in parts[1:]):
+                raise TelemetryError('Invalid or duplicate buff status')
+            def known(value: str) -> bool | None:
+                return None if value == '-1' else value == '1'
+            buffs = MageBuffState(known(parts[1]), parts[2] == '1',
+                                  known(parts[3]), parts[4] == '1', known(parts[5]))
+        elif parts[0] == 'L':
+            if len(parts) != 2 or loot_count is not None:
+                raise TelemetryError('Invalid or duplicate loot status')
+            try:
+                loot_count = int(parts[1])
+            except ValueError as exc:
+                raise TelemetryError('Malformed loot count') from exc
+            if not 0 <= loot_count <= 16:
+                raise TelemetryError('Loot count is out of range')
         elif parts[0] == 'I':
             if len(parts) not in (3, 4, 6) or dialog is not None or parts[1] not in (
                     'none', 'gossip', 'greeting', 'detail', 'progress', 'reward'):
@@ -306,4 +362,6 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            resources=resources, dialog=dialog,
                            quest_completions=tuple(sorted(completion_states.items())),
                            quest_menu=tuple(menu.values()),
-                           available_quest_menu=tuple(available.values()))
+                           available_quest_menu=tuple(available.values()),
+                           combat_target=target, mage_buffs=buffs,
+                           loot_count=loot_count)
