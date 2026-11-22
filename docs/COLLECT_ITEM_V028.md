@@ -18,12 +18,16 @@ No quest-specific source or NPC IDs are hardcoded into execution.
   target GUID/template, corpse dead state, loot window status, item inventory.
 
 The new addon allows `/wbttrack <item_id>` (bounded integer) and emits
-read-only `J` telemetry with the exact requested item ID and bag item count.
+read-only `J` telemetry with the exact requested item ID, bag item count and (when cached) localized item name. The bot cross-matches the item name to the journal objective, so differing QuestOrder, XML definition and journal order cannot silently select the wrong item.
 Before combat, Python requires that the reported item ID matches XML.
 After each corpse loot, it verifies the item count and journal objective.
 When one item goal completes, the bot switches to the next CollectItem
 stage in the same quest. After the complete quest is observed, the existing
 guarded return/turn-in driver returns to the profile NPC.
+
+## Source data confirmed upstream for The Damned
+
+The public Likon69 Horde starter profile defines both item sources and nearby hotspots: item 3265 from creature entries 1508/1509 (scavengers), item 3264 from entries 1512/1513 (duskbats). Its QuestOrder lists 3265 then 3264, whereas the Quest objective definitions list 3264 then 3265. The collector binds item IDs to observed journal objectives by the client-reported localized item name instead of relying on XML list position. The user's installed profile still needs to be checked for matching source data.
 
 ## Critical source limitation
 
