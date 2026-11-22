@@ -172,16 +172,16 @@ class GossipTurninTests(unittest.TestCase):
             with self.subTest(command=command),self.assertRaises(ValueError):
                 driver.chat(command)
 
-    def test_bottom_right_marker_decodes_with_existing_auto_finder(self):
+    def test_top_center_marker_decodes_with_existing_auto_finder(self):
         from wotlkbuddy.live.codec import COLS, ROWS, CELL
         width, height = 520, 260
-        origin = (width - 12 - COLS*CELL, height - 12 - ROWS*CELL)
+        origin = ((width - COLS*CELL)//2, 12)
         shot = screenshot(P+Q, origin=origin, size=(width,height))
         self.assertEqual(find_origin(shot, width, height), origin)
         result=decode_bgra_frame(shot,width,height)
         self.assertEqual(result.player.level,16)
         addon=Path(__file__).resolve().parents[1]/'addons/WotLKBuddyTelemetry/WotLKBuddyTelemetry.lua'
-        self.assertIn("canvas:SetPoint('BOTTOMRIGHT', UIParent, 'BOTTOMRIGHT'",addon.read_text())
+        self.assertIn("canvas:SetPoint('TOP', UIParent, 'TOP', 0, -12)",addon.read_text())
 
 
 if __name__ == '__main__':

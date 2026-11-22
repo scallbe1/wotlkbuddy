@@ -27,13 +27,14 @@ See [Profile-driven quest actions](docs/PROFILE_DRIVEN_QUEST_V018.md). Older
 quest-363 commands are kept for compatibility, but should not be copied to
 implement subsequent quests.
 
-## v0.17 — Quest-list turn-ins and bottom-right telemetry (current)
+## v0.17 — Quest-list turn-ins and bottom-right telemetry (historical)
 
 WoW 3.3.5a NPCs can open a gossip/greeting **active quest list** before the quest
 progress frame. The guarded `horde-quest-363` turn-in now selects the unique
 exact-title **Rude Awakening** entry with stable observed UI state before
 attempting the verified progress/reward sequence. The addon telemetry panel is
-now anchored bottom-right; reinstall the addon and `/reload` after updating.
+positioned at the **top center** in the current build, clear of the bottom-right
+mouse-over tooltip area; reinstall the addon and `/reload` after updating.
 If already at Sarvis, invoke `horde-quest-363` **without navigation flags**.
 Full instructions: [v0.17 Sarvis quest-list turn-in](docs/SARVIS_GOSSIP_TURNIN_V017.md).
 
