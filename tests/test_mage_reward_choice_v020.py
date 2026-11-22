@@ -4,6 +4,7 @@ import unittest
 
 from wotlkbuddy.horde.profile import HordeProfile, OrderStep
 from wotlkbuddy.horde.turnin import select_mage_reward, turnin_profile_quest
+from wotlkbuddy.horde.interaction import KeyboardQuestInput
 from wotlkbuddy.live.codec import (
     ClientTelemetry, QuestRecord, QuestRewardChoice, QuestDialog,
     TelemetryError, parse_payload,
@@ -55,6 +56,37 @@ def run(g):
     return turnin_profile_quest(
         PROFILE, quest_id=364, capture=g.capture, driver=g,
         sleep=g.sleep, now=lambda: g.time, timeout=2)
+
+
+class KeyboardRewardAllowlistTests(unittest.TestCase):
+    """Exercise the real command filter; mocked _tap prevents OS input."""
+
+    def setUp(self):
+        self.driver = KeyboardQuestInput.__new__(KeyboardQuestInput)
+        self.taps = []
+        self.driver._tap = lambda code, *, shifted=False: self.taps.append(
+            (code, shifted))
+
+    def test_permits_selected_reward_indices_including_old_zero(self):
+        for choice in (0, 1, 2, 9, 10, 12):
+            with self.subTest(choice=choice):
+                self.taps.clear()
+                self.driver.chat(f'/run GetQuestReward({choice})')
+                self.assertGreater(len(self.taps), 2)
+
+    def test_rejects_out_of_bounds_or_arbitrary_lua_without_input(self):
+        for command in (
+            '/run GetQuestReward(13)', '/run GetQuestReward(99)',
+            '/run GetQuestReward(-1)', '/run GetQuestReward(01)',
+            '/run GetQuestReward(1);print(1)',
+            '/run GetQuestReward(1,2)', '/run ReloadUI()',
+        ):
+            with self.subTest(command=command):
+                self.taps.clear()
+                with self.assertRaisesRegex(
+                        ValueError, 'Only verified quest-targeting'):
+                    self.driver.chat(command)
+                self.assertEqual(self.taps, [])
 
 
 class ChoiceTests(unittest.TestCase):
