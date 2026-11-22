@@ -318,8 +318,20 @@ def follow_world_path(
                     if _distance_xy(before.position, world.position) > 2:
                         raise LiveControlError('Unexpected player displacement during turn')
                 else:
-                    # Small forward pulses allow frequent combat/terrain checks.
-                    pulse('forward', 0.20)
+                    # Smooth, distance-dependent forward holds reduce the
+                    # start/stop jitter caused by fixed 0.20 s taps on every
+                    # Detour waypoint. Never change the validated path or
+                    # skip safety checks: pulse() checks focus/Escape every
+                    # 40 ms, checked() observes combat and live position after
+                    # each hold, and short waypoint approaches use short holds.
+                    #
+                    # Use a conservative observed walking speed budget of
+                    # 8 yards/s and stop with a safety margin; this does NOT
+                    # assume the player will move exactly that far.
+                    forward_duration = min(
+                        0.52, max(0.18,
+                                  0.75*(dxy-arrival_yards)/8.0))
+                    pulse('forward', forward_duration)
                     moves += 1
                     current, world = checked()
                     displacement = _distance_xy(before.position, world.position)
