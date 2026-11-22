@@ -181,7 +181,10 @@ class GossipTurninTests(unittest.TestCase):
         result=decode_bgra_frame(shot,width,height)
         self.assertEqual(result.player.level,16)
         addon=Path(__file__).resolve().parents[1]/'addons/WotLKBuddyTelemetry/WotLKBuddyTelemetry.lua'
-        self.assertIn("canvas:SetPoint('BOTTOMLEFT', UIParent, 'BOTTOMLEFT'",addon.read_text())
+        # The decoder is location-independent; the live addon was moved out
+        # of the bottom-left after v0.17 to avoid UI overlays.
+        self.assertIn("canvas:SetPoint('TOP', UIParent, 'TOP', 220, -20)",
+                      addon.read_text())
 
 
 if __name__ == '__main__':
