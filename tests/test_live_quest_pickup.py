@@ -37,6 +37,8 @@ class MockGame:
         self.dialog_title = 'Rude Awakening'
         self.old_addon = False
         self.commands = []
+        self.character_name = 'StarterMage'
+        self.guid = 'GUID_StarterMage'
 
     def wow_is_foreground(self):
         return self.focus
@@ -63,7 +65,7 @@ class MockGame:
 
     def capture(self):
         self.seq = (self.seq + 1) % 256
-        p = PlayerRecord('Aarr', '0xaarr', 1, 50, 50, self.combat,
+        p = PlayerRecord(self.character_name, self.guid, 1, 50, 50, self.combat,
                          False, 0.3, 0.4, 2, 12, 'Deathknell', '', self.target_name)
         r = PlayerResources(100, 100, 16, 16, 100, 0, 0, 'MAGE', 'Scourge')
         return ClientTelemetry(self.seq, p, self.quests, resources=r,
@@ -111,7 +113,7 @@ class QuestPickupTests(unittest.TestCase):
         self.assertEqual(g.commands, ['/targetexact Undertaker Mordo', 'F'])
 
     def test_zero_quest_id_with_exact_title_from_same_npc_accepts(self):
-        # Real Aarr log: DETAIL / GetQuestID() == 0.
+        # Reproduces this 3.3.5a client: DETAIL / GetQuestID() == 0.
         g = MockGame()
         g.dialog_quest_id = 0
         report = run(g)
@@ -123,24 +125,27 @@ class QuestPickupTests(unittest.TestCase):
         g = MockGame()
         g.dialog_quest_id = 0
         g.dialog_title = ''
-        self.assertEqual(run(g).status, 'dialog_unverified')
+        result = run(g)
+        self.assertEqual(result.status, 'dialog_unverified')
         self.assertNotIn('/run AcceptQuest()', g.commands)
 
     def test_zero_quest_id_wrong_title_is_not_accepted(self):
         g = MockGame()
         g.dialog_quest_id = 0
         g.dialog_title = 'The Mindless Ones'
-        self.assertEqual(run(g).status, 'dialog_unverified')
+        result = run(g)
+        self.assertEqual(result.status, 'dialog_unverified')
         self.assertNotIn('/run AcceptQuest()', g.commands)
 
     def test_wrong_nonzero_id_is_not_overridden_by_matching_title(self):
         g = MockGame()
         g.dialog_quest_id = 364
         g.dialog_title = 'Rude Awakening'
-        self.assertEqual(run(g).status, 'dialog_unverified')
+        result = run(g)
+        self.assertEqual(result.status, 'dialog_unverified')
         self.assertNotIn('/run AcceptQuest()', g.commands)
 
-    def test_unstable_dialog_on_second_frame_does_not_accept(self):
+    def test_no_stable_second_dialog_frame_does_not_accept(self):
         g = MockGame()
         original = g.capture
         def capture():
@@ -169,9 +174,22 @@ class QuestPickupTests(unittest.TestCase):
 
     def test_wrong_character_or_class_no_input(self):
         g = MockGame()
-        with self.assertRaisesRegex(LiveControlError, 'Wrong character'):
+        with self.assertRaisesRegex(LiveControlError, 'Character identity'):
             pickup_planned_quest(PROFILE, capture=g.capture, driver=g,
                                  character='Inka')
+        self.assertEqual(g.commands, [])
+
+    def test_live_character_auto_detected_and_guid_pinned(self):
+        g = MockGame()
+        g.character_name = 'NewUndeadMage'
+        g.guid = 'NEW_GUID_123'
+        report = run(g)
+        self.assertEqual(report.status, 'accepted')
+        self.assertEqual(report.character, 'NewUndeadMage')
+        g = MockGame()
+        with self.assertRaisesRegex(LiveControlError, 'Character identity'):
+            pickup_planned_quest(PROFILE, capture=g.capture, driver=g,
+                                 expected_guid='OLDER_DELETED_CHARACTER_GUID')
         self.assertEqual(g.commands, [])
 
     def test_unsafe_npc_name_no_input(self):
@@ -233,7 +251,7 @@ class QuestPickupTests(unittest.TestCase):
 
 
 class DialogTelemetryTests(unittest.TestCase):
-    P = (b'P\tAarr\tGUID\t1\t50\t50\t0\t0\t0.3\t0.4\t2\t12\tDeathknell\t\t\n')
+    P = (b'P\tStarterMage\tGUID\t1\t50\t50\t0\t0\t0.3\t0.4\t2\t12\tDeathknell\t\t\n')
 
     def test_dialog_record_valid_and_backward_compatible(self):
         dialog = parse_payload(self.P + b'I\tdetail\t363\n', 1).dialog
@@ -242,9 +260,9 @@ class DialogTelemetryTests(unittest.TestCase):
         self.assertEqual(parse_payload(self.P + b'I\tgossip\t0\n', 1).dialog.kind,
                          'gossip')
 
-    def test_quest_title_telemetry_and_legacy_id_only(self):
-        v = parse_payload(self.P + b'I\tdetail\t0\tRude Awakening\n', 1).dialog
-        self.assertEqual(v, QuestDialog('detail', 0, 'Rude Awakening'))
+    def test_new_dialog_title_record_and_legacy_id_only(self):
+        record = parse_payload(self.P + b'I\tdetail\t0\tRude Awakening\n', 1).dialog
+        self.assertEqual(record, QuestDialog('detail', 0, 'Rude Awakening'))
         self.assertEqual(parse_payload(self.P + b'I\tdetail\t363\n', 1).dialog,
                          QuestDialog('detail', 363, ''))
 

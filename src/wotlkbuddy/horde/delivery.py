@@ -1,4 +1,4 @@
-"""Experimental first delivery waypoint selection using observed Aarr map telemetry.
+"""Experimental first delivery waypoint selection using observed live map telemetry.
 
 The `GetPlayerMapPosition` reference frame can differ from published map
 percentages on private clients. Do not use an absolute landmark proximity test
@@ -31,13 +31,13 @@ class DeathknellDeliveryPlan:
 def plan_deathknell_delivery(telemetry: ClientTelemetry) -> DeathknellDeliveryPlan:
     """Choose a bounded direct-route target without guessing start percentages.
 
-    Only for Aarr, already in Deathknell and carrying quest 363. This does
+    Only for the active character in Deathknell carrying quest 363. This does
     not establish whether the direct line is safe or unobstructed.
     """
     p = telemetry.player
-    if p.name != 'Aarr' or p.zone_name.casefold() != 'deathknell':
+    if not p.name or not p.guid or p.zone_name.casefold() != 'deathknell':
         raise LiveControlError(
-            f'Direct quest-363 steering only available in Deathknell for Aarr; '
+            f'Direct quest-363 steering only available in Deathknell for the active player; '
             f'observed {p.name!r}, area {p.zone_name!r}, map '
             f'({p.map_x:.5f},{p.map_y:.5f}). No movement sent')
     if not 0 < p.map_x < 1 or not 0 < p.map_y < 1:
@@ -61,8 +61,8 @@ def plan_deathknell_delivery(telemetry: ClientTelemetry) -> DeathknellDeliveryPl
         target = start[0]+dx, start[1]+dy
         strategy = 'relative-mordo-offset'
         description = (f'published Mordo->Sarvis offset ({dx:+.5f},{dy:+.5f}) '
-                       f'anchored to Aarr ({start[0]:.5f},{start[1]:.5f}); '
-                       'approximation assumes Aarr has remained near Mordo')
+                       f'anchored to the current player ({start[0]:.5f},{start[1]:.5f}); '
+                       'approximation assumes the player has remained near Mordo')
     if not (0 < target[0] < 1 and 0 < target[1] < 1):
         raise LiveControlError(f'Computed delivery target {target!r} outside current map; '
                                'no movement sent')
@@ -74,7 +74,7 @@ def plan_deathknell_delivery(telemetry: ClientTelemetry) -> DeathknellDeliveryPl
                                'no movement sent')
     route = MapRoute(p.zone_name, p.continent, p.map_zone,
                      (MapWaypoint(*start, label='observed start'),
-                      MapWaypoint(*target, label='Sarvis estimated position')), 'Aarr')
+                      MapWaypoint(*target, label='Sarvis estimated position')), p.name)
     observation = (f'zone={p.zone_name}, continent={p.continent}, '
                    f'map_zone={p.map_zone}, xy=({p.map_x:.5f},{p.map_y:.5f}), '
                    f'target={p.target_name!r}')

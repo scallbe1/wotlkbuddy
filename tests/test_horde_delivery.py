@@ -1,4 +1,4 @@
-"""Focused regression tests for Aarr quest-363 start-position fallback."""
+"""Focused regression tests for the starter quest-363 start-position fallback."""
 from dataclasses import replace
 import unittest
 
@@ -8,8 +8,8 @@ from wotlkbuddy.live.control import LiveControlError
 
 
 def frame(*, x=.302, y=.717, zone='Deathknell', target='Undertaker Mordo',
-          character='Aarr', quests=True):
-    player = PlayerRecord(character,'AARRGUID',1,50,50,False,False,x,y,2,12,
+          character='StarterMage', quests=True):
+    player = PlayerRecord(character,'GUID_StarterMage',1,50,50,False,False,x,y,2,12,
                           zone,'',target)
     active = (QuestRecord(363,1,False,'Rude Awakening'),) if quests else ()
     return ClientTelemetry(2,player,active)
@@ -29,17 +29,19 @@ class TestDeliveryPosition(unittest.TestCase):
         self.assertAlmostEqual(p.route.waypoints[-1].y,.547)
         self.assertEqual(p.route.waypoints[0].x,.459)
         self.assertIn('xy=(0.45900,0.60200)',p.observation)
-        self.assertIn('assumes Aarr has remained near Mordo',p.description)
+        self.assertIn('assumes the player has remained near Mordo',p.description)
 
     def test_already_near_sarvis_uses_absolute_target(self):
         p = plan_deathknell_delivery(frame(x=.309,y=.663,target='Shadow Priest Sarvis'))
         self.assertEqual(p.strategy,'published-map-target')
 
-    def test_refuses_wrong_zone_or_character(self):
-        for changes in ({'zone':'Orgrimmar'},{'character':'Other'}):
-            with self.subTest(**changes),self.assertRaisesRegex(LiveControlError,
-                                                                  'only available'):
-                plan_deathknell_delivery(frame(**changes))
+    def test_refuses_wrong_zone(self):
+        with self.assertRaisesRegex(LiveControlError, 'only available'):
+            plan_deathknell_delivery(frame(zone='Orgrimmar'))
+
+    def test_different_character_is_accepted_and_bound_to_live_name(self):
+        plan = plan_deathknell_delivery(frame(character='FreshMage'))
+        self.assertEqual(plan.route.character, 'FreshMage')
 
     def test_refuses_missing_quest_or_out_of_bounds_target(self):
         with self.assertRaisesRegex(LiveControlError,'Quest 363 unavailable'):

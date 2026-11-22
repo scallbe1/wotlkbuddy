@@ -146,20 +146,25 @@ def _horde_quest_pickup(args: argparse.Namespace) -> None:
         raise ValueError('Quest interaction requires explicit --enable-input')
     if not 2 <= args.countdown <= 20:
         raise ValueError('--countdown must be 2..20 seconds')
-    chosen = (args.profile or select_profile_from_loader(args.profiles_root,
-                level=1, race='Undead'))
-    profile = load_horde_profile(chosen)
-    print('GUARDED QUEST PICKUP: Aarr / Rude Awakening (363). No navigation; '
+    print('GUARDED QUEST PICKUP: active Undead Mage / Rude Awakening (363). No navigation; '
           'stand within interaction range of Undertaker Mordo. '
           f'Bind {args.interact_key.upper()} to WoW Interact with Target first. '
           'Press Escape or switch windows to stop.', file=sys.stderr)
     print(f'Switch to WoW now; starting in {args.countdown:g}s.',
           file=sys.stderr, flush=True)
     time.sleep(args.countdown)
+    cap = lambda: capture_monitor(args.monitor)
+    first = cap()
+    if not 1 <= first.player.level <= 12 or not first.player.name or not first.player.guid:
+        raise ValueError('First Undead starter quest requires a valid level 1..12 character')
+    chosen = (args.profile or select_profile_from_loader(args.profiles_root,
+                level=first.player.level, race='Undead'))
+    profile = load_horde_profile(chosen)
     driver = KeyboardQuestInput(interact_key=args.interact_key)
     result = pickup_planned_quest(
-        profile, capture=lambda: capture_monitor(args.monitor), driver=driver,
-        character=args.character, quest_id=363, world_map_id=0,
+        profile, capture=cap, driver=driver,
+        character=args.character, expected_guid=first.player.guid,
+        quest_id=363, world_map_id=0,
         progress=lambda line: print(line, file=sys.stderr, flush=True),
     )
     print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
@@ -198,7 +203,7 @@ def _horde_mage_plan(args: argparse.Namespace) -> None:
 
 
 def _horde_quest_363(args: argparse.Namespace) -> None:
-    """One attended Rude Awakening delivery and guarded turn-in for Aarr.
+    """One attended Rude Awakening delivery and guarded turn-in for the active Mage.
 
     Navigation is only possible with a recorded path or explicit experimental
     direct steering on Deathknell's 2D zone map. No navmesh is inferred.
@@ -216,43 +221,51 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
         raise ValueError('countdown must be 2..20 seconds')
     if args.recorded_route and args.experimental_direct_travel:
         raise ValueError('Choose only one of --recorded-route and --experimental-direct-travel')
-    print('RUDE AWAKENING #363: Aarr -> Shadow Priest Sarvis. '
+    print('RUDE AWAKENING #363: current Undead Mage -> Shadow Priest Sarvis. '
           'Quest delivery has no combat objective. Escape/focus loss aborts.',
           file=sys.stderr)
     if args.experimental_direct_travel:
         print('WARNING: EXPERIMENTAL DIRECT STEERING; target may use a relative Mordo->Sarvis '
               'map offset if your client map does not match published Tirisfal percentages. '
-              'No obstacle avoidance. Watch Aarr and press Escape if obstructed.', file=sys.stderr)
+              'No obstacle avoidance. Watch the character and press Escape if obstructed.', file=sys.stderr)
     elif not args.recorded_route:
-        print('No navigation requested: Aarr must already be in interaction range '
+        print('No navigation requested: the character must already be in interaction range '
               'of Shadow Priest Sarvis.', file=sys.stderr)
     print(f'Switch to WoW now; starting in {args.countdown:g}s.', file=sys.stderr)
     time.sleep(args.countdown)
     cap = lambda: capture_monitor(args.monitor)
     initial = cap()
     p = initial.player
-    if (p.name != 'Aarr' or p.dead or p.in_combat or initial.truncated or
+    if (not p.name or not p.guid or p.dead or p.in_combat or initial.truncated or
             initial.resources is None or
             initial.resources.class_token.upper() != 'MAGE' or
             initial.resources.race_token.lower() not in ('undead','scourge')):
-        raise LiveControlError('Expected living Aarr, Undead Mage with valid telemetry')
+        raise LiveControlError('Expected a living Undead Mage with valid identity and telemetry')
     if not any(q.quest_id == 363 for q in initial.quests):
-        raise LiveControlError('Rude Awakening (363) is not active in Aarr journal')
+        raise LiveControlError('Rude Awakening (363) is not active in the current quest journal')
     if args.recorded_route or args.experimental_direct_travel:
         if not 0 < p.map_x < 1 or not 0 < p.map_y < 1:
             raise LiveControlError('Map coordinates unavailable; cannot walk')
         if args.recorded_route:
             route = load_route(args.recorded_route)
-            if route.character and route.character != 'Aarr':
-                raise LiveControlError('Recorded route belongs to another character')
+            # A recorded trail describes geography, not character ownership.
+            # Explicit --recorded-route opts into reuse by the active character.
+            # The follower still checks the live GUID and zone on every move.
+            if route.character and route.character != p.name:
+                print(f'Reusing route recorded by {route.character!r} for current '
+                      f'character {p.name!r}; verify the path is walkable.',
+                      file=sys.stderr, flush=True)
+            from wotlkbuddy.live.travel import MapRoute
+            route = MapRoute(route.zone, route.continent, route.map_zone,
+                             route.waypoints, p.name)
         else:
             # Use *observed* coordinates. Published 2D Tirisfal percentages
             # are not a reliable absolute start-location check on every client.
             # The fallback is a bounded relative displacement from the point
-            # where Aarr just picked up the quest, not a terrain-safe path.
+            # where the active Mage just picked up the quest, not a terrain-safe path.
             plan = plan_deathknell_delivery(initial)
             route = plan.route
-            print('Observed Aarr: ' + plan.observation, file=sys.stderr, flush=True)
+            print('Observed player: ' + plan.observation, file=sys.stderr, flush=True)
             print('Direct travel: ' + plan.description, file=sys.stderr, flush=True)
         kb = WindowsKeyboard()
         report = follow_route(route, capture=cap, keyboard=kb,
@@ -268,7 +281,7 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
     profile = load_horde_profile(chosen)
     driver = KeyboardQuestInput(interact_key=args.interact_key)
     result = turnin_rude_awakening(profile, capture=cap, driver=driver,
-                                 character='Aarr', timeout=10.0,
+                                 character=p.name, expected_guid=p.guid, timeout=10.0,
                                  progress=lambda line: print(line, file=sys.stderr, flush=True))
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
     if result.status not in ('turned_in', 'already_turned_in'):
@@ -612,11 +625,12 @@ def main(argv: list[str] | None = None) -> int:
     mageplan.add_argument('--monitor', type=int, default=0)
     mageplan.set_defaults(func=_horde_mage_plan)
     pickup = sub.add_parser('horde-quest-pickup',
-                            help='Guarded first quest pickup: Aarr / Rude Awakening (363)')
+                            help='Guarded starter pickup: current Undead Mage / Rude Awakening (363)')
     pk_src = pickup.add_mutually_exclusive_group(required=True)
     pk_src.add_argument('--profile')
     pk_src.add_argument('--profiles-root')
-    pickup.add_argument('--character', default='Aarr')
+    pickup.add_argument('--character', default=None,
+                        help='Optional expected character name; default: live auto-detection')
     pickup.add_argument('--interact-key', choices=['f', 'g'], default='f',
                         help='Key already bound in WoW to Interact with Target')
     pickup.add_argument('--enable-input', action='store_true',
@@ -627,7 +641,7 @@ def main(argv: list[str] | None = None) -> int:
     deliver = sub.add_parser('horde-quest-363',
                              help='Attended Rude Awakening delivery and verified hand-in')
     deliver.add_argument('--profiles-root', required=True)
-    deliver.add_argument('--recorded-route', help='Aarr-only Tirisfal trail that was walked safely')
+    deliver.add_argument('--recorded-route', help='An explicitly verified Deathknell trail, usable by any active Undead Mage')
     deliver.add_argument('--experimental-direct-travel', action='store_true',
                          help='Opt-in to straight map-coordinate travel; NO obstacle sensing')
     deliver.add_argument('--interact-key', choices=['f','g'], default='f')

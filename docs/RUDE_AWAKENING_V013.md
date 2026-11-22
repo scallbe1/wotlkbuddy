@@ -1,6 +1,6 @@
 # Rude Awakening delivery + turn-in (v0.13)
 
-This is an **attended first-quest integration test** for **Aarr**, level-1 Undead Mage, quest #363 already accepted. The quest requires delivering a message to Shadow Priest Sarvis in Deathknell, not fighting mobs or looting.
+This is an **attended first-quest integration test** for the **currently logged-in Undead Mage**, quest #363 already accepted. The quest requires delivering a message to Shadow Priest Sarvis in Deathknell, not fighting mobs or looting.
 
 ## What is now executable
 
@@ -13,21 +13,21 @@ This is an **attended first-quest integration test** for **Aarr**, level-1 Undea
 
 ## One-command experimental delivery + hand-in
 
-Update/install branch and addon before testing, then `/reload` in WoW. Keep the F key bound to **Interact with Target**. Start Aarr near Undertaker Mordo in Deathknell, where quest 363 was just accepted. Exit chat and other modal dialogs.
+Update/install branch and addon before testing, then `/reload` in WoW. Keep the F key bound to **Interact with Target**. Start the character near Undertaker Mordo in Deathknell, where quest 363 was just accepted. Exit chat and other modal dialogs.
 
 ```powershell
 py -3.12 -m wotlkbuddy horde-quest-363 --profiles-root "$HOME\Questing-profiles" --experimental-direct-travel --interact-key f --enable-input --countdown 5
 ```
 
-**Important:** `--experimental-direct-travel` is *explicitly unverified direct-line 2D steering* from the current Aarr position to published Sarvis zone-map location ≈(30.8, 66.2). It is NOT Detour/navmesh pathfinding, and does not know fences, stairs, mobs, buildings, or terrain. It is only allowed with Aarr in Deathknell; v0.13.1 uses observed map coordinates and an approximate relative displacement when published coordinates disagree. It assumes Aarr is still near Mordo following pickup. It may get stuck at a fence or building and stop. Observe the character in WoW; Escape or switch windows to abort. It may stop within map-coordinate tolerance but outside NPC interaction range. This is not an autonomous 1–60 quest runner.
+**Important:** `--experimental-direct-travel` is *explicitly unverified direct-line 2D steering* from the current current player position to published Sarvis zone-map location ≈(30.8, 66.2). It is NOT Detour/navmesh pathfinding, and does not know fences, stairs, mobs, buildings, or terrain. It is only allowed with the active Mage in Deathknell; v0.13.1 uses observed map coordinates and an approximate relative displacement when published coordinates disagree. It assumes the active Mage is still near Mordo following pickup. It may get stuck at a fence or building and stop. Observe the character in WoW; Escape or switch windows to abort. It may stop within map-coordinate tolerance but outside NPC interaction range. This is not an autonomous 1–60 quest runner.
 
-An optional route already walked and recorded by Aarr may be supplied instead:
+An optional route already walked and recorded by the active Mage may be supplied instead:
 
 ```powershell
 py -3.12 -m wotlkbuddy horde-quest-363 --profiles-root "$HOME\Questing-profiles" --recorded-route deathknell-to-sarvis.json --enable-input --countdown 5
 ```
 
-If Aarr is already standing next to Sarvis, omit navigation options:
+If the character is already standing next to Sarvis, omit navigation options:
 
 ```powershell
 py -3.12 -m wotlkbuddy horde-quest-363 --profiles-root "$HOME\Questing-profiles" --enable-input --countdown 5
@@ -40,10 +40,21 @@ py -3.12 -m wotlkbuddy horde-quest-363 --profiles-root "$HOME\Questing-profiles"
 
 ## Failure modes and honest limits
 
-- `npc_out_of_range`: direct steering did not bring Aarr close enough to interact.
+- `npc_out_of_range`: direct steering did not bring the active Mage close enough to interact.
 - `dialog_unverified`: actual quest UI/target did not match the expected quest.
 - `reward_requires_choice_or_unknown`: refuse selecting a reward or paying coins without observation.
 - `completion_unverified`: attempted reward submission but server-completed history wasn't yet available. Do not rerun blindly; recheck status before retrying.
 - `quest_not_in_journal`: quest absent at start, which is **not** equivalent to a confirmed completion.
 
 No automatic combat/looting, class training, talents, gold management, or terrain-aware navigation is implemented by this command. The next milestone is 3D navmesh pathing and generalized quest turn-in/gossip selection.
+
+## Character independence (v0.13.2)
+
+The bot obtains the character name, GUID, level, class, race and quest journal
+from the live addon. No particular character name is required. The optional
+`--character` flag on `horde-quest-pickup` pins a name only if deliberately set.
+The observed GUID is pinned for each live operation so a character switch
+(including deleting and recreating a same-named character) cannot continue an
+existing interaction session. A new invocation observes the new character and
+starts from its actual quest state. Explicitly supplied recorded trails can be
+reused by the active character when their map and route are valid.
