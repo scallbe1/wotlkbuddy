@@ -256,3 +256,15 @@ turns, stopping at a waypoint, a user abort, lost focus, combat, stale frames,
 or repeated unconfirmed motion. It does not change the Lua addon or route
 format. The local simulation has 0.5-second telemetry to exercise held-key
 feedback; in-game validation is still required.
+
+## v0.10.1 — telemetry-aware turns
+
+The continuous `live-follow` controller no longer mistakes a small map-position
+change measured across a turn for movement with a stuck forward key. A screen
+telemetry update can contain the remaining movement since the prior forward
+key release. The follower still stops on large map-position jumps (>0.003
+normalized map units in a turn), combat, Escape, focus loss, stalled forward
+movement, or stopped telemetry. No route re-recording or addon update required.
+
+This fix is covered by simulated frame/turn regression tests; verify behavior
+in-game on an already walked route before relying on it.
