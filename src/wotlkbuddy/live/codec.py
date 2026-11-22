@@ -221,6 +221,8 @@ class ClientTelemetry:
     mage_buffs: MageBuffState | None = None
     loot_count: int | None = None
     loot_open: bool | None = None
+    tracked_item_id: int | None = None
+    tracked_item_count: int | None = None
     reward_choices: tuple[QuestRewardChoice, ...] = ()
     bag_armor: tuple[BagArmor, ...] = ()
     equipped_armor: tuple[EquippedArmor, ...] = ()
@@ -246,6 +248,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     buffs = None
     loot_count = None
     loot_open = None
+    tracked_item_id = None
+    tracked_item_count = None
     reward_options: dict[int, QuestRewardChoice] = {}
     bag_armor: dict[tuple[int, int], BagArmor] = {}
     worn_armor: dict[int, EquippedArmor] = {}
@@ -333,6 +337,15 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 return None if value == '-1' else value == '1'
             buffs = MageBuffState(known(parts[1]), parts[2] == '1',
                                   known(parts[3]), parts[4] == '1', known(parts[5]))
+        elif parts[0] == 'C':
+            if (len(parts) != 3 or tracked_item_id is not None
+                    or not parts[1].isdigit() or not parts[2].isdigit()):
+                raise TelemetryError('Invalid or repeated quest item tracking')
+            tracked_item_id = int(parts[1])
+            tracked_item_count = int(parts[2])
+            if (not 1 <= tracked_item_id <= 999999 or
+                    not 0 <= tracked_item_count <= 200000):
+                raise TelemetryError('Out-of-range quest item tracking')
         elif parts[0] == 'L':
             if len(parts) not in (2, 3) or loot_count is not None:
                 raise TelemetryError('Invalid or duplicate loot status')
@@ -555,6 +568,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            available_quest_menu=tuple(available.values()),
                            combat_target=target, mage_buffs=buffs,
                            loot_count=loot_count, loot_open=loot_open,
+                           tracked_item_id=tracked_item_id,
+                           tracked_item_count=tracked_item_count,
                            reward_choices=tuple(reward_options[i] for i in sorted(reward_options)),
                            bag_armor=tuple(bag_armor.values()),
                            equipped_armor=tuple(worn_armor.values()),
