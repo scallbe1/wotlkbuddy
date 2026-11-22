@@ -197,3 +197,34 @@ against live WoW is **not enabled**.
   injection, anti-cheat bypass, or external network calls are involved.
 - The app remains Python-first. The *in-game addon* must use Lua because that
   is the scripting language supported by WoW's UI.
+
+
+## v0.6 — short heading calibration (unverified on the live client)
+
+The v0.5 test confirmed three 0.15-second forward pulses with consistent map
+displacement. v0.6 measures the change in **apparent map displacement bearing**
+when you turn a little between two forward pulses.
+
+On safe, flat, open ground in WoW 3.3.5a, away from hazards/enemies, run:
+
+```powershell
+py -3.12 -m wotlkbuddy live-heading --enable-input --turn-key turn-right --countdown 5
+```
+
+Immediately focus the WoW window during the countdown. The command sends
+**at most three** short W, D, W key pulses (0.15, 0.18, 0.15 seconds).
+For left turns, use `--turn-key turn-left` (W, A, W).
+It checks foreground focus, alive/out of combat, player and map identity, a
+nonzero displacement after each W pulse and near-zero map drift during the turn.
+Escape, focus loss and invalid/stale telemetry stop the sequence; key release
+is attempted from a finally block on interruption. No automatic retries.
+
+The result includes `first_map_bearing_deg`, `second_map_bearing_deg`,
+`apparent_turn_deg`, `apparent_turn_rate_deg_s` and individual pulse samples.
+These values describe **2D normalized zone-map displacement**, not true world
+yaw or a reliable world turn rate. The two normalized map axes can have unequal
+physical scales, and world XYZ/pathfinding are still not implemented. This
+diagnostic is not called by the QuestBot and cannot follow quest waypoints.
+
+Keep the existing telemetry addon installed and visible. Do not run the
+experiment near a ledge or water. Copy the JSON output back for live validation.
