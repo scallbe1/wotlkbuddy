@@ -266,8 +266,11 @@ def _horde_progress(args: argparse.Namespace) -> None:
     if not 2 <= args.countdown <= 20:
         raise ValueError('--countdown must be between 2 and 20 seconds')
     import atexit
+    # Native WoW HUD is now the default. A desktop Tk overlay is invisible
+    # in some fullscreen clients; stage text is sent by bounded fixed WoW
+    # slash commands and live action state is rendered by the addon itself.
     hud = GoalActionHUD('Prepare profile progression', 'Switch to WoW',
-                        enabled=not args.no_hud)
+                        enabled=False)
     atexit.register(hud.close)
     def log(line):
         print(line, file=sys.stderr, flush=True)
@@ -283,9 +286,21 @@ def _horde_progress(args: argparse.Namespace) -> None:
         raise LiveControlError('Only a verified living out-of-combat Undead Mage is supported')
     pid, world = verified_live_position(first, pid=args.pid)
     driver = KeyboardQuestInput(interact_key=args.interact_key)
+
+    def set_native_status(phase: str, quest_id: int = 0) -> None:
+        if args.no_hud:
+            return
+        if phase not in ('idle','hunt','turnin','quests','train','gear','vendor'):
+            raise ValueError('Invalid fixed native HUD phase')
+        if not 0 <= quest_id <= 999999:
+            raise ValueError('Invalid native HUD quest ID')
+        driver.chat(f'/wbtgoal {quest_id}')
+        driver.chat(f'/wbtphase {phase}')
+
     report = {}
     if args.only in ('all', 'gear'):
         hud.set(goal='Equip better Mage armor', action='Checking bags and equipment')
+        set_native_status('gear')
         equipped = equip_mage_upgrades(capture=cap, driver=driver, log=log)
         report['equipped_item_ids'] = equipped
     if args.only in ('all', 'quests', 'train', 'vendor', 'objectives'):
@@ -318,6 +333,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
                 if args.only == 'vendor' or bags_full:
                     hud.set(goal='Find a merchant for bag space',
                             action='Finding vendor from Horde XML')
+                    set_native_status('vendor')
                     merchants = nearby_service_npcs(
                         profile=quest_profile, spawns=db,
                         origin=current.position, map_id=current.map_id,
@@ -352,6 +368,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
                     origin=current.position, map_id=current.map_id, radius=160)
                 log(f'Unresolved, reachable profile quest givers: {len(givers)}')
                 quests = {}
+                set_native_status('quests')
                 for giver in givers[:12]:
                     hud.set(goal=f'Accept quests from {giver.name}',
                             action='Navigating to quest giver')
@@ -378,6 +395,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         'No nearby Mage TrainClass vendor found in local Horde '
                         'profile XML and corroborated by CreatureSpawns.db')
                 trainer = trainers[0]
+                set_native_status('train')
                 hud.set(goal=f'Train Mage at {trainer.name}',
                         action='Navigating to class trainer')
                 log(f'Profile-selected Mage trainer: {trainer.name} '
@@ -450,6 +468,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
                     quest_title = target_quest.title
                     hud.set(goal=f'Complete active quest: {quest_title}',
                             action='Selecting profile-verified objective enemy')
+                    set_native_status('hunt', target_quest.quest_id)
                     log(f'Active objective from profile: {quest_title!r} '
                         f'(quest {target_quest.quest_id}), '
                         f'KillMob entry {target_quest.mob_entry}, '
@@ -466,6 +485,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
                             f'complete: {hunt.status}; no turn-in attempted')
                     hud.set(goal=f'Turn in quest: {quest_title}',
                             action='Returning to profile turn-in NPC')
+                    set_native_status('turnin', target_quest.quest_id)
                     completed = return_and_turnin(
                         profile=quest_profile, quest_id=target_quest.quest_id,
                         pid=pid, capture=cap, driver=driver, nav=nav, spawns=db,
@@ -482,6 +502,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
                             capture=cap, driver=driver, log=log)
                         if upgraded:
                             report['equipped_item_ids'] = tuple(upgraded)
+    set_native_status('idle')
     hud.set(action='Workflow complete')
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
