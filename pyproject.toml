@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wotlkbuddy"
+version = "0.2.0"
+description = "Python-first WotLK 3.3.5a bot framework (early port)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "WotLKBuddy contributors"}]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: Microsoft :: Windows",
+  "Development Status :: 2 - Pre-Alpha",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.7"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+wotlkbuddy = "wotlkbuddy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

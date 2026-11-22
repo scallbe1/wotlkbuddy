@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<HBProfile Name="Example simulated grind route" MinLevel="1" MaxLevel="60">
+    <GrindArea>
+        <Hotspots>
+            <Hotspot X="0" Y="0" Z="0" />
+            <Hotspot X="20" Y="0" Z="0" />
+            <Hotspot X="20" Y="20" Z="0" />
+        </Hotspots>
+    </GrindArea>
+</HBProfile>
