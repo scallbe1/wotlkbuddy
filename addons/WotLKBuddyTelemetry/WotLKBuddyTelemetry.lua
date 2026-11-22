@@ -111,6 +111,25 @@ local function tickData()
         tostring(free), tostring(capacity), tostring(durability),
         tostring(talents), tostring(GetMoney() or 0),
         safe(classToken, 18), safe(raceToken, 18)}, '\t'))
+    -- Read-only NPC dialogue state. GetQuestID() reads the open quest frame,
+    -- not the quest log; 0 means the client did not expose a quest ID.
+    local dialog = 'none'
+    if QuestFrame and QuestFrame:IsShown() then
+        if QuestFrameDetailPanel and QuestFrameDetailPanel:IsShown() then
+            dialog = 'detail'
+        elseif QuestFrameProgressPanel and QuestFrameProgressPanel:IsShown() then
+            dialog = 'progress'
+        elseif QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown() then
+            dialog = 'reward'
+        end
+    elseif GossipFrame and GossipFrame:IsShown() then
+        dialog = 'gossip'
+    end
+    local dialogQuestID = 0
+    if (dialog == 'detail' or dialog == 'progress' or dialog == 'reward') and GetQuestID then
+        dialogQuestID = tonumber(GetQuestID()) or 0
+    end
+    appendLine(table.concat({'I', dialog, tostring(dialogQuestID)}, '\t'))
     local entries = GetNumQuestLogEntries() or 0
     for i = 1, entries do
         local title, level, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)

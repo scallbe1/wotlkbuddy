@@ -137,6 +137,36 @@ def _horde_profile_audit(args: argparse.Namespace) -> None:
     print('WORLD X/Y/Z in this source cannot be fed directly to live-follow map waypoints.')
 
 
+def _horde_quest_pickup(args: argparse.Namespace) -> None:
+    """Pick up Rude Awakening only after verifying NPC + quest-detail telemetry."""
+    from wotlkbuddy.horde.interaction import KeyboardQuestInput, pickup_planned_quest
+    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.live.capture import capture_monitor
+    if not args.enable_input:
+        raise ValueError('Quest interaction requires explicit --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    chosen = (args.profile or select_profile_from_loader(args.profiles_root,
+                level=1, race='Undead'))
+    profile = load_horde_profile(chosen)
+    print('GUARDED QUEST PICKUP: Aarr / Rude Awakening (363). No navigation; '
+          'stand within interaction range of Undertaker Mordo. '
+          f'Bind {args.interact_key.upper()} to WoW Interact with Target first. '
+          'Press Escape or switch windows to stop.', file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g}s.',
+          file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    driver = KeyboardQuestInput(interact_key=args.interact_key)
+    result = pickup_planned_quest(
+        profile, capture=lambda: capture_monitor(args.monitor), driver=driver,
+        character=args.character, quest_id=363, world_map_id=0,
+        progress=lambda line: print(line, file=sys.stderr, flush=True),
+    )
+    print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+    if result.status not in ('accepted', 'already_in_journal'):
+        raise RuntimeError(f'Quest 363 not confirmed: {result.status}: {result.explanation}')
+
+
 def _horde_mage_plan(args: argparse.Namespace) -> None:
     """Read-only plan from currently visible WoW quest and status telemetry."""
     from wotlkbuddy.horde.profile import (load_horde_profile, select_profile_from_loader)
@@ -502,6 +532,19 @@ def main(argv: list[str] | None = None) -> int:
     mageplan.add_argument('--countdown', type=float, default=5)
     mageplan.add_argument('--monitor', type=int, default=0)
     mageplan.set_defaults(func=_horde_mage_plan)
+    pickup = sub.add_parser('horde-quest-pickup',
+                            help='Guarded first quest pickup: Aarr / Rude Awakening (363)')
+    pk_src = pickup.add_mutually_exclusive_group(required=True)
+    pk_src.add_argument('--profile')
+    pk_src.add_argument('--profiles-root')
+    pickup.add_argument('--character', default='Aarr')
+    pickup.add_argument('--interact-key', choices=['f', 'g'], default='f',
+                        help='Key already bound in WoW to Interact with Target')
+    pickup.add_argument('--enable-input', action='store_true',
+                        help='Explicit approval for NPC target/interact/quest acceptance')
+    pickup.add_argument('--countdown', type=float, default=5)
+    pickup.add_argument('--monitor', type=int, default=0)
+    pickup.set_defaults(func=_horde_quest_pickup)
     procs = sub.add_parser("processes", help="List local Wow.exe processes (Windows)")
     procs.set_defaults(func=_list_wow)
     profile = sub.add_parser("profile", help="Read and inspect a profile")
