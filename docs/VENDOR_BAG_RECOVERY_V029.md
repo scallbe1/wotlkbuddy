@@ -66,7 +66,28 @@ vendor/ready-reward recovery. Keep the nav DLL, x86 Python, spawn DB
 and profile root arguments. This is an attended one-quest workflow;
 no new infinite loop is enabled.
 
-All sales and live vendor UI interactions require first-run validation
-in the actual AzerothCore 3.3.5 client, despite automated regression
-coverage. Combat cadence and movement smoothing remain separate items
-unless explicitly included by later work.
+## Faster Fireball and reduced movement jitter
+
+The addon now observes actionbar keys and only reports a Fireball shortcut
+when the corresponding bound action button actually contains the Fireball
+spell. The keyboard driver taps that key instead of opening chat and typing
+/cast Fireball each time. If no such safe binding exists, it falls back to
+the previous allowlisted chat command. It also observes live Fireball cast
+time so the bot can begin the next cast at cast completion instead of
+always waiting 2.65 seconds for a projectile to land; it does not use
+unverified blind spell spam or change WoW bindings.
+
+The Detour path follower now reuses verified keyboard turn calibration
+for the same character/map and keyboard driver during one run. Movement
+and turn directions remain checked against live position/facing on every
+correction; only redundant D-key calibration before each short corpse
+approach is removed. Forward holds remain bounded at 0.45 seconds.
+
+Fast client auto-loot is recognized by an increase in the exact tracked
+item inventory **and** matching live quest journal progress, even if the
+LootFrame closes before RGB telemetry can observe it. Item/journal
+contradictions are not considered confirmed loot.
+
+All sales, native actionbar casting, and live vendor UI interactions
+require first-run verification on the actual AzerothCore client; CI tests
+run only against controlled simulated inputs.
