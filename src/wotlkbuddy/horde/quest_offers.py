@@ -94,12 +94,13 @@ def accept_npc_offers(
                     'no quest accepted')
             matching = [step for step in profile.steps
                         if (step.kind == 'pickup' and step.supported and
-                            step.entry == npc_id and step.npc_name == npc_name and
+                            step.entry == npc_id and
+                            step.npc_name in ('', npc_name) and
                             step.name == observed_title and step.quest_id > 0)]
             if len(matching) != 1:
                 known_titles = [step.name for step in profile.steps
                                 if (step.kind == 'pickup' and step.entry == npc_id
-                                    and step.npc_name == npc_name)]
+                                    and step.npc_name in ('', npc_name))]
                 raise LiveControlError(
                     f'{npc_name}: unverified direct offer {observed_title!r}; '
                     f'profile pickup titles for NPC {npc_id} are '
@@ -128,7 +129,6 @@ def accept_npc_offers(
             if (confirmed.dialog is None or confirmed.dialog.kind != 'detail' or
                     confirmed.dialog.title != observed_title or
                     confirmed.dialog.quest_id not in (0, step.quest_id) or
-                    confirmed.dialog.quest_id not in (0, state.dialog.quest_id) or
                     any(q.quest_id == step.quest_id or q.title == observed_title
                         for q in confirmed.quests)):
                 raise LiveControlError(
