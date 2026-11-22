@@ -249,6 +249,8 @@ class ClientTelemetry:
     merchant_open: bool = False
     merchant_scan_complete: bool = False
     merchant_items: tuple[MerchantItem, ...] = ()
+    fireball_key: str | None = None
+    fireball_cast_remaining_ms: int | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -283,6 +285,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     merchant_scan_complete = False
     merchant_count = 0
     merchant_items: dict[tuple[int, int], MerchantItem] = {}
+    fireball_record_seen = False
+    fireball_key = None
+    fireball_cast_remaining_ms = None
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -374,6 +379,19 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                         '\\r' in parts[3] or '\\n' in parts[3]):
                     raise TelemetryError('Invalid quest item name')
                 tracked_item_name = parts[3] or None
+        elif parts[0] == 'F':
+            if (len(parts) != 3 or fireball_record_seen or
+                    parts[1] not in ('-', *'0123456789')):
+                raise TelemetryError('Malformed or duplicate Fireball action record')
+            try:
+                remaining = int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Malformed Fireball cast timing') from exc
+            if not -1 <= remaining <= 20000:
+                raise TelemetryError('Fireball cast timing out of range')
+            fireball_record_seen = True
+            fireball_key = parts[1] if parts[1] != '-' else None
+            fireball_cast_remaining_ms = remaining if remaining >= 0 else None
         elif parts[0] == 'M':
             if (len(parts) != 3 or merchant_seen or
                     parts[1] not in ('0', '1')):
@@ -647,4 +665,6 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            merchant_open=merchant_seen,
                            merchant_scan_complete=merchant_scan_complete,
                            merchant_items=tuple(
-                               merchant_items[k] for k in sorted(merchant_items)))
+                               merchant_items[k] for k in sorted(merchant_items)),
+                           fireball_key=fireball_key,
+                           fireball_cast_remaining_ms=fireball_cast_remaining_ms)
