@@ -419,7 +419,9 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         str(qid): {
                             'server_history_complete': flags.get(qid) is True,
                             'still_in_journal': qid in still_active,
-                        } for qid in sorted(trainer_quest_ids)}
+                        } for qid in sorted(trainer_quest_ids)
+                        if qid in flags or qid in still_active or
+                        qid in handed_in}
                     report['post_training_quest_verification'] = confirmations
                     if any(not confirmations[str(qid)]['server_history_complete'] or
                            confirmations[str(qid)]['still_in_journal']
