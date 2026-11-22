@@ -80,7 +80,7 @@ class KeyboardQuestInput:
         real_sleep(0.012)
 
     def chat(self, command: str) -> None:
-        if (command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/run GetQuestReward(0)') and
+        if (command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/run GetQuestReward(0)', '/click QuestFrameCloseButton') and
                 not re.fullmatch(r'/run Select(?:GossipActiveQuest|ActiveQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and
                 not re.fullmatch(r'/click (?:GossipTitleButton|QuestTitleButton)([1-9]|[12][0-9]|3[0-2])', command) and
                 not (command.startswith('/targetexact ') and
