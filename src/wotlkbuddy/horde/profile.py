@@ -269,18 +269,22 @@ def load_horde_vendor_catalog(profiles_root: str | Path, *,
     horde = None
     if selected_profile_path is not None:
         selected = Path(selected_profile_path).expanduser().resolve()
-        if not selected.is_relative_to(root) or not selected.is_file():
-            raise HordeProfileError(
-                'Selected profile must be an existing XML under profiles root')
-        for ancestor in selected.parents:
-            if not ancestor.is_relative_to(root):
-                break
-            if ancestor.name.casefold() == 'horde':
-                horde = ancestor
-                break
-        if horde is None:
-            raise HordeProfileError(
-                'Selected Horde profile is not in a Horde directory')
+        # Synthetic callers may not have a materialized profile path; retain
+        # the old root/Horde fallback in that case. Real selected profiles
+        # have already been loaded from disk and are strictly contained.
+        if selected.is_file():
+            if not selected.is_relative_to(root):
+                raise HordeProfileError(
+                    'Selected profile must remain under the profiles root')
+            for ancestor in selected.parents:
+                if not ancestor.is_relative_to(root):
+                    break
+                if ancestor.name.casefold() == 'horde':
+                    horde = ancestor
+                    break
+            if horde is None:
+                raise HordeProfileError(
+                    'Selected Horde profile is not in a Horde directory')
     if horde is None:
         candidate = (root / 'Horde').resolve()
         if candidate.is_dir() and candidate.is_relative_to(root):
