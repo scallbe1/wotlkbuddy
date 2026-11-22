@@ -12,7 +12,7 @@ an unattended quest bot.
 
 # WotLKBuddy
 
-**Version 0.6.0 — live telemetry, bounded movement, quest progress, and heading calibration.**
+**Version 0.9.0 — live telemetry and practical recorded-route navigation (quest interactions not yet implemented).**
 
 A Python-first framework for a future WotLK 3.3.5a (client build 12340)
 automation application. The architecture and feature targets are informed by
