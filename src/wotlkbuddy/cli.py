@@ -160,6 +160,107 @@ def _live_watch(args: argparse.Namespace) -> None:
         raise RuntimeError('No valid WoW addon telemetry received. See docs/LIVE_CLIENT.md')
     print(f'Received {count} unique real-client telemetry frames (read-only).', file=sys.stderr)
 
+def _live_status(args: argparse.Namespace) -> None:
+    """One readable quest-journal observation, no actions taken."""
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.observe import summarize_telemetry
+    if not 0 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 0..20 seconds')
+    if args.countdown:
+        print(f'Switch to WoW now: reading in {args.countdown:g} seconds.', file=sys.stderr)
+        time.sleep(args.countdown)
+    print(summarize_telemetry(capture_monitor(args.monitor)))
+
+
+def _live_probe(args: argparse.Namespace) -> None:
+    """Explicitly armed, single pulse. Never connected to the QuestBot runner."""
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import WindowsKeyboard, probe_movement
+    if not args.enable_input:
+        raise ValueError('Refusing keypress: explicitly pass --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds for the movement probe')
+    if not 0.05 <= args.duration <= 0.30:
+        raise ValueError('--duration must be 0.05..0.30 seconds')
+    print('ONE SHORT MOVEMENT PULSE ONLY. Keep WoW visible, out of combat, and on '
+          'safe ground. Use default WASD controls.', file=sys.stderr)
+    print(f'Switch to the WoW window now; starting in {args.countdown:g} seconds.',
+          file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    result = probe_movement(key=args.key, duration=args.duration,
+                            keyboard=WindowsKeyboard(),
+                            capture=lambda: capture_monitor(args.monitor))
+    print(json.dumps(asdict(result), ensure_ascii=False))
+    if not result.observed_map_movement:
+        print('NOTE: No map-coordinate change detected; this is not a navigation '
+              'or movement-success guarantee.', file=sys.stderr)
+
+
+
+def _live_burst(args: argparse.Namespace) -> None:
+    """Human-armed short movement session. Not pathfinding or QuestBot actions."""
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import WindowsKeyboard
+    from wotlkbuddy.live.burst import bounded_burst
+    if not args.enable_input:
+        raise ValueError('Refusing keypress: explicitly pass --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    if not 1 <= args.pulses <= 6:
+        raise ValueError('--pulses must be between 1 and 6')
+    if not 0.05 <= args.duration <= 0.2:
+        raise ValueError('--duration must be 0.05..0.20 seconds')
+    print('BOUNDED MOVEMENT TEST ONLY: max 6 pulses; on safe, open ground, '
+          'out of combat. Press Escape between pulses or Ctrl+C to abort.',
+          file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g} seconds.',
+          file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    kb = WindowsKeyboard()
+    result = bounded_burst(
+        key=args.key, pulses=args.pulses, duration=args.duration,
+        max_map_distance=args.max_map_distance, keyboard=kb,
+        capture=lambda: capture_monitor(args.monitor),
+        stop_requested=kb.emergency_stop_requested,
+    )
+    print(json.dumps(result.to_dict(), ensure_ascii=False))
+    print(f'Movement stopped: {result.stopped_reason}; '
+          f'{result.pulses_sent}/{result.pulses_requested} pulses.',
+          file=sys.stderr)
+
+
+def _live_record(args: argparse.Namespace) -> None:
+    """Record manual route positions and observed quest progress, without input."""
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.codec import TelemetryError
+    from wotlkbuddy.live.trail import TrailRecorder
+    if not 1 <= args.seconds <= 3600 or not 0.25 <= args.interval <= 10:
+        raise ValueError('--seconds must be 1..3600 and --interval 0.25..10')
+    recorder = TrailRecorder(minimum_map_move=args.min_map_move)
+    deadline = time.monotonic() + args.seconds
+    rows = 0
+    last_warning = None
+    print('Recording manual route and quest changes. Keep WoW visible. '
+          'No keys will be sent.', file=sys.stderr)
+    # Exclusive creation avoids silently overwriting a previous session log.
+    with open(args.output, 'x', encoding='utf-8') as f:
+        while time.monotonic() < deadline:
+            try:
+                snapshot = capture_monitor(args.monitor)
+                for event in recorder.ingest(snapshot):
+                    f.write(json.dumps(event, ensure_ascii=False) + '\n')
+                    f.flush()
+                    rows += 1
+                last_warning = None
+            except (TelemetryError, ValueError) as exc:
+                if str(exc) != last_warning:
+                    print(f'Recording warning: {exc}', file=sys.stderr)
+                    last_warning = str(exc)
+            time.sleep(args.interval)
+    print(f'Recorded {rows} route/quest events to {args.output}', file=sys.stderr)
+    if rows == 0:
+        raise RuntimeError('No valid telemetry was recorded; check WoW visibility')
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wotlkbuddy")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -192,6 +293,42 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument('--monitor', type=int, default=0,
                        help='0 = all displays; 1 = primary display')
     watch.set_defaults(func=_live_watch)
+    status = sub.add_parser('live-status', help='Read one live player/quest summary (no input)')
+    status.add_argument('--monitor', type=int, default=0,
+                        help='0 = all displays; 1 = primary')
+    status.add_argument('--countdown', type=float, default=5,
+                        help='Seconds to bring WoW to foreground before capture')
+    status.set_defaults(func=_live_status)
+    pulse = sub.add_parser('live-probe', help='ONE guarded WASD pulse to validate movement')
+    pulse.add_argument('--enable-input', action='store_true',
+                       help='Explicit approval to send a single short keyboard pulse')
+    pulse.add_argument('--key', choices=['forward', 'backward', 'turn-left', 'turn-right'],
+                       default='forward')
+    pulse.add_argument('--duration', type=float, default=0.18,
+                       help='Pulse seconds (0.05..0.30), default 0.18')
+    pulse.add_argument('--countdown', type=float, default=5,
+                       help='Time to focus WoW after pressing Enter, 2..20')
+    pulse.add_argument('--monitor', type=int, default=0)
+    pulse.set_defaults(func=_live_probe)
+    burst = sub.add_parser('live-burst', help='Bounded forward/backward pulse experiment')
+    burst.add_argument('--enable-input', action='store_true',
+                       help='Explicit human opt-in required for each run')
+    burst.add_argument('--key', choices=['forward', 'backward'], default='forward')
+    burst.add_argument('--pulses', type=int, default=3, help='Number of pulses, 1..6')
+    burst.add_argument('--duration', type=float, default=0.15, help='Seconds per pulse, 0.05..0.20')
+    burst.add_argument('--max-map-distance', type=float, default=0.002,
+                       help='Max sum of normalized map-coordinate changes')
+    burst.add_argument('--countdown', type=float, default=5)
+    burst.add_argument('--monitor', type=int, default=0)
+    burst.set_defaults(func=_live_burst)
+    trail = sub.add_parser('live-record', help='Record manually walked route and quest events')
+    trail.add_argument('--seconds', type=float, default=90)
+    trail.add_argument('--interval', type=float, default=0.7)
+    trail.add_argument('--min-map-move', type=float, default=0.00008)
+    trail.add_argument('--monitor', type=int, default=0)
+    trail.add_argument('--output', default='route.jsonl',
+                       help='New JSONL output file (will not overwrite existing)')
+    trail.set_defaults(func=_live_record)
     args = parser.parse_args(argv)
     if getattr(args, "ticks", 0) < 0:
         parser.error("--ticks must be nonnegative")

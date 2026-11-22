@@ -1,6 +1,6 @@
 # WotLKBuddy
 
-**Version 0.3.1 — real-client read-only player/quest journal telemetry plus offline QuestBot.**
+**Version 0.5.0 — live telemetry, bounded movement feedback, and quest-progress recording.**
 
 A Python-first framework for a future WotLK 3.3.5a (client build 12340)
 automation application. The architecture and feature targets are informed by
@@ -8,7 +8,7 @@ automation application. The architecture and feature targets are informed by
 new implementation and currently contains no upstream C# sources, .NET code,
 or vendored native binaries.
 
-## v0.3.1 — read-only live client telemetry
+## v0.5.0 — feedback-controlled movement experiments + quest observation
 
 The first live-client **observation** interface is implemented. An optional
 WoW 3.3.5a Lua addon publishes player HP, level, combat/death status, map-relative
@@ -16,14 +16,24 @@ position, target identity, and active quest journal IDs/titles/objectives as
 colored pixels. Python auto-calibrates the displayed pixel pitch (including
 fractional scaling, such as a nominal 4px tile rendered at 5.4px), captures and
 checksum-validates the strip and prints
-JSONL. No client memory offsets, injection, key presses or game actions are
-used; the **bot cannot yet play WoW**. See [docs/LIVE_CLIENT.md](docs/LIVE_CLIENT.md)
+JSONL. `live-status` shows a readable quest journal; `live-probe` performs
+one explicitly authorized short WASD keypress. v0.5 adds a **bounded**
+forward/backward burst of at most six individually validated key pulses,
+plus a **read-only** session recorder of map-relative positions and observable
+quest progress. There is still **no autonomous navigation, combat or questing**. See [docs/LIVE_CLIENT.md](docs/LIVE_CLIENT.md)
 for the exact Windows installation/test steps.
 
 ```powershell
 py -3.12 -m pip install -e ".[live,dev]"
 py -3.12 -m wotlkbuddy install-addon --wow-dir "C:\Games\WoW 3.3.5a"
 py -3.12 -m wotlkbuddy live-watch --seconds 30 > telemetry.jsonl
+py -3.12 -m wotlkbuddy live-status --countdown 5
+# After reviewing docs/LIVE_CLIENT.md, optionally test one 0.18s forward pulse:
+py -3.12 -m wotlkbuddy live-probe --enable-input --key forward --duration 0.18 --countdown 5
+# v0.5: explicitly opt in to a short, bounded sequence, in a safe open area:
+py -3.12 -m wotlkbuddy live-burst --enable-input --key forward --pulses 3 --duration 0.15 --countdown 5
+# Alternatively, record a normal/manual questing walk without any keyboard input:
+py -3.12 -m wotlkbuddy live-record --seconds 90 --output darkshore-walk.jsonl
 ```
 
 ## What is implemented
@@ -51,6 +61,14 @@ py -3.12 -m wotlkbuddy live-watch --seconds 30 > telemetry.jsonl
   modern 64-bit PySide6 frontend to use a 32-bit native navigation DLL.
 - Python plugin loading primitive (execute *trusted* plugins only).
 - Minimal optional PySide6 desktop demo.
+- An explicitly armed, single-pulse keyboard test with WoW foreground-process
+  validation, pre/post telemetry, guaranteed release, and fail-closed guards.
+- Human-readable live quest journal summary with parsed numeric progress.
+- v0.5 guarded forward/backward burst with fresh telemetry validation for each
+  pulse, cumulative normalized-map movement budget, stall detection,
+  foreground/combat/identity checks, and Escape/Ctrl+C interruption.
+- v0.5 read-only manual-route and quest-progress recorder, including observed
+  objective deltas, quest appearances/disappearances and completion flags.
 - Automated cross-platform unit tests and GitHub Actions workflow.
 
 ## Not yet implemented
@@ -60,7 +78,8 @@ validated WoW object manager, runtime offset resolution, Lua game-thread
 executor, injected code, live movement/spell commands, class combat routines,
 flight paths, quests, vendors, dungeon mechanics, battlegrounds, gatherings,
 or complete Honorbuddy profile execution. The QuestBot is not yet wired to the
-WoW client as an action-capable bot. v0.3 includes a read-only telemetry source. The existing native navigation DLL
+WoW client as an action-capable bot. v0.5 includes separate, bounded manual
+movement experiments, **not** a live QuestGamePort implementation. The existing native navigation DLL
 has **not** been tested live from this package. The UI runs the simulator only.
 
 ## Quick start
