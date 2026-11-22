@@ -369,3 +369,14 @@ its path start (not the quest giver NPC). A matching `Navigation.dll`, 32-bit
 Python, and the corresponding `mmaps/` are still needed to calculate a real
 intermediate waypoint path. No movement is enabled by either command.
 See [live XYZ diagnostic guide](docs/LIVE_WORLD_XYZ_V015.md).
+
+### Attended native world-navmesh delivery (v0.16)
+
+The experimental `horde-nav-deliver` command uses **live world X/Y/Z** and
+CopilotBuddy's x86 Navigation.dll plus matching `mmaps/` to compute and follow
+real intermediate Detour waypoints for Horde quest 363; it then invokes the
+existing guarded NPC turn-in. It **stops on aggro** and does not fight, loot,
+recover, or continue leveling autonomously. No guessed 2-D map offset is used.
+See [setup, safety and commands](docs/HORDE_NAV_DELIVER_V016.md). The external
+DLL/terrain assets must be supplied separately; no Python package includes them.
+
