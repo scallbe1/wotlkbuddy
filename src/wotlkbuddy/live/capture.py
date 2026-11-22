@@ -23,6 +23,10 @@ class _Layout:
 _last_layout: _Layout | None = None
 
 
+class _ValidChecksumPayloadError(TelemetryError):
+    """The RGB frame was intact, but its decoded records are invalid."""
+
+
 def _bgra_pixel(buffer: bytes, width: int, height: int, x: int, y: int) -> tuple[int, int, int]:
     if not (0 <= x < width and 0 <= y < height):
         raise TelemetryError('Captured frame ends before telemetry grid')
@@ -42,7 +46,14 @@ def _decode(buffer: bytes, width: int, height: int, layout: _Layout) -> ClientTe
     def pixel(col: int, row: int) -> tuple[int, int, int]:
         return _sample(buffer, width, height, layout, col, row)
     sequence, payload = decode_pixels(pixel)
-    return parse_payload(payload, sequence)
+    try:
+        return parse_payload(payload, sequence)
+    except TelemetryError as exc:
+        # A valid checksum proves the layout decoded; do not misreport malformed
+        # addon data as a screen-capture problem.
+        raise _ValidChecksumPayloadError(
+            f'Telemetry checksum valid but payload invalid: {exc}'
+        ) from exc
 
 
 def _origins(buffer: bytes, width: int, height: int):
@@ -115,6 +126,8 @@ def decode_bgra_frame(buffer: bytes, width: int, height: int) -> ClientTelemetry
     if _last_layout is not None:
         try:
             return _decode(buffer, width, height, _last_layout)
+        except _ValidChecksumPayloadError:
+            raise
         except TelemetryError:
             _last_layout = None  # Changed game window scale/position or mixed frame.
 
@@ -152,6 +165,8 @@ def decode_bgra_frame(buffer: bytes, width: int, height: int) -> ClientTelemetry
                             result = _decode(buffer, width, height, layout)
                             _last_layout = layout
                             return result
+                        except _ValidChecksumPayloadError:
+                            raise
                         except TelemetryError:
                             continue
     if not had_marker:
