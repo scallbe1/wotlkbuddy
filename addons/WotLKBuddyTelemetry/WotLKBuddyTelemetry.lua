@@ -201,6 +201,34 @@ local function tickData()
     end
     appendLine(table.concat({'B', tostring(known(1459)), tostring(arcane),
         tostring(known(168)), tostring(armor), tostring(known(133))}, '\t'))
+    -- Fast, observable Fireball input. Never guess an action-bar slot:
+    -- export a digit key ONLY when its bound button actually holds the
+    -- Fireball spell (not a macro or unrelated action). Cast timing is
+    -- measured from UnitCastingInfo, not projectile impact guesses.
+    local fireballKey = '-'
+    local fireballName = GetSpellInfo and GetSpellInfo(133)
+    if fireballName and GetActionInfo and GetBindingKey then
+        for index = 1, 10 do
+            local kind, id = GetActionInfo(index)
+            local expectedKey = index == 10 and '0' or tostring(index)
+            local key = GetBindingKey('ACTIONBUTTON' .. tostring(index))
+            if kind == 'spell' and type(id) == 'number' and
+                    GetSpellInfo(id) == fireballName and key == expectedKey then
+                fireballKey = expectedKey
+                break
+            end
+        end
+    end
+    local remaining = -1
+    if UnitCastingInfo then
+        local castName, _, _, _, startTime, endTime =
+            UnitCastingInfo('player')
+        if castName == fireballName and type(endTime) == 'number' then
+            remaining = math.max(0, math.min(20000,
+                math.floor(endTime - GetTime() * 1000)))
+        end
+    end
+    appendLine(table.concat({'F', fireballKey, tostring(remaining)}, '\t'))
     local lootCount = 0
     if LootFrame and LootFrame:IsShown() and GetNumLootItems then
         lootCount = math.min(GetNumLootItems() or 0, 16)
