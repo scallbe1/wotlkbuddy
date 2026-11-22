@@ -44,7 +44,9 @@ class RewardGame(Game):
             self.reward_frames += 1
             choices = self.options
             if self.mutate_after_first and self.reward_frames >= 2:
-                choices = (CLOAK, GLOVES)
+                # Alternate value on every fresh frame; never stable twice.
+                choices = (replace(GLOVES,
+                                   item_level=5 + self.reward_frames % 2), CLOAK)
         return replace(s, reward_choices=choices,
                        quest_completions=((364, self.history),))
 
@@ -97,22 +99,19 @@ class ChoiceTests(unittest.TestCase):
 
     def test_quest_choice_telemetry_preserves_title(self):
         raw = (
-            b'P\\tAarr\\t0x000000000000025F\\t1\\t51\\t51\\t0\\t0\\t'
-            b'0.5\\t0.6\\t2\\t12\\tDeathknell\\t\\t\\n'
-            b'I\\treward\\t364\\tThe Mindless Ones\\t2\\t0\\n'
-            b'R\\t1\\tFlax Gloves\\t1\\tINVTYPE_HAND\\t5\\t3275\\n'
-            b'R\\t2\\tBattered Cloak\\t1\\tINVTYPE_CLOAK\\t5\\t11847\\n'
+            b'P\tAarr\t0x000000000000025F\t1\t51\t51\t0\t0\t'
+            b'0.5\t0.6\t2\t12\tDeathknell\t\t\n'
+            b'I\treward\t364\tThe Mindless Ones\t2\t0\n'
+            b'R\t1\tFlax Gloves\t1\tINVTYPE_HAND\t5\t3275\n'
+            b'R\t2\tBattered Cloak\t1\tINVTYPE_CLOAK\t5\t11847\n'
         )
-        # Replace escaped tabs/newlines with their literal byte values.
-        parsed = parse_payload(raw.replace(b'\\\\t', b'\\t').replace(
-            b'\\\\n', b'\\n'), 3)
+        parsed = parse_payload(raw, 3)
         self.assertEqual(parsed.dialog.title, 'The Mindless Ones')
         self.assertEqual(parsed.dialog.reward_choices, 2)
         self.assertEqual(parsed.reward_choices, (GLOVES, CLOAK))
         with self.assertRaisesRegex(TelemetryError, 'repeated reward'):
-            parse_payload(raw.replace(b'\\\\t', b'\\t').replace(
-                b'\\\\n', b'\\n') +
-                b'R\\t1\\tFlax Gloves\\t1\\tINVTYPE_HAND\\t5\\t3275\\n', 4)
+            parse_payload(raw + b'R\t1\tFlax Gloves\t1\tINVTYPE_HAND\t5\t3275\n', 4)
+
 
 
 if __name__ == '__main__':
