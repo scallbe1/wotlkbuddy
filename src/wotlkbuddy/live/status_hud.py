@@ -64,7 +64,10 @@ class GoalActionHUD:
             self._process = launcher(
                 [sys.executable, '-m', 'wotlkbuddy.live.status_hud', '--viewer'],
                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                # Surface child startup/Tk/Win32 failures in the parent console.
+                # Previously stderr was swallowed, so a failed viewer silently
+                # looked identical to a fullscreen-hidden overlay.
+                stderr=None, text=True, bufsize=1,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self._publish()
         except (OSError, ValueError):
@@ -106,27 +109,59 @@ class GoalActionHUD:
 
 
 def _enable_windows_clickthrough(hwnd: int) -> None:
-    """Keep the HUD above WoW without becoming the foreground input window."""
+    """Set full pointer-width Win32 HWND signatures (Python x64 safe).
+
+    Unannotated ctypes WinDLL calls default to 32-bit c_int parameters, which
+    truncate HWND values on 64-bit Windows and can make the HUD invisible.
+    """
     if os.name != 'nt':
         return
     import ctypes
+    from ctypes import wintypes
 
-    user32 = ctypes.windll.user32
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    HWND = wintypes.HWND
+    INDEX = wintypes.INT
+    if ctypes.sizeof(ctypes.c_void_p) == 8:
+        get_style = user32.GetWindowLongPtrW
+        set_style = user32.SetWindowLongPtrW
+        style_type = ctypes.c_ssize_t
+    else:
+        get_style = user32.GetWindowLongW
+        set_style = user32.SetWindowLongW
+        style_type = wintypes.LONG
+    get_style.argtypes = [HWND, INDEX]
+    get_style.restype = style_type
+    set_style.argtypes = [HWND, INDEX, style_type]
+    set_style.restype = style_type
+    user32.SetWindowPos.argtypes = [
+        HWND, HWND, ctypes.c_int, ctypes.c_int,
+        ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    user32.SetWindowPos.restype = wintypes.BOOL
+
     GWL_EXSTYLE = -20
     WS_EX_TRANSPARENT = 0x00000020
     WS_EX_TOOLWINDOW = 0x00000080
     WS_EX_LAYERED = 0x00080000
     WS_EX_NOACTIVATE = 0x08000000
-    existing = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-    user32.SetWindowLongW(
-        hwnd, GWL_EXSTYLE,
-        existing | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW |
+    h = HWND(hwnd)
+    ctypes.set_last_error(0)
+    existing = get_style(h, GWL_EXSTYLE)
+    if existing == 0 and ctypes.get_last_error() != 0:
+        raise OSError(f'GetWindowLongPtrW failed: {ctypes.get_last_error()}')
+    flags = existing | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | (
         WS_EX_LAYERED | WS_EX_NOACTIVATE)
-    # HWND_TOPMOST = -1; SWP_NOSIZE/NOMOVE/NOACTIVATE/SHOWWINDOW
-    user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x1 | 0x2 | 0x10 | 0x40)
+    ctypes.set_last_error(0)
+    old_style = set_style(h, GWL_EXSTYLE, flags)
+    if old_style == 0 and ctypes.get_last_error() != 0:
+        raise OSError(f'SetWindowLongPtrW failed: {ctypes.get_last_error()}')
+    # HWND_TOPMOST -1: keep visible without moving, sizing or activating WoW.
+    if not user32.SetWindowPos(h, HWND(-1), 0, 0, 0, 0,
+                               0x1 | 0x2 | 0x10 | 0x40):
+        raise OSError(f'SetWindowPos failed: {ctypes.get_last_error()}')
 
 
-def _viewer() -> None:
+def _viewer(*, demo: bool = False) -> None:
     """Tk lives only in this helper process. Closing the pipe closes the HUD."""
     import queue
     import threading
@@ -167,9 +202,21 @@ def _viewer() -> None:
         fg='#C7D2FE', bg='#111827')
     second.pack(fill='x')
     root.update_idletasks()
+    # Set NOACTIVATE and click-through *before* revealing the window: the HUD
+    # must never take WoW's foreground focus away from combat controls.
     _enable_windows_clickthrough(root.winfo_id())
     root.deiconify()
     _enable_windows_clickthrough(root.winfo_id())
+    # Child startup failures are now visible in the parent PowerShell stderr.
+    if demo:
+        first.configure(text='Goal: Complete active quest objectives')
+        second.configure(text='Action: Navigating to objective mobs')
+        print('HUD window created at upper-left (x=18, y=142). '
+              'Switch to WoW to inspect it; closes after 15 seconds.',
+              flush=True)
+        root.after(15000, root.destroy)
+        root.mainloop()
+        return
 
     def pump() -> None:
         try:
@@ -192,3 +239,11 @@ def _viewer() -> None:
 if __name__ == '__main__':
     if len(sys.argv) == 2 and sys.argv[1] == '--viewer':
         _viewer()
+    elif len(sys.argv) == 2 and sys.argv[1] == '--test':
+        # Interactive one-shot diagnostic: no WoW keystrokes or addon changes.
+        print('Starting WotLKBuddy Goal/Action overlay diagnostic...', flush=True)
+        _viewer(demo=True)
+    else:
+        print('Usage: python -m wotlkbuddy.live.status_hud --test',
+              file=sys.stderr)
+        sys.exit(2)
