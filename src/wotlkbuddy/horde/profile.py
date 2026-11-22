@@ -164,7 +164,7 @@ def load_horde_profile(path: str | Path) -> HordeProfile:
         va = _attrs(v)
         position = _xyz(va)
         if position is not None:
-            vendors.append(VendorSpec(va.get('name', ''), _positive(va, 'entry'),
+            vendors.append(VendorSpec(va.get('name', ''), _positive(va, 'entry', 'id'),
                                       va.get('type', ''), position,
                                       va.get('trainclass', '')))
     order = root.find('QuestOrder')
@@ -251,6 +251,55 @@ def load_horde_profile(path: str | Path) -> HordeProfile:
     return HordeProfile(name, str(path), tuple(quests), tuple(vendors), tuple(steps),
                         read_float('MinDurability', 0.2), read_int('MinFreeBagSlots', 2),
                         tuple(sorted(unsupported)))
+
+
+def load_horde_vendor_catalog(profiles_root: str | Path, *,
+                              max_files: int = 3000) -> tuple[VendorSpec, ...]:
+    """Index explicit Vendor NPC records across local Horde XML files.
+
+    The selected profile can omit a town's vendors/trainers, even though
+    another installed Horde XML lists them. This read-only inventory traverses
+    *only* XML files under the configured Horde root; it never executes profile
+    scripts, accesses remote sources or uses arbitrary NPC name guesses.
+    """
+    root = Path(profiles_root).expanduser().resolve()
+    horde = (root / 'Horde').resolve()
+    if not horde.is_dir() or not horde.is_relative_to(root):
+        raise HordeProfileError('Horde vendor catalog directory not available')
+    results: dict[tuple[int, str, str, float, float, float, str], VendorSpec] = {}
+    scanned = 0
+    for path in sorted(horde.rglob('*.xml')):
+        resolved = path.resolve()
+        if not resolved.is_relative_to(horde) or not resolved.is_file():
+            continue
+        scanned += 1
+        if scanned > max_files:
+            raise HordeProfileError('Horde vendor catalog exceeds bounded XML file count')
+        if resolved.stat().st_size > 3_000_000:
+            continue
+        try:
+            tree = ET.parse(resolved)
+        except ET.ParseError:
+            continue  # Some unrelated profile XMLs may be malformed.
+        for vendor in tree.findall('./Vendors/Vendor'):
+            attrs = _attrs(vendor)
+            xyz = _xyz(attrs)
+            if xyz is None:
+                continue
+            try:
+                entry = _positive(attrs, 'entry', 'id')
+            except HordeProfileError:
+                continue
+            name = attrs.get('name', '').strip()
+            kind = attrs.get('type', '').strip()
+            if not name or not kind:
+                continue
+            spec = VendorSpec(name, entry, kind, xyz,
+                              attrs.get('trainclass', '').strip())
+            key = (spec.entry, spec.name, spec.kind,
+                   xyz.x, xyz.y, xyz.z, spec.train_class)
+            results[key] = spec
+    return tuple(results.values())
 
 
 # Never evaluate arbitrary strings from upstream profiles as Python or C#.
