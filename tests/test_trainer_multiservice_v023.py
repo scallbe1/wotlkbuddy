@@ -76,7 +76,8 @@ class MultiServiceGame:
         elif command == '/run BuyTrainerService(1)':
             self.services = ()
             self.trained = True
-        elif command == '/click QuestFrameCloseButton':
+        elif command in ('/click QuestFrameCloseButton',
+                         '/click ClassTrainerFrameCloseButton'):
             self.stage = 'none'
             self.close_calls += 1
 
@@ -111,6 +112,20 @@ class TrainerMultiServiceTests(unittest.TestCase):
         self.assertNotIn('/run SelectGossipOption(1)', game.driver.commands)
         self.assertEqual(game.driver.commands.count('/run BuyTrainerService(1)'),1)
         self.assertTrue(game.trained)
+        self.assertEqual(game.stage, 'none')
+        self.assertIn('/click ClassTrainerFrameCloseButton', game.driver.commands)
+
+    def test_close_command_must_observably_close_trainer(self):
+        game = MultiServiceGame()
+        original = game.chat
+        def ignore_trainer_close(command):
+            if command == '/click ClassTrainerFrameCloseButton':
+                return
+            original(command)
+        game.driver.on_chat = ignore_trainer_close
+        with self.assertRaisesRegex(LiveControlError, 'trainer frame still open'):
+            game.train()
+        self.assertIn('/click ClassTrainerFrameCloseButton', game.driver.commands)
 
     def test_progress_panel_closed_before_gossip_trainer_selection(self):
         game = MultiServiceGame(initial='progress')

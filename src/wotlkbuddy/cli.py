@@ -203,7 +203,8 @@ def _horde_mage_plan(args: argparse.Namespace) -> None:
 
 
 def _execute_profile_return(*, profile, quest_id, pid, capture, driver,
-                            nav_dll, python32, spawns_db, max_seconds=450):
+                            nav_dll, python32, spawns_db, max_seconds=450,
+                            progress=None):
     """Reusable attended Detour delivery for complete profile quests."""
     from pathlib import Path
     from wotlkbuddy.horde.return_turnin import return_and_turnin
@@ -214,7 +215,7 @@ def _execute_profile_return(*, profile, quest_id, pid, capture, driver,
     python = Path(python32).expanduser().resolve()
     if not dll.is_file() or not (dll.parent / 'mmaps').is_dir() or not python.is_file():
         raise ValueError('Return requires Navigation.dll, adjacent mmaps and x86 Python')
-    log = lambda line: print(line, file=sys.stderr, flush=True)
+    log = progress or (lambda line: print(line, file=sys.stderr, flush=True))
     with CreatureSpawnDatabase(resolve_creature_spawns(spawns_db)) as db, \
             NavigationProxy(python, dll) as nav:
         result = return_and_turnin(
@@ -250,6 +251,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
     from wotlkbuddy.horde.training import train_available_mage_spells
     from wotlkbuddy.horde.npc_service_turnin import turnin_ready_quests_at_npc
+    from wotlkbuddy.live.status_hud import GoalActionHUD
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
     from wotlkbuddy.live.capture import capture_monitor
@@ -260,7 +262,13 @@ def _horde_progress(args: argparse.Namespace) -> None:
         raise ValueError('Post-quest input requires explicit --enable-input')
     if not 2 <= args.countdown <= 20:
         raise ValueError('--countdown must be between 2 and 20 seconds')
-    log = lambda line: print(line, file=sys.stderr, flush=True)
+    import atexit
+    hud = GoalActionHUD('Prepare profile progression', 'Switch to WoW',
+                        enabled=not args.no_hud)
+    atexit.register(hud.close)
+    def log(line):
+        print(line, file=sys.stderr, flush=True)
+        hud.note(line)
     log(f'Switch to WoW now; post-quest progression begins in {args.countdown:g}s.')
     time.sleep(args.countdown)
     cap = lambda: capture_monitor(args.monitor)
@@ -274,6 +282,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
     driver = KeyboardQuestInput(interact_key=args.interact_key)
     report = {}
     if args.only in ('all', 'gear'):
+        hud.set(goal='Equip better Mage armor', action='Checking bags and equipment')
         equipped = equip_mage_upgrades(capture=cap, driver=driver, log=log)
         report['equipped_item_ids'] = equipped
     if args.only in ('all', 'quests', 'train', 'vendor'):
@@ -304,6 +313,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                 bags_full = (state.resources.free_bag_slots <=
                              quest_profile.min_free_bag_slots)
                 if args.only == 'vendor' or bags_full:
+                    hud.set(goal='Find a merchant for bag space',
+                            action='Finding vendor from Horde XML')
                     merchants = nearby_service_npcs(
                         profile=quest_profile, spawns=db,
                         origin=current.position, map_id=current.map_id,
@@ -339,6 +350,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                 log(f'Unresolved, reachable profile quest givers: {len(givers)}')
                 quests = {}
                 for giver in givers[:12]:
+                    hud.set(goal=f'Accept quests from {giver.name}',
+                            action='Navigating to quest giver')
                     log(f'Profile quest giver: {giver.name} ({giver.entry}) '
                         f'from {giver.source}')
                     visit_npc(npc_name=giver.name, npc_id=giver.entry,
@@ -362,6 +375,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         'No nearby Mage TrainClass vendor found in local Horde '
                         'profile XML and corroborated by CreatureSpawns.db')
                 trainer = trainers[0]
+                hud.set(goal=f'Train Mage at {trainer.name}',
+                        action='Navigating to class trainer')
                 log(f'Profile-selected Mage trainer: {trainer.name} '
                     f'({trainer.entry}); source={trainer.source}')
                 visit_npc(npc_name=trainer.name, npc_id=trainer.entry,
@@ -371,6 +386,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                 # NPC services and quest turn-in are not mutually exclusive.
                 # Complete only ready quests explicitly targeting this verified
                 # NPC in the selected profile before opening class training.
+                hud.set(goal=f'Turn in ready quests at {trainer.name}',
+                        action='Checking journal and server quest state')
                 handed_in = turnin_ready_quests_at_npc(
                     profile=quest_profile, npc_name=trainer.name,
                     npc_id=trainer.entry, capture=cap, driver=driver, log=log)
@@ -380,9 +397,39 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         capture=cap, driver=driver, log=log)
                     if upgraded:
                         report['equipped_item_ids'] = tuple(upgraded)
+                hud.set(goal=f'Learn available Mage spells at {trainer.name}',
+                        action='Inspecting trainer services')
                 report['trained_spells'] = train_available_mage_spells(
                     npc_name=trainer.name, npc_id=trainer.entry,
                     capture=cap, driver=driver, log=log)
+                # An independent post-training snapshot makes the quest
+                # status visible even when a turn-in happened in an earlier
+                # run (and must NOT be submitted again). Only quests explicitly
+                # assigned to this NPC in the current profile are included.
+                trainer_quest_ids = {
+                    step.quest_id for step in quest_profile.steps
+                    if step.kind == 'turnin' and step.entry == trainer.entry
+                    and step.npc_name in ('', trainer.name)}
+                if trainer_quest_ids:
+                    hud.set(action='Rechecking quest journal and server history')
+                    post = cap()
+                    flags = dict(post.quest_completions)
+                    still_active = {q.quest_id for q in post.quests}
+                    confirmations = {
+                        str(qid): {
+                            'server_history_complete': flags.get(qid) is True,
+                            'still_in_journal': qid in still_active,
+                        } for qid in sorted(trainer_quest_ids)
+                        if qid in flags or qid in still_active or
+                        qid in handed_in}
+                    report['post_training_quest_verification'] = confirmations
+                    if any(not confirmations[str(qid)]['server_history_complete'] or
+                           confirmations[str(qid)]['still_in_journal']
+                           for qid in handed_in):
+                        raise LiveControlError(
+                            f'Quest hand-in contradicted by post-training '
+                            f'journal/history: {confirmations!r}')
+    hud.set(action='Workflow complete')
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
@@ -390,6 +437,8 @@ def _horde_next(args: argparse.Namespace) -> None:
     """Run a verified profile step; complete KillMob objectives and return to NPC."""
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
     from wotlkbuddy.horde.planner import plan_mage
+    from wotlkbuddy.live.status_hud import GoalActionHUD
+    import atexit
     from wotlkbuddy.horde.interaction import KeyboardQuestInput, pickup_planned_quest
     from wotlkbuddy.horde.turnin import turnin_profile_quest
     from wotlkbuddy.live.capture import capture_monitor
@@ -416,6 +465,16 @@ def _horde_next(args: argparse.Namespace) -> None:
                          known_completed_quests=completed)
     step = (profile.steps[decision.profile_step - 1]
             if 1 <= decision.profile_step <= len(profile.steps) else None)
+    goal_name = (step.name if step and step.name else
+                 f'Quest {decision.quest_id}' if decision.quest_id else 'Profile')
+    hud = GoalActionHUD(
+        goal=f'{decision.action.replace("_", " ").title()}: {goal_name}',
+        action='Checking profile action',
+        enabled=args.enable_input and not args.no_hud)
+    atexit.register(hud.close)
+    def progress(line):
+        print(line, file=sys.stderr, flush=True)
+        hud.note(line)
     print(json.dumps({'profile': profile.name, 'character_guid': snap.player.guid,
                       'next_action': decision.to_dict(),
                       'npc': (step.npc_name if step else None),
@@ -445,11 +504,13 @@ def _horde_next(args: argparse.Namespace) -> None:
         driver = KeyboardQuestInput(interact_key=args.interact_key)
         with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
                 NavigationProxy(python32, dll) as nav:
+            hud.set(goal=f'Complete quest: {goal_name}',
+                    action='Locating quest enemies')
             report = hunt_kill_objectives(
                 profile=profile, quest_id=decision.quest_id, pid=_pid,
                 capture=cap, driver=driver, nav=nav, spawns=db,
                 max_seconds=args.max_seconds, max_kills=args.max_kills,
-                log=lambda line: print(line, file=sys.stderr, flush=True),
+                log=progress,
             )
             print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
             if not report.objectives_complete:
@@ -457,19 +518,22 @@ def _horde_next(args: argparse.Namespace) -> None:
             # Continue in the *same attended session*: do not leave the
             # player stranded after the final confirmed quest objective.
             from wotlkbuddy.horde.return_turnin import return_and_turnin
+            hud.set(goal=f'Turn in quest: {goal_name}',
+                    action='Returning to quest giver')
             handin = return_and_turnin(
                 profile=profile, quest_id=decision.quest_id, pid=_pid,
                 capture=cap, driver=driver, nav=nav, spawns=db,
                 max_seconds=450,
-                log=lambda line: print(line, file=sys.stderr, flush=True))
+                log=progress)
             print('Quest turn-in:', json.dumps(
                 handin.to_dict(), indent=2, ensure_ascii=False))
             from wotlkbuddy.horde.gear import equip_mage_upgrades
             if cap().gear_scan_complete:
                 try:
+                    hud.set(goal='Equip quest reward if stronger',
+                            action='Checking Mage cloth')
                     upgraded = equip_mage_upgrades(capture=cap, driver=driver,
-                                                    log=lambda line: print(
-                                                        line, file=sys.stderr, flush=True))
+                                                    log=progress)
                     if upgraded:
                         print('Equipped upgrades:', list(upgraded))
                 except LiveControlError as exc:
@@ -482,7 +546,7 @@ def _horde_next(args: argparse.Namespace) -> None:
     if step is None or step.quest_id != decision.quest_id or not step.npc_name:
         raise ValueError('Next quest action is missing a verified profile NPC')
     driver = KeyboardQuestInput(interact_key=args.interact_key)
-    log = lambda line: print(line, file=sys.stderr, flush=True)
+    log = progress
     if decision.action == 'PICK_UP_QUEST':
         result = pickup_planned_quest(profile, capture=cap, driver=driver,
                   quest_id=decision.quest_id, expected_guid=snap.player.guid,
@@ -493,7 +557,8 @@ def _horde_next(args: argparse.Namespace) -> None:
         result = _execute_profile_return(
             profile=profile, quest_id=decision.quest_id, pid=_pid,
             capture=cap, driver=driver, nav_dll=args.nav_dll,
-            python32=args.python32, spawns_db=args.spawns_db)
+            python32=args.python32, spawns_db=args.spawns_db,
+            progress=progress)
         successful = result.status in ('turned_in', 'already_turned_in')
     else:
         result = turnin_profile_quest(profile, quest_id=decision.quest_id,
@@ -513,6 +578,8 @@ def _horde_return_turnin(args: argparse.Namespace) -> None:
     from wotlkbuddy.live.capture import capture_monitor
     from wotlkbuddy.live.world_position import verified_live_position
     from wotlkbuddy.live.control import LiveControlError
+    from wotlkbuddy.live.status_hud import GoalActionHUD
+    import atexit
     if not args.enable_input:
         raise ValueError('Return and turn-in require explicit --enable-input')
     if not 2 <= args.countdown <= 20:
@@ -530,11 +597,18 @@ def _horde_return_turnin(args: argparse.Namespace) -> None:
                                         level=snap.player.level, race='Undead')
     profile = load_horde_profile(chosen)
     driver = KeyboardQuestInput(interact_key=args.interact_key)
+    hud = GoalActionHUD(goal=f'Turn in quest {args.quest_id}',
+                        action='Navigating to quest giver',
+                        enabled=not args.no_hud)
+    atexit.register(hud.close)
+    def progress(line):
+        print(line, file=sys.stderr, flush=True)
+        hud.note(line)
     _execute_profile_return(
         profile=profile, quest_id=args.quest_id, pid=pid,
         capture=cap, driver=driver, nav_dll=args.nav_dll,
         python32=args.python32, spawns_db=args.spawns_db,
-        max_seconds=args.max_seconds)
+        max_seconds=args.max_seconds, progress=progress)
 
 
 def _horde_quest_363(args: argparse.Namespace) -> None:
@@ -1202,6 +1276,7 @@ def main(argv: list[str] | None = None) -> int:
     next_step.add_argument('--countdown', type=float, default=5)
     next_step.add_argument('--monitor', type=int, default=0)
     next_step.add_argument('--pid', type=int, help='WoW PID if multiple clients run')
+    next_step.add_argument('--no-hud', action='store_true')
     next_step.set_defaults(func=_horde_next)
     return_quest = sub.add_parser('horde-return-turnin',
                          help='Navigate to verified NPC and turn in one completed quest')
@@ -1216,6 +1291,7 @@ def main(argv: list[str] | None = None) -> int:
     return_quest.add_argument('--countdown', type=float, default=5)
     return_quest.add_argument('--monitor', type=int, default=0)
     return_quest.add_argument('--pid', type=int)
+    return_quest.add_argument('--no-hud', action='store_true')
     return_quest.set_defaults(func=_horde_return_turnin)
     progression = sub.add_parser('horde-progress',
                        help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
@@ -1231,6 +1307,8 @@ def main(argv: list[str] | None = None) -> int:
     progression.add_argument('--countdown', type=float, default=5)
     progression.add_argument('--monitor', type=int, default=0)
     progression.add_argument('--pid', type=int)
+    progression.add_argument('--no-hud', action='store_true',
+                             help='Disable click-through Goal/Action overlay')
     progression.set_defaults(func=_horde_progress)
     deliver = sub.add_parser('horde-quest-363',
                              help='Attended Rude Awakening delivery and verified hand-in')
