@@ -214,9 +214,17 @@ def sell_at_verified_merchant(
                 'Non-quest sellable items may be exhausted.')
         log(f'Vendor bag-space recovery complete: {before_free} -> '
             f'{s.resources.free_bag_slots} free slots; {len(sold)} stacks sold')
-        return VendorSaleReport(
+        result = VendorSaleReport(
             npc_name, npc_id, before_free, s.resources.free_bag_slots,
             tuple(sold), s.resources.money_copper - starting_money)
+        driver.chat('/click MerchantFrameCloseButton')
+        closed = _capture_fresh(
+            capture, s, guard, sleep=sleep, now=now)
+        if closed.merchant_open:
+            raise LiveControlError(
+                f'{npc_name}: merchant frame did not close after verified sales')
+        s = closed
+        return result
     finally:
         if s.merchant_open and driver.wow_is_foreground() and (
                 not driver.emergency_stop_requested()):
