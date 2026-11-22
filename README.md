@@ -12,7 +12,7 @@ an unattended quest bot.
 
 # WotLKBuddy
 
-**Version 0.9.0 — live telemetry and practical recorded-route navigation (quest interactions not yet implemented).**
+**Version 0.6.0 — live telemetry, bounded movement, quest progress, and heading calibration.**
 
 A Python-first framework for a future WotLK 3.3.5a (client build 12340)
 automation application. The architecture and feature targets are informed by
@@ -268,3 +268,15 @@ movement, or stopped telemetry. No route re-recording or addon update required.
 
 This fix is covered by simulated frame/turn regression tests; verify behavior
 in-game on an already walked route before relying on it.
+
+## v0.11 Horde Mage profile/character-management planner (read-only)
+
+Uses CopilotBuddy's separate `Likon69/Questing-profiles` repository (real
+Horde quest sequences, training NPCs and objective world coordinates).
+`horde-profile-audit` can resolve the upstream `Auto-Loader.xml` for an Undead,
+Orc, Troll or Blood Elf Mage level 1–60; `horde-mage-plan` produces a strictly
+read-only next-action proposal from live telemetry. The optional telemetry
+resource extension adds mana, free bag slots, lowest equipped durability,
+unspent talents, and class/race. No world-XYZ navigation, combat, NPC, loot,
+vendor, talent, or trainer execution is available yet. See
+[`docs/HORDE_MAGE_V011.md`](docs/HORDE_MAGE_V011.md) for usage and next steps.

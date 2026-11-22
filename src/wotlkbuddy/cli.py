@@ -96,6 +96,77 @@ def _inspect_quest_profile(args: argparse.Namespace) -> None:
         print(f'{i:02d}. {action}')
 
 
+def _horde_profile_audit(args: argparse.Namespace) -> None:
+    """Read-only audit of the real CopilotBuddy Horde leveling XML."""
+    from collections import Counter
+    from wotlkbuddy.horde.profile import (load_horde_profile, condition_value,
+                                         select_profile_from_loader)
+    if not 1 <= args.level <= 60:
+        raise ValueError('Horde Mage target level must be 1..60')
+    if not 1 <= args.limit <= 100:
+        raise ValueError('--limit must be 1..100')
+    chosen = (args.profile or select_profile_from_loader(args.profiles_root,
+                level=args.level, race=args.race))
+    profile = load_horde_profile(chosen)
+    kinds = Counter(step.kind for step in profile.steps)
+    mage_trainers = [v for v in profile.vendors if v.kind.lower() == 'train'
+                     and v.train_class.lower() == 'mage']
+    print(f'Profile: {profile.name}')
+    print(f'Quest definitions: {len(profile.quests)} | QuestOrder steps: '
+          f'{len(profile.steps)} | vendors: {len(profile.vendors)} | '
+          f'mage trainers: {len(mage_trainers)}')
+    print('Actions:', ', '.join(f'{name}={count}' for name, count in sorted(kinds.items())))
+    print('Unsupported actions:', ', '.join(profile.unsupported_tags) or 'none')
+    for vendor in mage_trainers[:10]:
+        pos = vendor.world_position
+        print(f'  Mage trainer: {vendor.name} (NPC {vendor.entry}) '
+              f'WORLD ({pos.x:g},{pos.y:g},{pos.z:g})')
+    shown = 0
+    for i, step in enumerate(profile.steps, 1):
+        evaluated = [condition_value(c, level=args.level, race=args.race)
+                     for c in step.conditions]
+        if False in evaluated:
+            continue
+        verdict = 'CONDITION UNKNOWN' if None in evaluated else (
+            'NEEDS ADAPTER' if not step.supported else 'READABLE')
+        print(f'  {i:03} {verdict}: {step.kind} '
+              f'quest={step.quest_id} {step.name or step.detail}')
+        shown += 1
+        if shown >= args.limit:
+            break
+    print('WORLD X/Y/Z in this source cannot be fed directly to live-follow map waypoints.')
+
+
+def _horde_mage_plan(args: argparse.Namespace) -> None:
+    """Read-only plan from currently visible WoW quest and status telemetry."""
+    from wotlkbuddy.horde.profile import (load_horde_profile, select_profile_from_loader)
+    from wotlkbuddy.horde.planner import plan_mage
+    from wotlkbuddy.live.capture import capture_monitor
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    print('Read-only Horde Mage planner. No movement or quest/combat actions.', file=sys.stderr)
+    print(f'Switch to WoW now; observing in {args.countdown:g}s.', file=sys.stderr)
+    time.sleep(args.countdown)
+    snapshot = capture_monitor(args.monitor)
+    if not 1 <= snapshot.player.level <= 60:
+        raise ValueError('Horde Mage planner currently supports levels 1..60')
+    chosen = (args.profile or select_profile_from_loader(args.profiles_root,
+                level=snapshot.player.level, race=args.race))
+    profile = load_horde_profile(chosen)
+    print(f'Profile selected: {profile.name}')
+    print(f'Observed character: {snapshot.player.name}, level {snapshot.player.level}, '
+          f'zone={snapshot.player.zone_name}')
+    if snapshot.resources is None:
+        print('No S resources record: mana, bags, durability, talents are UNKNOWN. '
+              'Install updated addon before trusting recovery planning.', file=sys.stderr)
+    decision = plan_mage(snapshot, profile, race=args.race,
+                         world_map_id=args.world_map_id)
+    print(json.dumps(decision.to_dict(), indent=2, ensure_ascii=False))
+    print('This is a plan only. WORLD-XYZ navigation, target interactions, '
+          'combat, inventory, trainer, talent UI and loot drivers are not yet wired.',
+          file=sys.stderr)
+
+
 def _list_wow(_args: argparse.Namespace) -> None:
     from wotlkbuddy.game.win32 import list_processes
 
@@ -409,6 +480,28 @@ def main(argv: list[str] | None = None) -> int:
     qprofile = sub.add_parser('quest-profile', help='Parse and validate quest actions')
     qprofile.add_argument('profile')
     qprofile.set_defaults(func=_inspect_quest_profile)
+    audit = sub.add_parser('horde-profile-audit',
+                           help='Inspect real CopilotBuddy Horde quest XML (offline)')
+    auditor = audit.add_mutually_exclusive_group(required=True)
+    auditor.add_argument('--profile')
+    auditor.add_argument('--profiles-root')
+    audit.add_argument('--race', choices=['Undead', 'Troll', 'Orc', 'BloodElf'],
+                       default='Undead')
+    audit.add_argument('--level', type=int, default=8)
+    audit.add_argument('--limit', type=int, default=15)
+    audit.set_defaults(func=_horde_profile_audit)
+    mageplan = sub.add_parser('horde-mage-plan',
+                             help='Read-only next-action plan for a live Horde Mage')
+    mp_source = mageplan.add_mutually_exclusive_group(required=True)
+    mp_source.add_argument('--profile')
+    mp_source.add_argument('--profiles-root')
+    mageplan.add_argument('--race', choices=['Undead', 'Troll', 'Orc', 'BloodElf'],
+                          default='Undead')
+    mageplan.add_argument('--world-map-id', type=int,
+                          help='Optional verified world map ID (NOT zone UI map index)')
+    mageplan.add_argument('--countdown', type=float, default=5)
+    mageplan.add_argument('--monitor', type=int, default=0)
+    mageplan.set_defaults(func=_horde_mage_plan)
     procs = sub.add_parser("processes", help="List local Wow.exe processes (Windows)")
     procs.set_defaults(func=_list_wow)
     profile = sub.add_parser("profile", help="Read and inspect a profile")
