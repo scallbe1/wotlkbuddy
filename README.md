@@ -236,3 +236,14 @@ maximum 0.01). This is **not** navmesh navigation: if the nearest recorded trail
 is farther away, the follower stops and prints its position rather than crossing
 unmapped ground. Only run on safe, verified terrain; it still cannot detect
 cliffs, obstacles or a path through unknown terrain.
+
+### v0.9.2: verify motion after input, not midway through it
+
+A live Darkshore route was falsely labelled "Character is stuck" even though
+Inka's coordinates changed. The WoW telemetry addon publishes around once
+every 0.5 seconds; a screenshot taken during a short input can be mistaken
+for the final state. Route movement now checks a frame published after key-up,
+uses a longer heading probe, and requires **three** consecutive unconfirmed
+forward actions before stopping. The failure is labelled "no movement
+confirmed" rather than asserting the character is physically stuck.
+Route traversal still requires attended, previously walked terrain.

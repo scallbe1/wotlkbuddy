@@ -338,20 +338,24 @@ def follow_route(
         else:
             turn_seconds += duration
         total_actions += 1
-        # Addon updates ~every 0.5s. Wait for a new snapshot rather than
-        # guessing based on a stale map coordinate.
+        # The addon publishes every ~0.5s. A newly sequenced frame taken
+        # immediately after key-up can still represent the middle of the
+        # keypress, not its final position. Wait a complete publish cycle
+        # AFTER key release before accepting a position measurement.
+        # This avoids mistaking a partially sampled movement for a collision.
+        wait(0.55)
         updated = None
-        for _ in range(8):
+        for _ in range(12):
             if stop() or not keyboard.wow_is_foreground():
                 raise LiveControlError('Escape or focus lost after input')
             candidate = capture()
+            check(candidate)
             if candidate.sequence != before.sequence:
-                check(candidate)
                 updated = candidate
                 break
             wait(0.15)
         if updated is None:
-            raise LiveControlError('Telemetry stopped updating')
+            raise LiveControlError('Telemetry did not publish after the key was released')
         dx = updated.player.map_x - before.player.map_x
         dy = updated.player.map_y - before.player.map_y
         current = updated
@@ -374,18 +378,29 @@ def follow_route(
                 # Measure actual direction from a brief movement if unknown or
                 # after rotation; otherwise use the previous measured heading.
                 if bearing is None:
-                    dx, dy = act('forward', 0.25)
+                    # A full-length heading probe is more reliable than a
+                    # 0.25s tap against the addon's 0.5s update interval.
+                    probe_seconds = min(0.45, max_step_seconds)
+                    dx, dy = act('forward', probe_seconds)
                     total_moves += 1
                     moves_this_waypoint += 1
                     displacement = hypot(dx, dy)
-                    if displacement < 0.000025:
-                        raise LiveControlError('Character is stuck (no forward movement)')
-                    bearing = degrees(atan2(dy, dx))
-                    speed = displacement / 0.25
                     last_distance = hypot(destination.x-current.player.map_x,
                                           destination.y-current.player.map_y)
                     if last_distance <= arrival_radius:
                         break
+                    if displacement < 0.000025:
+                        stuck_count += 1
+                        if stuck_count >= 3:
+                            raise LiveControlError(
+                                'No movement confirmed after three forward attempts; '
+                                'possible obstruction or delayed position telemetry'
+                            )
+                        notify(f'  Forward measurement inconclusive ({stuck_count}/3); retrying')
+                        continue
+                    stuck_count = 0
+                    bearing = degrees(atan2(dy, dx))
+                    speed = displacement / probe_seconds
                 desired = degrees(atan2(destination.y-current.player.map_y,
                                         destination.x-current.player.map_x))
                 difference = shortest_angle_difference(bearing, desired)
@@ -399,8 +414,9 @@ def follow_route(
                     if hypot(drift_x, drift_y) > 0.00035:
                         raise LiveControlError('Unexpected translation during turn')
                     bearing = None
-                    notify(f'  Turn {"right" if difference > 0 else "left"} '
-                           f'({abs(difference):.0f}° requested)')
+                    notify(f'  Turning {"right" if difference > 0 else "left"} '
+                           f'(heading difference {abs(difference):.0f}°, '
+                           f'key held {duration:.2f}s)')
                     continue
                 # Walk normally for about 0.5..1 second, not 0.12s micro-pulses.
                 # Taper near arrival to avoid walking past the point.
@@ -414,8 +430,11 @@ def follow_route(
                 displacement = hypot(dx, dy)
                 if displacement < 0.000025:
                     stuck_count += 1
-                    if stuck_count >= 2:
-                        raise LiveControlError('Character stuck: forward key produced no progress')
+                    if stuck_count >= 3:
+                        raise LiveControlError(
+                            'No movement confirmed after three forward attempts; '
+                            'possible obstruction or delayed position telemetry'
+                        )
                 else:
                     stuck_count = 0
                     bearing = degrees(atan2(dy, dx))
