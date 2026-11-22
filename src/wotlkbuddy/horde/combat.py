@@ -483,10 +483,12 @@ def hunt_kill_objectives(
         s = buffs(s)
         s = rest(s)  # Buffing costs mana; do not start a pull while depleted.
         if s.player.in_combat:
-            # Only engage an aggressor if its observed template ID is expected.
-            if not s.combat_target or s.combat_target.entry_id != expected:
+            # Only engage aggressors from the explicitly authorized source set.
+            if (not s.combat_target or
+                    s.combat_target.entry_id not in allowed_sources):
                 raise LiveControlError('Attacked by non-objective mob; unsupported aggro fight')
-        elif (s.combat_target and s.combat_target.entry_id != expected):
+        elif (s.combat_target and
+              s.combat_target.entry_id not in allowed_sources):
             driver.chat('/cleartarget')
             s = fresh(s)
 
@@ -495,7 +497,8 @@ def hunt_kill_objectives(
         if not s.player.in_combat:
             visited: set[str] = set()
             for _ in range(7):
-                if (s.combat_target and s.combat_target.entry_id == expected and
+                if (s.combat_target and
+                        s.combat_target.entry_id in allowed_sources and
                         s.combat_target.attackable and not s.combat_target.dead):
                     break
                 driver.chat('/targetenemy')
@@ -505,7 +508,8 @@ def hunt_kill_objectives(
                 visited.add(s.player.target_guid)
 
         t = s.combat_target
-        if t and t.entry_id == expected and t.attackable and not t.dead:
+        if t and t.entry_id in allowed_sources and t.attackable and not t.dead:
+            expected = t.entry_id
             corpse_xyz = None
             try:
                 corpse_xyz = target_xyz(s)
@@ -529,7 +533,9 @@ def hunt_kill_objectives(
                         raise LiveControlError('Unrelated aggro occurred while approaching target')
                 else:
                     log('No live NPC XYZ; will use nearby profile-filtered spawn below')
-            if (s.combat_target and s.combat_target.entry_id == expected and
+            if (s.combat_target and
+                    s.combat_target.entry_id in allowed_sources and
+                    s.combat_target.entry_id == expected and
                     s.combat_target.attackable and not s.combat_target.dead and
                     s.combat_target.fireball_in_range is True):
                 before = qlog(s)
@@ -550,17 +556,27 @@ def hunt_kill_objectives(
                     log('Quest journal objective progress changed')
                 else:
                     no_credit += 1
-                    if no_credit >= 2:
+                    if collect_items:
+                        log('No item-collection credit from this corpse; '
+                            'checking another authorized source (bounded kill limit)')
+                    elif no_credit >= 2:
                         raise LiveControlError('Two verified kills without quest progress; stop')
                 continue
 
         # No eligible target ready. Locate next *static* spawn near profile
         # hotspots and move there; do not pick mobs from the whole continent.
         _pid, world = world_position(s)
-        nearby = nearest_objective_spawns(spawns, entry=expected, map_id=world.map_id,
-                                          origin=world.position, hotspots=spec.hotspots)
+        nearby = []
+        for source_entry in allowed_sources:
+            nearby.extend(nearest_objective_spawns(
+                spawns, entry=source_entry, map_id=world.map_id,
+                origin=world.position, hotspots=spec.hotspots))
+        nearby.sort(key=lambda p: p.position.distance_to(world.position))
         if not nearby:
-            raise LiveControlError(f'No validated local spawn for objective mob {expected}')
+            raise LiveControlError(
+                f'No verified nearby creature spawns for XML sources '
+                f'{allowed_sources} of item {spec.entry}' if collect_items
+                else f'No validated local spawn for objective mob {expected}')
         # Limit repeat failures at one spawn. Respawns are not immediate.
         places = [(p, (round(p.x),round(p.y),round(p.z))) for p in nearby]
         goal = next((p for p,key in places if recently_visited.get(key,0)<2),None)
@@ -605,7 +621,7 @@ def hunt_kill_objectives(
                 ) from exc
             continue
         if s.player.in_combat and (s.combat_target is None or
-                s.combat_target.entry_id != expected):
+                s.combat_target.entry_id not in allowed_sources):
             raise LiveControlError('Attacked by non-objective mob while traveling')
-        log(f'At candidate spawn for {expected}; will recheck targets')
+        log(f'At candidate spawn for {goal.entry}; will recheck targets')
     raise LiveControlError('Bounded spawn-search iteration limit reached')
