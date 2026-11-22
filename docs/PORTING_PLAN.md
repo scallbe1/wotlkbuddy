@@ -20,7 +20,7 @@ new Python tests for each subsystem before connecting it to the live client.
 | `Styx/Logic/Profiles/` | `profiles/honorbuddy.py` | XML metadata/hotspots only |
 | `Tripper/Navigation/NativeMethods.cs` | `navigation/detour.py`, `worker.py`, `proxy.py` | Partial bindings + x86 IPC bridge, unverified on Windows |
 | `Tripper/Navigation/Navigator.cs` | `navigation/` | Not started: navmesh state and movement logic |
-| `Bots/Quest/` | `bots/` | Not started |
+| `Bots/Quest/` | `bots/quest.py`, `profiles/quest.py` | QuestOrder subset working in offline simulation; no live actions |
 | `Bots/DungeonBuddy/` | `bots/` | Not started |
 | `Bots/BGBuddy/` | `bots/` | Not started |
 | `Bots/Gatherbuddy/` | `bots/` | Not started |
@@ -31,7 +31,7 @@ new Python tests for each subsystem before connecting it to the live client.
 
 ## Milestones
 
-1. **M0 — foundation (this version)**: package, documented interfaces,
+1. **M0 — foundation (completed)**: package, documented interfaces,
    deterministic simulator, behavior tree, minimal grind bot, limited XML
    parser, basic Win32 process memory, Detour bindings, CI unit tests.
 2. **M1 — observable client**: build-12340 verification, reliable process
@@ -74,3 +74,33 @@ new Python tests for each subsystem before connecting it to the live client.
 - Added end-to-end simulator scenario and automated tests.
 - Not a live game bot. Integration requirements are detailed in
   [QUESTBOT.md](QUESTBOT.md).
+
+## v0.4.0 — live observation and manual movement probe
+
+- The Lua addon and Python screen decoder have been validated against one
+  real WoW 3.3.5a client; 35 valid frames were observed in 30 seconds, including
+  actual quest objective progress.
+- `live-status` summarizes quest progress without supplying unknown creature
+  entry IDs or pretending map percentages are 3D coordinates.
+- `live-probe` can issue a single, explicitly armed and bounded (<=0.30s) WASD
+  keypress to the **foreground Wow.exe process only**, comparing pre/post
+  telemetry and attempting key release on interruption. It is intentionally
+  separate from the QuestBot. This movement probe **has not yet been verified
+  against the user's running client**.
+- The next validation gate is a single safe forward movement pulse. Then build
+  a measured heading/movement model and 3D/object sensing before autonomous
+  navigation. Add no automatic quest execution until those are verified.
+
+
+## v0.5 integration checkpoint (2026-11-21)
+
+- Verified one real short forward pulse on a level-12 Darkshore character,
+  with a measurable position change in normalized zone map coordinates.
+- Implemented bounded, observer-driven **manual movement experiments** with
+  a strict pulse/time budget, validated state between pulses, stall detection,
+  focus and combat guards, and keyboard stop support.
+- Implemented read-only, sampled observations of manually walked routes and
+  quest-log changes without inferring quest completion history.
+- **Not yet complete:** a world-coordinate source, camera/heading estimation,
+  a verified 3D navmesh bridge, combat routines, or NPC interaction actions.
+  Do not enable general quest profiles with the current input primitives.
