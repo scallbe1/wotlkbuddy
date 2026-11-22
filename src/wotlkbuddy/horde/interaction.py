@@ -82,6 +82,7 @@ class KeyboardQuestInput:
     def chat(self, command: str) -> None:
         if (command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/run GetQuestReward(0)') and
                 not re.fullmatch(r'/run Select(?:GossipActiveQuest|ActiveQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and
+                not re.fullmatch(r'/click (?:GossipTitleButton|QuestTitleButton)([1-9]|[12][0-9]|3[0-2])', command) and
                 not (command.startswith('/targetexact ') and
                      _NPC_NAME.fullmatch(command[len('/targetexact '):]))):
             raise ValueError('Only verified quest-targeting and fixed quest API commands are allowed')
