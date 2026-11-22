@@ -355,6 +355,7 @@ def _follow_map_route(args: argparse.Namespace) -> None:
         stop_requested=kb.emergency_stop_requested,
         arrival_radius=args.arrival_radius, turn_rate=args.turn_rate,
         max_step_seconds=args.step_seconds, max_seconds=args.max_seconds,
+        max_join_distance=args.max_join_distance, resume=args.resume,
         progress=lambda message: print(message, file=sys.stderr, flush=True),
     )
     print(json.dumps(report.to_dict(), ensure_ascii=False))
@@ -514,10 +515,14 @@ def main(argv: list[str] | None = None) -> int:
     follow.add_argument('--enable-input', action='store_true',
                         help='Explicit opt-in to send movement keys')
     follow.add_argument('--reverse', action='store_true', help='Follow recorded route backwards')
+    follow.add_argument('--resume', action='store_true',
+                        help='Join nearest recorded trail segment and continue (skip return to start)')
+    follow.add_argument('--max-join-distance', type=float, default=0.006,
+                        help='Max short off-path link to an existing trail segment (0.0005..0.01)')
     follow.add_argument('--arrival-radius', type=float, default=0.00045)
     follow.add_argument('--turn-rate', type=float, default=180.4)
     follow.add_argument('--step-seconds', type=float, default=0.8)
-    follow.add_argument('--max-seconds', type=float, default=120)
+    follow.add_argument('--max-seconds', type=float, default=300)
     follow.add_argument('--countdown', type=float, default=5)
     follow.add_argument('--monitor', type=int, default=0)
     follow.set_defaults(func=_follow_map_route)

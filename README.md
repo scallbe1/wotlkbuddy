@@ -218,3 +218,32 @@ provide collision avoidance, long-distance quest travel, or unattended play.
 **v0.8.1:** Adaptive short forward steps near a waypoint, one extra bounded
 turn/step per leg, and a cap of 1.5 seconds of key-down per leg. A failed first
 leg still prevents the next leg. Live validation pending.
+
+## v0.9.1 — join a recorded route without remembering its start
+
+The follower locates the closest point along the **entire recorded path**, not
+just its first coordinate. From nearby it returns to the saved starting point
+by retracing recorded waypoints and then follows the route normally:
+
+```powershell
+py -3.12 -m wotlkbuddy live-follow --route darkshore-route.json --enable-input --countdown 5
+```
+
+For resuming a partially completed route instead of returning to the start, use
+`--resume`. The direct link from your current position to the nearest recorded
+segment is bounded by `--max-join-distance` (default 0.006 normalized map units,
+maximum 0.01). This is **not** navmesh navigation: if the nearest recorded trail
+is farther away, the follower stops and prints its position rather than crossing
+unmapped ground. Only run on safe, verified terrain; it still cannot detect
+cliffs, obstacles or a path through unknown terrain.
+
+### v0.9.2: verify motion after input, not midway through it
+
+A live Darkshore route was falsely labelled "Character is stuck" even though
+Inka's coordinates changed. The WoW telemetry addon publishes around once
+every 0.5 seconds; a screenshot taken during a short input can be mistaken
+for the final state. Route movement now checks a frame published after key-up,
+uses a longer heading probe, and requires **three** consecutive unconfirmed
+forward actions before stopping. The failure is labelled "no movement
+confirmed" rather than asserting the character is physically stuck.
+Route traversal still requires attended, previously walked terrain.

@@ -10,7 +10,8 @@ import unittest
 from wotlkbuddy.live.codec import ClientTelemetry, PlayerRecord
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.travel import (
-    MapRoute, MapWaypoint, follow_route, parse_route, route_from_trail,
+    MapRoute, MapWaypoint, closest_route_segment, plan_route_from_position,
+    follow_route, parse_route, route_from_trail,
 )
 
 
@@ -71,6 +72,47 @@ class FakeGame:
                          self.in_combat, False, self.x, self.y,
                          1, 12, 'Darkshore', '', '')
         return ClientTelemetry(self.seq, p, ())
+
+
+class HalfSecondTelemetryGame(FakeGame):
+    """Lua telemetry is published only every 0.5 seconds, not per capture."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._publish_at = 0.5
+        self._visible_x = self.x
+        self._visible_y = self.y
+
+    def capture(self):
+        if self.time + 1e-9 >= self._publish_at:
+            ticks = 1 + int((self.time - self._publish_at + 1e-9) // 0.5)
+            self._publish_at += ticks * 0.5
+            self.seq = (self.seq + ticks) % 256
+            self._visible_x, self._visible_y = self.x, self.y
+        p = PlayerRecord('Inka', 'guid-1', 12, 217, 217,
+                         self.in_combat, False, self._visible_x, self._visible_y,
+                         1, 12, 'Darkshore', '', '')
+        return ClientTelemetry(self.seq, p, ())
+
+
+class IntermittentForwardGame(HalfSecondTelemetryGame):
+    """One forward command produces no observable displacement."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.forward_attempts = 0
+
+    def key_up(self, code):
+        if code == 0x11:
+            self.forward_attempts += 1
+            if self.forward_attempts == 2:
+                saved_speed = self.speed
+                self.speed = 0
+                try:
+                    return super().key_up(code)
+                finally:
+                    self.speed = saved_speed
+        return super().key_up(code)
 
 
 def mkroute(*points):
@@ -198,11 +240,95 @@ class LiveFollowTests(unittest.TestCase):
                                (MapWaypoint(.30, .42), MapWaypoint(.31, .42))))
         self.assertEqual(g.events, [])
 
-    def test_stall_stops_after_one_probe(self):
-        g = FakeGame(speed=0)
+    def test_nearest_point_on_segment_not_just_start(self):
+        route = mkroute((0.380, 0.420), (0.385, 0.420))
+        i, nearest, dist = closest_route_segment(route, 0.382, 0.421)
+        self.assertEqual(i, 1)  # second segment, from .380 to .385
+        self.assertAlmostEqual(nearest.x, 0.382)
+        self.assertAlmostEqual(nearest.y, 0.420)
+        self.assertAlmostEqual(dist, 0.001)
+
+    def test_replay_from_near_finish_automatically_returns_to_start(self):
+        g = FakeGame(heading=180)
+        g.x = 0.381
+        route = mkroute((0.378, 0.420), (0.381, 0.420))
+        result = follow(g, route, max_seconds=300)
+        self.assertEqual(result.stopped_reason, 'complete', result)
+        self.assertTrue(result.returned_to_start)
+        self.assertGreater(result.waypoints_reached, 2)
+        self.assertAlmostEqual(g.x, 0.381, delta=0.00045)
+        self.assertGreater(result.forward_seconds, 2)
+
+    def test_join_middle_and_return_to_start(self):
+        g = FakeGame(heading=180)
+        g.x = 0.379
+        route = mkroute((0.378, 0.420), (0.381, 0.420))
+        result = follow(g, route, max_seconds=300)
+        self.assertEqual(result.stopped_reason, 'complete', result)
+        self.assertTrue(result.returned_to_start)
+        self.assertGreaterEqual(result.join_segment, 2)
+        self.assertGreater(result.waypoints_reached, 2)
+
+    def test_resume_at_middle_skips_return_to_start(self):
+        g = FakeGame(heading=0)
+        g.x = 0.379
+        route = mkroute((0.378, 0.420), (0.381, 0.420))
+        result = follow(g, route, resume=True)
+        self.assertEqual(result.stopped_reason, 'complete', result)
+        self.assertFalse(result.returned_to_start)
+        self.assertEqual(result.waypoints_reached, 1)
+        self.assertLess(result.forward_seconds, 5)
+
+    def test_near_route_segment_but_far_start_allowed(self):
+        g = FakeGame(heading=0)
+        g.x = 0.385
+        route = mkroute((0.378, 0.420), (0.382, 0.420), (0.387, 0.420))
+        result = follow(g, route, resume=True, max_seconds=300)
+        self.assertEqual(result.stopped_reason, 'complete', result)
+        self.assertGreater(result.join_segment, 1)
+        self.assertFalse(result.returned_to_start)
+
+    def test_far_from_entire_route_has_helpful_error_and_no_input(self):
+        g = FakeGame()
+        with self.assertRaisesRegex(LiveControlError, 'closest map position'):
+            follow(g, MapRoute('Darkshore', 1, 12,
+                                   (MapWaypoint(.40, .42), MapWaypoint(.405, .42))))
+        self.assertEqual(g.events, [])
+
+    def test_off_path_join_limit_is_adjustable_and_bounded(self):
+        route = mkroute((0.378, 0.42), (0.381, 0.42))
+        with self.assertRaisesRegex(ValueError, 'max_join_distance'):
+            plan_route_from_position(route, .38, .43, arrival_radius=.00045,
+                                     max_join_distance=.02)
+
+    def test_no_displacement_requires_three_post_input_samples(self):
+        g = HalfSecondTelemetryGame(speed=0)
         report = follow(g, mkroute((.380, .42)))
-        self.assertIn('stuck', report.stopped_reason)
-        self.assertEqual(report.moves, 1)
+        self.assertIn('No movement confirmed', report.stopped_reason)
+        self.assertEqual(report.moves, 3)
+        self.assertIsNone(g.key)
+
+    def test_half_second_published_frames_after_full_turn(self):
+        g = HalfSecondTelemetryGame(heading=180)
+        report = follow(g, mkroute((.381, .42)))
+        self.assertEqual(report.stopped_reason, 'complete', report)
+        self.assertEqual(report.waypoints_reached, 1)
+        self.assertGreater(report.turns, 0)
+        self.assertIsNone(g.key)
+
+    def test_single_inconclusive_forward_after_turn_does_not_claim_stuck(self):
+        g = IntermittentForwardGame(heading=180)
+        report = follow(g, mkroute((.381, .42)))
+        self.assertNotIn('No movement confirmed', report.stopped_reason)
+        self.assertGreaterEqual(report.moves, 3)
+        self.assertIsNone(g.key)
+
+    def test_post_keyup_wait_retains_emergency_stop(self):
+        g = HalfSecondTelemetryGame()
+        g.interrupt_at = 0.5
+        report = follow(g, mkroute((.381, .42)))
+        self.assertIn('Escape', report.stopped_reason)
+        self.assertIsNone(g.key)
 
 
 if __name__ == '__main__':
