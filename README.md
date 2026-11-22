@@ -202,3 +202,7 @@ relative map waypoints. The second leg executes **only if** the first reaches
 its specified map-coordinate tolerance; any failure ends the run. For details
 and a test example see [`docs/ROUTE_V08.md`](docs/ROUTE_V08.md). This does not
 provide collision avoidance, long-distance quest travel, or unattended play.
+
+**v0.8.1:** Adaptive short forward steps near a waypoint, one extra bounded
+turn/step per leg, and a cap of 1.5 seconds of key-down per leg. A failed first
+leg still prevents the next leg. Live validation pending.

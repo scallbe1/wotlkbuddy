@@ -71,8 +71,8 @@ def guarded_route(
     """Execute at most two short legs, stopping on any non-successful leg.
 
     Each leg revalidates WoW focus, player, combat, map and live feedback.
-    Key-down budget is <= 2.1s total by construction (5 forward and 3 turn
-    pulses per leg). A route is never automatically retried or rerouted.
+    Each leg is bounded to <= 1.5s of key-down time (6 forward and
+    4 turn pulses), for <= 3.0s across both legs. No automatic retries or rerouting.
     """
     offsets = validate_legs(legs)
     if not keyboard.wow_is_foreground():
@@ -115,8 +115,8 @@ def guarded_route(
         report = guarded_waypoint(
             offset_x=dx, offset_y=dy, capture=capture, keyboard=keyboard,
             forward_duration=forward_duration, tolerance=tolerance,
-            turn_rate_deg_s=turn_rate_deg_s, max_forward_pulses=5,
-            max_turn_pulses=3, stop_requested=stop, sleep=sleep, now=now,
+            turn_rate_deg_s=turn_rate_deg_s, max_forward_pulses=6,
+            max_turn_pulses=4, stop_requested=stop, sleep=sleep, now=now,
         )
         results.append(report)
         expected_x, expected_y = report.end_map_x, report.end_map_y

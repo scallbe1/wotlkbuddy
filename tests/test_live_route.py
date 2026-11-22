@@ -24,6 +24,7 @@ class FakeGame:
         self.pressed = None
         self.held = 0.0
         self.events = []
+        self.forward_durations = []
         self.on_sleep = None
 
     def wow_is_foreground(self):
@@ -42,6 +43,7 @@ class FakeGame:
         assert self.pressed == code
         self.events.append(('up', code))
         if code == 0x11:
+            self.forward_durations.append(self.held)
             distance = 0.0017 * self.held
             self.x += distance * math.cos(math.radians(self.heading))
             self.y += distance * math.sin(math.radians(self.heading))
@@ -80,9 +82,34 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(len(report.legs), 2)
         self.assertTrue(all(leg.within_tolerance for leg in report.legs))
         self.assertGreater(report.end_map_y, report.start_map_y + 0.0005)
-        self.assertLessEqual(report.total_key_down_seconds, 2.1)
+        self.assertLessEqual(report.total_key_down_seconds, 3.0)
         self.assertEqual(len(game.events), 2 * (report.forward_pulses + report.turn_pulses))
         self.assertTrue(all(x[0] == 'up' for x in game.events[1::2]))
+
+    def test_diagonal_approach_with_slower_turns_and_adaptive_steps(self):
+        # A diagonal approach similar to a real Darkshore telemetry trace:
+        # a .12s forward step covers ~.0002 map units. With only 3 turns
+        # and full-size steps, the previous controller missed this waypoint.
+        game = FakeGame(heading=90, rate=130)
+        report = run(game, legs=((-0.0004, 0.0005), (-0.0004, 0.0005)))
+        self.assertEqual(report.stopped_reason, 'complete')
+        self.assertEqual(report.legs_completed, 2)
+        self.assertTrue(all(leg.final_distance <= 0.00013 for leg in report.legs))
+        self.assertTrue(any(d < 0.12 - 1e-9 for d in game.forward_durations))
+        self.assertTrue(all(0.08 - 1e-9 <= d <= 0.12 + 1e-9
+                            for d in game.forward_durations))
+        self.assertTrue(all(leg.forward_pulses <= 6 and leg.turn_pulses <= 4
+                            and leg.total_key_down_seconds <= 1.5
+                            for leg in report.legs))
+
+    def test_hard_budgets_still_stop_a_poor_approach(self):
+        game = FakeGame(heading=70, rate=110)
+        report = run(game, legs=((-0.0004, 0.0005), (-0.0004, 0.0005)))
+        self.assertEqual(report.legs_completed, 0)
+        self.assertEqual(len(report.legs), 1)
+        self.assertLessEqual(report.forward_pulses, 6)
+        self.assertLessEqual(report.turn_pulses, 4)
+        self.assertNotEqual(report.stopped_reason, 'complete')
 
     def test_one_leg_is_supported(self):
         game = FakeGame()
