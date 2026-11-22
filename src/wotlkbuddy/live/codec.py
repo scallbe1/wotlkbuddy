@@ -337,7 +337,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 return None if value == '-1' else value == '1'
             buffs = MageBuffState(known(parts[1]), parts[2] == '1',
                                   known(parts[3]), parts[4] == '1', known(parts[5]))
-        elif parts[0] == 'C':
+        elif parts[0] == 'J':
             if (len(parts) != 3 or tracked_item_id is not None
                     or not parts[1].isdigit() or not parts[2].isdigit()):
                 raise TelemetryError('Invalid or repeated quest item tracking')
