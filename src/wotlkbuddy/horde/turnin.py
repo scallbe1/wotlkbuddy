@@ -1,0 +1,180 @@
+"""Guarded first (WotLK #363) quest turn-in using the observed 3.3.5 quest UI.
+
+No assumption that a quest disappearing from the journal proves completion.
+Never uses unverified NPC selection or reward choices. Does not navigate.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, asdict
+from math import isfinite
+from time import monotonic, sleep as real_sleep
+from typing import Callable
+
+from wotlkbuddy.horde.interaction import QuestInput
+from wotlkbuddy.horde.profile import HordeProfile
+from wotlkbuddy.live.codec import ClientTelemetry
+from wotlkbuddy.live.control import LiveControlError
+
+
+@dataclass(frozen=True)
+class QuestTurninReport:
+    character: str
+    quest_id: int
+    npc_name: str
+    npc_id: int
+    status: str
+    explanation: str
+    target_confirmed: bool = False
+    dialog_confirmed: bool = False
+    reward_submitted: bool = False
+    history_confirmed: bool = False
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def turnin_rude_awakening(
+    profile: HordeProfile, *, capture: Callable[[], ClientTelemetry],
+    driver: QuestInput, character: str = 'Aarr', timeout: float = 8.0,
+    sleep: Callable[[float], None] = real_sleep,
+    now: Callable[[], float] = monotonic,
+    progress: Callable[[str], None] | None = None,
+) -> QuestTurninReport:
+    """Verify, open, and turn in *one* quest. NPC must be within interact range.
+
+    3.3.5 QuestFrame: progress -> CompleteQuest() -> reward -> GetQuestReward(0).
+    Only a no-choice and no-payment reward may be auto-submitted. A server
+    completion-history flag is required to report success.
+    """
+    if not isfinite(timeout) or not 2 <= timeout <= 20:
+        raise ValueError('timeout must be 2..20 seconds')
+    notify = progress or (lambda _: None)
+    quest_id, expected_title = 363, 'Rude Awakening'
+    step = next((s for s in profile.steps if s.kind == 'turnin' and
+                 s.quest_id == quest_id and s.npc_name), None)
+    if step is None or step.entry != 1569 or step.npc_name != 'Shadow Priest Sarvis':
+        raise LiveControlError('Unverified #363 turn-in NPC in Horde quest profile')
+    npc_name, npc_id = step.npc_name, step.entry
+    state = capture()
+    player = state.player
+    if (state.truncated or player.name != character or player.dead or
+            player.in_combat or not player.guid):
+        raise LiveControlError('Wrong character, death, combat, or truncated telemetry')
+    if state.resources is None or state.resources.class_token.upper() != 'MAGE' or \
+            state.resources.race_token.lower() not in ('scourge', 'undead'):
+        raise LiveControlError('Verified Undead Mage telemetry required')
+    if state.dialog is None:
+        raise LiveControlError('Quest UI telemetry missing; reinstall updated addon')
+
+    def report(status: str, explanation: str, *, target=False, dialog=False,
+               submitted=False, history=False) -> QuestTurninReport:
+        return QuestTurninReport(character, quest_id, npc_name, npc_id, status,
+                                 explanation, target, dialog, submitted, history)
+
+    def guard() -> None:
+        if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+            raise LiveControlError('Escape or WoW lost foreground focus')
+
+    def valid(s: ClientTelemetry) -> bool:
+        return (s.player.guid == player.guid and s.player.name == player.name and
+                not s.truncated and not s.player.dead and not s.player.in_combat and
+                s.dialog is not None)
+
+    def history(s: ClientTelemetry) -> bool | None:
+        return dict(s.quest_completions).get(quest_id)
+
+    def active(s: ClientTelemetry) -> bool:
+        return any(q.quest_id == quest_id for q in s.quests)
+
+    if history(state) is True:
+        return report('already_turned_in', 'Completion history confirms quest 363')
+    q = next((q for q in state.quests if q.quest_id == quest_id), None)
+    if q is None:
+        return report('quest_not_in_journal',
+                      'Quest 363 not active; absent quest alone does not confirm turn-in')
+    if q.title != expected_title:
+        return report('quest_title_mismatch', 'Quest journal title does not match #363')
+    if q.objectives and not q.complete:
+        return report('objectives_incomplete', 'Quest objectives not all finished')
+    last = state
+
+    def wait_for(pred: Callable[[ClientTelemetry], bool]) -> ClientTelemetry | None:
+        nonlocal last
+        deadline = now() + timeout
+        while now() < deadline:
+            guard()
+            sleep(0.15)
+            try:
+                next_state = capture()
+            except ValueError:
+                continue
+            if next_state.sequence == last.sequence:
+                continue
+            if not valid(next_state):
+                raise LiveControlError('Player identity, combat or telemetry changed')
+            last = next_state
+            if pred(next_state):
+                return next_state
+        return None
+
+    def dialog_ok(s: ClientTelemetry, kind: str) -> bool:
+        d = s.dialog
+        return (d is not None and d.kind == kind and
+                s.player.target_name == npc_name and
+                (d.quest_id == quest_id or
+                 (d.quest_id == 0 and d.title == expected_title)) and
+                (not d.title or d.title == expected_title))
+
+    guard()
+    if state.player.target_name != npc_name:
+        notify('Targeting Shadow Priest Sarvis (1569)')
+        driver.chat('/targetexact ' + npc_name)
+        if wait_for(lambda s: s.player.target_name == npc_name) is None:
+            return report('npc_not_targeted', 'Cannot target Sarvis; move closer')
+
+    guard()
+    if not any(dialog_ok(last, kind) for kind in ('progress', 'reward')):
+        notify('Interacting with Shadow Priest Sarvis')
+        driver.interact()
+        observed = wait_for(lambda s: s.dialog is not None and s.dialog.kind != 'none')
+        if observed is None:
+            return report('npc_out_of_range', 'No dialog; NPC may not be within range', target=True)
+
+    if dialog_ok(last, 'progress'):
+        if wait_for(lambda s: dialog_ok(s, 'progress')) is None:
+            return report('dialog_unverified', 'Quest progress panel not stable', target=True)
+        notify('Verified Rude Awakening progress panel; requesting completion')
+        guard()
+        driver.chat('/run CompleteQuest()')
+        if wait_for(lambda s: dialog_ok(s, 'reward')) is None:
+            return report('reward_not_open', 'CompleteQuest did not open reward panel',
+                          target=True, dialog=True)
+    elif not dialog_ok(last, 'reward'):
+        description = (f'Observed {last.dialog.kind} {last.dialog.quest_id} '
+                       f'title={last.dialog.title!r}') if last.dialog else 'No dialog'
+        return report('dialog_unverified', description, target=True)
+
+    # Check a second telemetry frame. This also verifies no menu or target swap.
+    reward = wait_for(lambda s: dialog_ok(s, 'reward'))
+    if reward is None:
+        return report('reward_unverified', 'Reward panel did not remain stable', target=True)
+    dialog = reward.dialog
+    assert dialog is not None
+    if dialog.reward_choices != 0 or dialog.required_money != 0:
+        return report('reward_requires_choice_or_unknown',
+                      f'Reward choices={dialog.reward_choices}, required money={dialog.required_money}; '
+                      'no automatic reward selection', target=True, dialog=True)
+    if not active(reward):
+        return report('quest_missing_before_reward',
+                      'Quest disappeared before reward submission', target=True, dialog=True)
+    guard()
+    notify('Reward panel verified: zero choices and zero required money; submitting reward')
+    driver.chat('/run GetQuestReward(0)')
+    confirmed = wait_for(lambda s: history(s) is True and not active(s))
+    if confirmed is not None:
+        return report('turned_in', 'Quest 363 confirmed in server completion history',
+                      target=True, dialog=True, submitted=True, history=True)
+    return report('completion_unverified',
+                  'Reward submission attempted, but completed quest history was not verified; '
+                  'journal disappearance alone is insufficient',
+                  target=True, dialog=True, submitted=True)

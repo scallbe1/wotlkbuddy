@@ -2,7 +2,8 @@
 
 Uses only ordinary Windows keyboard input and the read-only RGB addon. It does
 not guess object IDs from names, auto-navigate, or execute arbitrary XML/Lua.
-Only a verified quest detail matching the ID, or when ID 0 the exact title, can trigger AcceptQuest.
+Only a verified quest detail matching the requested ID, or (when the client
+returns ID 0) its exact expected quest title, can trigger AcceptQuest.
 """
 from __future__ import annotations
 
@@ -79,9 +80,9 @@ class KeyboardQuestInput:
         real_sleep(0.012)
 
     def chat(self, command: str) -> None:
-        if command != '/run AcceptQuest()' and not (command.startswith('/targetexact ') and
+        if command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/run GetQuestReward(0)') and not (command.startswith('/targetexact ') and
                 _NPC_NAME.fullmatch(command[len('/targetexact '):])):
-            raise ValueError('Only verified quest-targeting and fixed AcceptQuest commands are allowed')
+            raise ValueError('Only verified quest-targeting and fixed quest API commands are allowed')
         # Keyboard scan codes assume an English/US layout and chat not already open.
         self._tap(_ENTER)
         for letter in command:
@@ -204,9 +205,9 @@ def pickup_planned_quest(
             return False
         if ui.quest_id == quest_id:
             return True
-        # An ID of 0 is unknown, not a different quest. In WotLK the active
-        # quest title is available via GetTitleText(). Require exact title
-        # AND the already-verified target before allowing an ID-0 fallback.
+        # ID 0 is an explicit unknown, not a different quest. In 3.3.5 the
+        # active quest title remains available via GetTitleText(). Require an
+        # exact title from the profile *and* the already-verified NPC target.
         return ui.quest_id == 0 and bool(selected.name) and ui.title == selected.name
 
     guard()
@@ -223,7 +224,9 @@ def pickup_planned_quest(
                       f'Observed {dialog.dialog.kind} quest ID {dialog.dialog.quest_id} '
                       f'title {dialog.dialog.title!r}, expected detail for ID {quest_id} '
                       f'title {selected.name!r}; acceptance not attempted', target=True)
-    # Confirm a second fresh telemetry frame to reject a stale quest panel.
+    # A second independent telemetry frame must confirm the same quest. This
+    # prevents a stale frame immediately following Interact from authorizing a
+    # command after the panel or target has changed.
     confirmed = wait_for(matches_quest)
     if confirmed is None:
         return result('dialog_unverified', 'Quest detail was not confirmed on a second telemetry frame; '

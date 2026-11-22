@@ -197,6 +197,89 @@ def _horde_mage_plan(args: argparse.Namespace) -> None:
           file=sys.stderr)
 
 
+def _horde_quest_363(args: argparse.Namespace) -> None:
+    """One attended Rude Awakening delivery and guarded turn-in for Aarr.
+
+    Navigation is only possible with a recorded path or explicit experimental
+    direct steering on Deathknell's 2D zone map. No navmesh is inferred.
+    """
+    from math import hypot
+    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.interaction import KeyboardQuestInput
+    from wotlkbuddy.horde.turnin import turnin_rude_awakening
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import WindowsKeyboard, LiveControlError
+    from wotlkbuddy.live.travel import (MapWaypoint, MapRoute, load_route, follow_route)
+    if not args.enable_input:
+        raise ValueError('Requires --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('countdown must be 2..20 seconds')
+    if args.recorded_route and args.experimental_direct_travel:
+        raise ValueError('Choose only one of --recorded-route and --experimental-direct-travel')
+    print('RUDE AWAKENING #363: Aarr -> Shadow Priest Sarvis. '
+          'Quest delivery has no combat objective. Escape/focus loss aborts.',
+          file=sys.stderr)
+    if args.experimental_direct_travel:
+        print('WARNING: EXPERIMENTAL DIRECT STEERING to published Tirisfal map point '
+              '(30.8,66.2), not obstacle-aware or a verified walkable path. '
+              'Watch Aarr and press Escape if obstructed.', file=sys.stderr)
+    elif not args.recorded_route:
+        print('No navigation requested: Aarr must already be in interaction range '
+              'of Shadow Priest Sarvis.', file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g}s.', file=sys.stderr)
+    time.sleep(args.countdown)
+    cap = lambda: capture_monitor(args.monitor)
+    initial = cap()
+    p = initial.player
+    if (p.name != 'Aarr' or p.dead or p.in_combat or initial.truncated or
+            initial.resources is None or
+            initial.resources.class_token.upper() != 'MAGE' or
+            initial.resources.race_token.lower() not in ('undead','scourge')):
+        raise LiveControlError('Expected living Aarr, Undead Mage with valid telemetry')
+    if not any(q.quest_id == 363 for q in initial.quests):
+        raise LiveControlError('Rude Awakening (363) is not active in Aarr journal')
+    if args.recorded_route or args.experimental_direct_travel:
+        if not 0 < p.map_x < 1 or not 0 < p.map_y < 1:
+            raise LiveControlError('Map coordinates unavailable; cannot walk')
+        if args.recorded_route:
+            route = load_route(args.recorded_route)
+            if route.character and route.character != 'Aarr':
+                raise LiveControlError('Recorded route belongs to another character')
+        else:
+            # Classic Tirisfal map: Mordo (~30.2,71.7); Sarvis (~30.8,66.2).
+            # These are map percentages, NOT converted world XYZ. This is a
+            # deliberate direct-line experiment with no obstacle sensing.
+            start = (p.map_x, p.map_y)
+            if hypot(start[0] - .302, start[1] - .717) > .024 and \
+                    hypot(start[0] - .308, start[1] - .662) > .012:
+                raise LiveControlError('Outside known Deathknell start/finish map area; '
+                                       'direct travel refused. Use --recorded-route')
+            route = MapRoute(p.zone_name, p.continent, p.map_zone,
+                             (MapWaypoint(*start, label='current location'),
+                              MapWaypoint(.308, .662, 'Shadow Priest Sarvis area')),
+                             'Aarr')
+        kb = WindowsKeyboard()
+        report = follow_route(route, capture=cap, keyboard=kb,
+                              stop_requested=kb.emergency_stop_requested,
+                              arrival_radius=.0015 if args.experimental_direct_travel else .0006,
+                              max_step_seconds=.8, max_seconds=180,
+                              resume=bool(args.recorded_route),
+                              progress=lambda line: print(line, file=sys.stderr, flush=True))
+        print('Travel:', json.dumps(report.to_dict(), ensure_ascii=False))
+        if report.stopped_reason != 'complete':
+            raise LiveControlError('Travel did not complete: ' + report.stopped_reason)
+    chosen = select_profile_from_loader(args.profiles_root, level=p.level, race='Undead')
+    profile = load_horde_profile(chosen)
+    driver = KeyboardQuestInput(interact_key=args.interact_key)
+    result = turnin_rude_awakening(profile, capture=cap, driver=driver,
+                                 character='Aarr', timeout=10.0,
+                                 progress=lambda line: print(line, file=sys.stderr, flush=True))
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    if result.status not in ('turned_in', 'already_turned_in'):
+        raise LiveControlError('Turn-in not confirmed: ' + result.status +
+                               ': ' + result.explanation)
+
+
 def _list_wow(_args: argparse.Namespace) -> None:
     from wotlkbuddy.game.win32 import list_processes
 
@@ -545,6 +628,17 @@ def main(argv: list[str] | None = None) -> int:
     pickup.add_argument('--countdown', type=float, default=5)
     pickup.add_argument('--monitor', type=int, default=0)
     pickup.set_defaults(func=_horde_quest_pickup)
+    deliver = sub.add_parser('horde-quest-363',
+                             help='Attended Rude Awakening delivery and verified hand-in')
+    deliver.add_argument('--profiles-root', required=True)
+    deliver.add_argument('--recorded-route', help='Aarr-only Tirisfal trail that was walked safely')
+    deliver.add_argument('--experimental-direct-travel', action='store_true',
+                         help='Opt-in to straight map-coordinate travel; NO obstacle sensing')
+    deliver.add_argument('--interact-key', choices=['f','g'], default='f')
+    deliver.add_argument('--enable-input', action='store_true')
+    deliver.add_argument('--countdown', type=float, default=5)
+    deliver.add_argument('--monitor', type=int, default=0)
+    deliver.set_defaults(func=_horde_quest_363)
     procs = sub.add_parser("processes", help="List local Wow.exe processes (Windows)")
     procs.set_defaults(func=_list_wow)
     profile = sub.add_parser("profile", help="Read and inspect a profile")
