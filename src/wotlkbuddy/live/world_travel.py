@@ -8,7 +8,7 @@ Mage combat routine. A guarded quest hand-in may follow an observed arrival.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import atan2, hypot, isfinite, pi
+from math import atan2, cos, hypot, isfinite, pi, sin
 from time import monotonic, sleep as real_sleep
 from typing import Callable, Sequence
 
@@ -83,6 +83,8 @@ class WorldTravelReport:
     final_world_xyz: tuple[float, float, float]
     stopped_reason: str
     distance_remaining_xy: float
+    recovery_attempts: int = 0
+    recovery_strafes: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -96,6 +98,8 @@ def follow_world_path(
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     progress: Callable[[str], None] | None = None,
+    can_traverse: Callable[[Vec3, Vec3], bool] | None = None,
+    max_recoveries: int = 2,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -104,7 +108,7 @@ def follow_world_path(
     and locked by GUID, not hard-coded by name. No input occurs if the first
     snapshot or path preflight fails.
     """
-    if not 15 <= max_seconds <= 600 or not 1 <= arrival_yards <= 2.5:
+    if not 15 <= max_seconds <= 600 or not 1 <= arrival_yards <= 2.5 or not 0 <= max_recoveries <= 3:
         raise ValueError('Invalid bounded travel parameters')
     notify = progress or (lambda _: None)
     first, world0 = sample()
@@ -127,7 +131,8 @@ def follow_world_path(
         raise LiveControlError('Escape or WoW foreground focus required before movement')
     start_time = now()
     current, world = first, world0
-    turns = moves = reached = 0
+    turns = moves = reached = recoveries = strafes = 0
+    recovery_locations: list[Vec3] = []
 
     def guard() -> None:
         if stop_requested() or not keyboard.wow_is_foreground():
@@ -178,6 +183,110 @@ def follow_world_path(
     turns += 1
     notify(f'Calibrated turn direction={right_sign:+d}, rate={turn_rate:.2f} rad/s')
 
+    def recover_around_wall(waypoint: Vec3) -> bool:
+        """Bounded, measured Q/E sidestep of a *navmesh-checked* local segment.
+
+        Only enable via a live Detour query; never guess that a sidestep is safe.
+        This is local dynamic-obstacle recovery, not a substitute for navmesh routing.
+        """
+        nonlocal current, world, moves, recoveries, strafes
+        if can_traverse is None or max_recoveries == 0:
+            return False
+        if recoveries >= max_recoveries:
+            raise LiveControlError('Obstacle recovery budget exhausted')
+        if any(_distance_xy(world.position, old) < 2.0 for old in recovery_locations):
+            raise LiveControlError('Obstacle persists near previously recovered location')
+        recovery_locations.append(world.position)
+        recoveries += 1
+        notify(f'Obstacle recovery {recoveries}/{max_recoveries}: try E/right '
+               'sidestep, then Q/left if blocked (maximum 3 pulses per side)')
+
+        def mesh_clear(start: Vec3, end: Vec3) -> bool:
+            guard()
+            try:
+                return can_traverse(start, end)
+            except (RuntimeError, OSError, ValueError, TimeoutError) as exc:
+                raise LiveControlError(f'Navmesh clearance unavailable during recovery: {exc}') from exc
+
+        # Right first, matching common wall corner avoidance. Do not cross a
+        # wall/ledge just because a navmesh query returns a nearby polygon.
+        for direction, key in ((-1, 'strafe-right'), (1, 'strafe-left')):
+            moved_laterally = False
+            for step in range(3):
+                guard()
+                before = world
+                angle = before.facing_rad + direction * pi / 2
+                ahead = Vec3(before.x + cos(angle)*1.7,
+                             before.y + sin(angle)*1.7, before.z)
+                if not mesh_clear(before.position, ahead):
+                    notify(f'  {key}: navmesh blocks proposed sideways step')
+                    break
+                pulse(key, 0.18)
+                strafes += 1
+                current, world = checked()
+                delta = _distance_xy(before.position, world.position)
+                if delta > 3.0 or abs(world.z - before.z) > 2.0:
+                    raise LiveControlError('Unexpected movement during obstacle sidestep')
+                if abs(_angle(world.facing_rad - before.facing_rad)) > 0.24:
+                    raise LiveControlError('Q/E key did not strafe: verify WoW movement bindings')
+                if delta < 0.25:
+                    notify(f'  {key}: blocked in game (moved {delta:.2f}y)')
+                    break
+                travelled = atan2(world.y-before.y, world.x-before.x)
+                if abs(_angle(travelled-angle)) > 0.72:
+                    raise LiveControlError('Sideways displacement disagrees with key direction')
+                moved_laterally = True
+                notify(f'  {key} step {step+1}: moved {delta:.2f}y; '
+                       f'position=({world.x:.2f},{world.y:.2f},{world.z:.2f})')
+                # Probe forward in current facing; if a real wall still blocks
+                # progress, continue laterally rather than steering into it.
+                probe = Vec3(world.x + cos(world.facing_rad)*1.6,
+                             world.y + sin(world.facing_rad)*1.6, world.z)
+                if not mesh_clear(world.position, probe):
+                    continue
+                before = world
+                pulse('forward', 0.20)
+                moves += 1
+                current, world = checked()
+                advanced = _distance_xy(before.position, world.position)
+                if advanced > 3.0 or abs(world.z-before.z) > 2.0:
+                    raise LiveControlError('Unexpected movement during forward clearance probe')
+                if advanced >= 0.50:
+                    # Clear the wall's leading corner before steering toward
+                    # the original waypoint. One successful forward pulse
+                    # followed by a diagonal turn can hit the *same* wall.
+                    staging = advanced
+                    staging_blocked = False
+                    for _ in range(2):
+                        before = world
+                        probe = Vec3(world.x + cos(world.facing_rad)*1.6,
+                                     world.y + sin(world.facing_rad)*1.6, world.z)
+                        if not mesh_clear(world.position, probe):
+                            staging_blocked = True
+                            break
+                        pulse('forward', 0.20)
+                        moves += 1
+                        current, world = checked()
+                        delta_forward = _distance_xy(before.position, world.position)
+                        if delta_forward > 3.0 or abs(world.z-before.z) > 2.0:
+                            raise LiveControlError('Unexpected staging movement past obstacle')
+                        if delta_forward < 0.50:
+                            staging_blocked = True
+                            break
+                        staging += delta_forward
+                    if not staging_blocked:
+                        notify(f'  Obstacle bypass: advanced {staging:.2f}y past wall; '
+                               'resuming Detour waypoints')
+                        return True
+                    notify('  Still next to obstruction after forward probe; '
+                           'trying another small lateral step')
+            # If right achieved a meaningful lateral displacement but the
+            # forward probe still fails, do NOT blindly strafe back left over
+            # the same area; keep the measured stop position for troubleshooting.
+            if moved_laterally:
+                break
+        return False
+
     try:
         for index, waypoint in enumerate(waypoints[1:], 1):
             count = 0
@@ -216,7 +325,12 @@ def follow_world_path(
                         raise LiveControlError('Implausible world jump during forward movement')
                     stalls = stalls + 1 if displacement < 0.15 else 0
                     if stalls >= 4:
-                        raise LiveControlError('No forward progress: obstacle, lost binding or stuck')
+                        if recover_around_wall(waypoint):
+                            stalls = 0
+                            prev_distance = _distance_xy(world.position, waypoint)
+                            count += 1
+                            continue
+                        raise LiveControlError('No forward progress: local obstacle recovery failed or disabled')
                     if displacement > 0.2:
                         forward_angle = atan2(world.y-before.y, world.x-before.x)
                         if abs(_angle(forward_angle - before.facing_rad)) > 0.85:
@@ -240,9 +354,11 @@ def follow_world_path(
                                  reached, moves, turns,
                                  (world0.x,world0.y,world0.z),
                                  (world.x,world.y,world.z),
-                                 str(exc), _distance_xy(world.position, waypoints[-1]))
+                                 str(exc), _distance_xy(world.position, waypoints[-1]),
+                                 recoveries, strafes)
     return WorldTravelReport(player.name, world.map_id, len(waypoints)-1,
                              reached, moves, turns,
                              (world0.x,world0.y,world0.z),
                              (world.x,world.y,world.z),
-                             'complete', _distance_xy(world.position, waypoints[-1]))
+                             'complete', _distance_xy(world.position, waypoints[-1]),
+                             recoveries, strafes)

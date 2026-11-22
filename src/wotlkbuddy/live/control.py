@@ -23,6 +23,8 @@ _MOVEMENT_SCANCODES = {
     'backward': 0x1F,     # S
     'turn-left': 0x1E,    # A
     'turn-right': 0x20,   # D
+    'strafe-left': 0x10,  # Q, default strafe left
+    'strafe-right': 0x12, # E, default strafe right
 }
 
 KEYEVENTF_SCANCODE = 0x0008

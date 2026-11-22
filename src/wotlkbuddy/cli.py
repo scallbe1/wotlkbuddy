@@ -406,6 +406,10 @@ def _horde_nav_deliver(args: argparse.Namespace) -> None:
     print('ATTENDED NAVMESH DELIVERY #363: live world XYZ -> Detour -> short keyboard pulses -> '
           'guarded Sarvis turn-in. Combat/aggro ABORTS; no combat or loot driver exists. '
           'Escape/focus loss stops input.', file=sys.stderr)
+    if not args.no_stuck_recovery:
+        print('Local obstacle recovery armed: Q=strafe left, E=strafe right; up to '
+              '3 short sidesteps, each checked against the navmesh and live position. '
+              'Disable with --no-stuck-recovery.', file=sys.stderr)
     print(f'Switch to WoW now; starting in {args.countdown:g}s.', file=sys.stderr, flush=True)
     time.sleep(args.countdown)
     cap = lambda: capture_monitor(args.monitor)
@@ -432,24 +436,26 @@ def _horde_nav_deliver(args: argparse.Namespace) -> None:
         if not nav.ping():
             raise LiveControlError('32-bit navigation worker did not respond')
         path = nav.find_path(world.map_id, world.position, destination)
-    # Preflight BEFORE constructing the input driver. Invalid/partial/offmesh
-    # routes never send movement keys or try interacting with an NPC.
-    waypoints = validate_nav_path(path, world.position, destination)
-    print(f'Detour path verified: {len(path)} native points; '
-          f'{len(waypoints)-1} bounded travel legs; '
-          f'{distance_world(world.position, destination):.1f}y direct.', file=sys.stderr)
-    kb = WindowsKeyboard()
-    def sample():
-        snapshot = cap()
-        _, position = verified_live_position(snapshot, pid=pid)
-        return snapshot, position
-    report = follow_world_path(
-        waypoints, sample=sample, keyboard=kb,
-        stop_requested=kb.emergency_stop_requested,
-        expected_quest_id=363, expected_map_id=0,
-        max_seconds=args.max_seconds,
-        progress=lambda line: print(line, file=sys.stderr, flush=True),
-    )
+        # Preflight BEFORE constructing the input driver. Invalid/partial/offmesh
+        # routes never send movement keys or try interacting with an NPC.
+        waypoints = validate_nav_path(path, world.position, destination)
+        print(f'Detour path verified: {len(path)} native points; '
+              f'{len(waypoints)-1} bounded travel legs; '
+              f'{distance_world(world.position, destination):.1f}y direct.', file=sys.stderr)
+        kb = WindowsKeyboard()
+        def sample():
+            snapshot = cap()
+            _, position = verified_live_position(snapshot, pid=pid)
+            return snapshot, position
+        report = follow_world_path(
+            waypoints, sample=sample, keyboard=kb,
+            stop_requested=kb.emergency_stop_requested,
+            expected_quest_id=363, expected_map_id=0,
+            max_seconds=args.max_seconds,
+            can_traverse=(None if args.no_stuck_recovery else
+                          lambda start,end: nav.segment_clear(world.map_id, start, end)),
+            progress=lambda line: print(line, file=sys.stderr, flush=True),
+        )
     print('World travel:', json.dumps(report.to_dict(), ensure_ascii=False))
     if report.stopped_reason != 'complete':
         raise LiveControlError('Travel stopped without quest turn-in: ' + report.stopped_reason)
@@ -884,6 +890,8 @@ def main(argv: list[str] | None = None) -> int:
     nd.add_argument('--interact-key', choices=['f','g'], default='f')
     nd.add_argument('--enable-input', action='store_true', help='Explicitly arm movement and turn-in keys')
     nd.add_argument('--max-seconds', type=float, default=240)
+    nd.add_argument('--no-stuck-recovery', action='store_true',
+                    help='Disable bounded navmesh-checked Q/E local wall bypass')
     nd.add_argument('--countdown', type=float, default=5)
     nd.add_argument('--monitor', type=int, default=0)
     nd.add_argument('--pid', type=int, help='Wow.exe PID if multiple clients are running')

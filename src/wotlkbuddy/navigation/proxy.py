@@ -70,3 +70,9 @@ class NavigationProxy:
         data = self._request({"op": "nearest", "map_id": map_id,
                               "point": [position.x, position.y, position.z]})
         return Vec3(*data) if data is not None else None
+
+    def segment_clear(self, map_id: int, start: Vec3, end: Vec3) -> bool:
+        """Short on-mesh clearance check delegated to the x86 Detour worker."""
+        return self._request({"op": "segment", "map_id": map_id,
+                              "start": [start.x, start.y, start.z],
+                              "end": [end.x, end.y, end.z]}) is True
