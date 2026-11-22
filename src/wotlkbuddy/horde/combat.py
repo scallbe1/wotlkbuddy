@@ -30,6 +30,9 @@ class HuntReport:
     status: str
     last_target_entry: int = 0
     last_description: str = ''
+    loot_attempts: int = 0
+    loot_confirmed: int = 0
+    loot_skipped: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -113,6 +116,7 @@ def hunt_kill_objectives(
     # A verified position can be used to choose another Detour spawn route
     # after an off-axis collision. Never retry the same problematic spawn.
     navigation_mismatches = 0
+    loot_attempts = loot_confirmed = loot_skipped = 0
 
     def guard(s: ClientTelemetry) -> None:
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()):
@@ -276,26 +280,82 @@ def hunt_kill_objectives(
                 raise LiveControlError('Three Fireballs without target HP progress; stop')
         raise LiveControlError('Exceeded bounded Fireball casts on one target')
 
-    def loot(s: ClientTelemetry, corpse: Vec3 | None) -> ClientTelemetry:
-        # Loot is best-effort; do not walk to an unknown corpse position.
-        # Do not approach an unselected corpse: target identity and loot
-        # ownership can no longer be verified after an auto-clear.
-        if (corpse is None or s.player.in_combat or
-                not s.player.target_guid or s.combat_target is None or
-                not s.combat_target.dead):
+    def loot(s: ClientTelemetry, corpse: Vec3 | None,
+             dead_guid: str, expected_entry: int) -> ClientTelemetry:
+        """Recover an auto-cleared corpse by last-target and verify its GUID.
+
+        A successful quest kill alone cannot authorize looting an unrelated
+        corpse. If the client cannot reselect the exact dead GUID, skip with a
+        visible log and count rather than interacting at guessed coordinates.
+        """
+        nonlocal loot_attempts, loot_confirmed, loot_skipped
+        if s.player.in_combat or corpse is None or not dead_guid:
+            loot_skipped += 1
+            log('Loot skipped: in combat or missing verified corpse location/GUID')
             return s
-        s = navigate(s, corpse)
-        if s.player.target_guid and s.combat_target and s.combat_target.dead:
-            driver.interact()
-            s = fresh(s)
-            if s.loot_count is None:
-                log('Loot telemetry missing; stopping loot interaction')
+
+        def verified_corpse(current: ClientTelemetry) -> bool:
+            target = current.combat_target
+            return (current.player.target_guid == dead_guid and
+                    target is not None and target.entry_id == expected_entry and
+                    target.dead is True and not current.player.in_combat)
+
+        if not verified_corpse(s):
+            if s.player.target_guid and s.player.target_guid != dead_guid:
+                loot_skipped += 1
+                log('Loot skipped: another target selected after kill; '
+                    'refusing to replace it')
                 return s
-            for item in range(min(16,s.loot_count),0,-1):
-                if s.loot_count == 0:
-                    break
-                driver.chat(f'/run LootSlot({item})')
+            log(f'Reselecting last killed corpse: {dead_guid}')
+            driver.chat('/targetlasttarget')
+            s = fresh(s)
+            if not verified_corpse(s):
+                loot_skipped += 1
+                log('Loot skipped: last target did not match exact dead corpse GUID')
+                return s
+
+        # The position was read from the live target before combat. Detour
+        # remains responsible for validating the route to the corpse, and the
+        # exact corpse GUID must remain selected after moving.
+        s = navigate(s, corpse)
+        if not verified_corpse(s):
+            if not s.player.target_guid:
+                driver.chat('/targetlasttarget')
                 s = fresh(s)
+            if not verified_corpse(s):
+                loot_skipped += 1
+                log('Loot skipped: corpse GUID/dead state lost while approaching')
+                return s
+        log(f'Looting verified corpse {dead_guid}')
+        loot_attempts += 1
+        driver.interact()
+        s = fresh(s)
+        if s.loot_count is None:
+            loot_skipped += 1
+            log('Loot unconfirmed: loot-frame telemetry unavailable')
+            return s
+        if s.loot_count == 0:
+            log('Loot window contained no items')
+            return s
+        initial_slots = s.loot_count
+        for index in range(min(16, initial_slots), 0, -1):
+            if s.loot_count is None or s.loot_count == 0:
+                break
+            before_count = s.loot_count
+            log(f'Taking loot slot {index}/{initial_slots}')
+            driver.chat(f'/run LootSlot({index})')
+            s = fresh(s)
+            if s.loot_count is not None and s.loot_count >= before_count:
+                loot_skipped += 1
+                log('Loot slot did not disappear; bag space/loot ownership '
+                    'may be blocking collection')
+                return s
+        if s.loot_count in (None, 0):
+            loot_confirmed += 1
+            log(f'Loot verified: cleared {initial_slots} observed item slot(s)')
+        else:
+            loot_skipped += 1
+            log(f'Loot incomplete: {s.loot_count} slots remain open')
         return s
 
     for iteration in range(max_kills * 6):
@@ -303,8 +363,10 @@ def hunt_kill_objectives(
         guard(s)
         current_objective = next_kill_objective(profile, s, quest_id)
         if current_objective is None:
-            return HuntReport(quest_id, s.player.name, kills, True, 'objectives_complete',
-                              last_target, last_description)
+            return HuntReport(
+                quest_id, s.player.name, kills, True, 'objectives_complete',
+                last_target, last_description,
+                loot_attempts, loot_confirmed, loot_skipped)
         if kills >= max_kills:
             raise LiveControlError('Kill limit reached before objective completion')
         spec, observed = current_objective
@@ -365,6 +427,7 @@ def hunt_kill_objectives(
                     s.combat_target.fireball_in_range is True):
                 before = qlog(s)
                 before_text = tuple(o.description for o in before.objectives)
+                dead_guid = s.player.target_guid
                 s = attack(s, expected, observed.index,
                            objective_progress(observed.description))
                 s = fresh(s, 1.0)
@@ -372,7 +435,7 @@ def hunt_kill_objectives(
                     # A second enemy might be nearby; cannot loot during active combat.
                     log('Combat persists after target death; resolve further aggro before loot')
                 else:
-                    s = loot(s, corpse_xyz)
+                    s = loot(s, corpse_xyz, dead_guid, expected)
                 latest = qlog(s)
                 after_text = tuple(o.description for o in latest.objectives)
                 if latest.complete or after_text != before_text:
