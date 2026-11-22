@@ -120,7 +120,7 @@ local function tickData()
         local counted = GetItemCount(trackedQuestItemId, false)
         if type(counted) == 'number' and counted >= 0 and
                 counted == math.floor(counted) and counted <= 200000 then
-            appendLine(table.concat({'C', tostring(trackedQuestItemId),
+            appendLine(table.concat({'J', tostring(trackedQuestItemId),
                 tostring(counted)}, '\t'))
         end
     end
