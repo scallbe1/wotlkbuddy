@@ -201,6 +201,34 @@ local function tickData()
     end
     appendLine(table.concat({'B', tostring(known(1459)), tostring(arcane),
         tostring(known(168)), tostring(armor), tostring(known(133))}, '\t'))
+    -- Fast, observable Fireball input. Never guess an action-bar slot:
+    -- export a digit key ONLY when its bound button actually holds the
+    -- Fireball spell (not a macro or unrelated action). Cast timing is
+    -- measured from UnitCastingInfo, not projectile impact guesses.
+    local fireballKey = '-'
+    local fireballName = GetSpellInfo and GetSpellInfo(133)
+    if fireballName and GetActionInfo and GetBindingKey then
+        for index = 1, 10 do
+            local kind, id = GetActionInfo(index)
+            local expectedKey = index == 10 and '0' or tostring(index)
+            local key = GetBindingKey('ACTIONBUTTON' .. tostring(index))
+            if kind == 'spell' and type(id) == 'number' and
+                    GetSpellInfo(id) == fireballName and key == expectedKey then
+                fireballKey = expectedKey
+                break
+            end
+        end
+    end
+    local remaining = -1
+    if UnitCastingInfo then
+        local castName, _, _, _, startTime, endTime =
+            UnitCastingInfo('player')
+        if castName == fireballName and type(endTime) == 'number' then
+            remaining = math.max(0, math.min(20000,
+                math.floor(endTime - GetTime() * 1000)))
+        end
+    end
+    appendLine(table.concat({'F', fireballKey, tostring(remaining)}, '\t'))
     local lootCount = 0
     if LootFrame and LootFrame:IsShown() and GetNumLootItems then
         lootCount = math.min(GetNumLootItems() or 0, 16)
@@ -527,6 +555,71 @@ local function tickData()
         appendLine('Z\t1')
     elseif payloadBytes + 4 <= CAPACITY - 20 then
         appendLine('Z\t0')
+    end
+    -- Merchant sales candidates are read only. Never emit bags, active quest
+    -- items, soulbound equipment on the character, or item classes unknown to
+    -- this 3.3.5 client. Never call UseContainerItem inside the addon.
+    -- The Python controller verifies full frames twice, then right-clicks
+    -- only one selected, verified slot and checks sale results.
+    if MerchantFrame and MerchantFrame:IsShown() then
+        local rows = {}
+        -- The buyback tab can ignore right-click sales; require the normal
+        -- merchant sell tab and a quest-item API before authorizing sales.
+        local saleScanComplete = (
+            GetContainerItemQuestInfo and
+            (not MerchantFrame.selectedTab or MerchantFrame.selectedTab == 1)
+            ) and 1 or 0
+        local equipTypes = {
+            INVTYPE_HEAD=1, INVTYPE_NECK=1, INVTYPE_SHOULDER=1,
+            INVTYPE_BODY=1, INVTYPE_CHEST=1, INVTYPE_ROBE=1,
+            INVTYPE_WAIST=1, INVTYPE_LEGS=1, INVTYPE_FEET=1,
+            INVTYPE_WRIST=1, INVTYPE_HAND=1, INVTYPE_FINGER=1,
+            INVTYPE_TRINKET=1, INVTYPE_CLOAK=1,
+            INVTYPE_WEAPON=1, INVTYPE_2HWEAPON=1,
+            INVTYPE_WEAPONMAINHAND=1, INVTYPE_WEAPONOFFHAND=1,
+            INVTYPE_SHIELD=1, INVTYPE_HOLDABLE=1, INVTYPE_RANGED=1,
+            INVTYPE_RANGEDRIGHT=1, INVTYPE_THROWN=1, INVTYPE_RELIC=1
+        }
+        if saleScanComplete == 1 then
+            for bag = 0, 4 do
+                for slot = 1, (GetContainerNumSlots(bag) or 0) do
+                    local link = GetContainerItemLink(bag, slot)
+                    if link then
+                        local _, qty, locked = GetContainerItemInfo(bag, slot)
+                        local id = tonumber(string.match(link, 'item:(%d+)'))
+                        local name, _, quality, _, _, itemType, _,
+                            _, equipLoc, _, price = GetItemInfo(link)
+                        local isQuest = GetContainerItemQuestInfo(bag, slot)
+                        -- Uncached item metadata must not authorize a sale.
+                        if not (id and qty and quality and price and itemType
+                                and equipLoc and name) then
+                            saleScanComplete = 0
+                        elseif (not isQuest and itemType ~= ITEM_CLASS_QUEST
+                                and not locked and price > 0 and
+                                (quality == 0 or
+                                 (quality <= 2 and equipTypes[equipLoc]))) then
+                            table.insert(rows, table.concat({
+                                'D', tostring(bag), tostring(slot),
+                                tostring(id), tostring(qty), tostring(quality),
+                                tostring(price), '0', tostring(locked and 1 or 0),
+                                safe(equipLoc, 27)}, '\t'))
+                        end
+                    end
+                end
+            end
+        end
+        if #rows > 64 then saleScanComplete = 0 end
+        local needed = 12
+        for _, row in ipairs(rows) do needed = needed + string.len(row) + 1 end
+        if payloadBytes + needed > CAPACITY - 20 then
+            saleScanComplete = 0
+        end
+        if saleScanComplete == 1 then
+            appendLine(table.concat({'M','1',tostring(#rows)}, '\t'))
+            for _, row in ipairs(rows) do appendLine(row) end
+        else
+            appendLine('M\t0\t0')
+        end
     end
     -- Class trainer services are read only. Expose *available* services, not
     -- unavailable ranks, and require a complete frame before any purchase.

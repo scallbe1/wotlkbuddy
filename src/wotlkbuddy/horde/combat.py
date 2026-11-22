@@ -335,8 +335,28 @@ def hunt_kill_objectives(
             if s.resources.mana < 20:
                 raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
             previous_health = t.health
-            driver.chat('/cast Fireball')
-            s = fresh(s, 2.65)
+            verified_key = s.fireball_key
+            fast_cast = getattr(driver, 'cast_fireball', None)
+            if callable(fast_cast):
+                fast_cast(s)
+                if verified_key is not None:
+                    log(f'Casting Fireball using verified bound action key '
+                        f'{verified_key} (no chat command)')
+            else:
+                driver.chat('/cast Fireball')
+            # Observe the actual client cast timer. A low-rank Fireball can
+            # finish casting long before the old fixed 2.65 s delay, and its
+            # projectile may still be travelling. Resume on cast completion,
+            # not projectile impact; WoW itself handles spell queue/GCD.
+            during = fresh(s, .55)
+            if during.fireball_cast_remaining_ms is not None:
+                wait_cast = min(2.5, max(.28,
+                    during.fireball_cast_remaining_ms / 1000.0 + .18))
+            else:
+                # Old telemetry/client without cast timing: retain the
+                # conservative legacy wait, and no unverified queue input.
+                wait_cast = 2.1
+            s = fresh(during, wait_cast)
             new = s.combat_target
             if s.player.target_guid != target_guid or new.entry_id != expected:
                 if collect_items:
@@ -434,12 +454,38 @@ def hunt_kill_objectives(
                 return s
         log(f'Looting verified corpse {dead_guid}')
         loot_attempts += 1
+        before_item_count = (
+            s.tracked_item_count if collect_items and
+            s.tracked_item_id is not None else None)
         driver.interact()
         s = fresh(s)
         if s.loot_open is not True:
+            # Auto-loot can put items into bags and immediately close the
+            # frame before the 0.5 s telemetry capture. Item quantity and
+            # live journal credit give independent evidence of success.
+            for wait in range(3):
+                if (collect_items and before_item_count is not None and
+                        s.tracked_item_id == active_tracked_item and
+                        s.tracked_item_count is not None and
+                        s.tracked_item_count > before_item_count):
+                    journal = qlog(s)
+                    objective = next(
+                        (q for q in journal.objectives if
+                         q.index == observed.index), None)
+                    if (objective is not None and
+                            objective_progress(objective.description) is not None
+                            and objective_progress(objective.description)[0] >=
+                            s.tracked_item_count):
+                        loot_confirmed += 1
+                        log(f'Auto-loot confirmed for item {active_tracked_item}: '
+                            f'{before_item_count} -> {s.tracked_item_count}; '
+                            'quest journal also advanced')
+                        return s
+                if wait < 2:
+                    s = fresh(s, .4)
             loot_skipped += 1
-            log('Loot skipped: interaction did not open the verified loot '
-                'frame (possibly out of reach, empty or already looted)')
+            log('Loot not confirmed: no loot frame or verified auto-loot '
+                'item/journal increase after interaction')
             return s
         if s.loot_count is None:
             loot_skipped += 1

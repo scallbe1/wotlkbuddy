@@ -248,6 +248,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
         next_active_kill_quest, next_active_collect_quest)
     from wotlkbuddy.horde.combat import hunt_kill_objectives
     from wotlkbuddy.horde.return_turnin import return_and_turnin
+    from wotlkbuddy.horde.merchant import (
+        free_bag_space, next_ready_profile_turnin)
     from wotlkbuddy.horde.npc_catalog import (
         nearby_profile_quest_givers, nearby_service_npcs)
     from wotlkbuddy.horde.npc_visit import visit_npc
@@ -299,12 +301,23 @@ def _horde_progress(args: argparse.Namespace) -> None:
         driver.chat(f'/wbtphase {phase}')
 
     report = {}
+    vendor_sales = []
+
+    def serialize_vendor_sale(sale):
+        if sale is None:
+            return None
+        result = asdict(sale)
+        vendor_sales.append(result)
+        report['vendor_sales'] = vendor_sales
+        return result
+
     if args.only in ('all', 'gear'):
         hud.set(goal='Equip better Mage armor', action='Checking bags and equipment')
         set_native_status('gear')
         equipped = equip_mage_upgrades(capture=cap, driver=driver, log=log)
         report['equipped_item_ids'] = equipped
-    if args.only in ('all', 'quests', 'train', 'vendor', 'objectives', 'collect'):
+    if args.only in ('all', 'quests', 'train', 'vendor', 'objectives',
+                     'collect', 'turnin'):
         if not args.nav_dll or not args.python32:
             raise ValueError('NPC navigation requires --nav-dll and --python32')
         dll = Path(args.nav_dll).expanduser().resolve()
@@ -327,40 +340,28 @@ def _horde_progress(args: argparse.Namespace) -> None:
                     raise LiveControlError('WoW PID changed between NPC actions')
                 return state, coords
 
-            if args.only in ('all', 'vendor'):
-                state, current = location()
-                bags_full = (state.resources.free_bag_slots <=
-                             quest_profile.min_free_bag_slots)
-                if args.only == 'vendor' or bags_full:
-                    hud.set(goal='Find a merchant for bag space',
-                            action='Finding vendor from Horde XML')
-                    set_native_status('vendor')
-                    merchants = nearby_service_npcs(
-                        profile=quest_profile, spawns=db,
-                        origin=current.position, map_id=current.map_id,
-                        role='merchant', profiles_root=profiles_root, radius=600)
-                    if not merchants:
-                        raise LiveControlError(
-                            'No nearby merchant defined in Horde Vendor XML '
-                            'and corroborated by CreatureSpawns.db')
-                    merchant = merchants[0]
-                    log(f'Profile-selected merchant: {merchant.name} '
-                        f'({merchant.entry}); source={merchant.source}')
-                    visit_npc(npc_name=merchant.name, npc_id=merchant.entry,
-                              pid=pid, capture=cap, driver=driver, nav=nav,
-                              spawns=db, radius=600,
-                              destination_hint=merchant.position, log=log)
+            def ensure_reward_bag_space():
+                state, _ = location()
+                minimum = max(2, quest_profile.min_free_bag_slots + 1)
+                if state.resources.free_bag_slots >= minimum:
+                    return None
+                hud.set(goal='Free bag space for quest rewards',
+                        action='Finding safe non-quest items to sell')
+                set_native_status('vendor')
+                sold = free_bag_space(
+                    profile=quest_profile, profiles_root=profiles_root,
+                    pid=pid, capture=cap, driver=driver, nav=nav, spawns=db,
+                    min_free_slots=minimum, log=log)
+                return serialize_vendor_sale(sold)
+
+            if args.only in ('all', 'vendor', 'objectives', 'collect', 'turnin'):
+                # Bags can fill while collecting items. Preflight before
+                # questing and again immediately before claiming a reward.
+                ensure_reward_bag_space()
+                if args.only == 'vendor':
                     report['vendor'] = {
-                        'name': merchant.name, 'entry': merchant.entry,
-                        'source': merchant.source,
-                        'status': 'reached; selling not yet implemented'}
-                    if args.only == 'all' and bags_full:
-                        # Do not pretend a merchant visit has emptied bags:
-                        # no item-safe sale/merchant-UI verifier exists yet.
-                        print(json.dumps(report, indent=2, ensure_ascii=False))
-                        raise LiveControlError(
-                            'Bags at profile threshold: reached profile merchant, '
-                            'but safe automatic item selling is not implemented')
+                        'status': 'bag space verified',
+                        'free_slots': cap().resources.free_bag_slots}
 
             if args.only in ('all', 'quests'):
                 state, current = location()
@@ -451,7 +452,52 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         raise LiveControlError(
                             f'Quest hand-in contradicted by post-training '
                             f'journal/history: {confirmations!r}')
-            if args.only in ('all', 'objectives', 'collect'):
+            delivered_ready_quest = False
+            if args.only in ('all', 'objectives', 'collect', 'turnin'):
+                state, current = location()
+                quest = next_ready_profile_turnin(quest_profile, state)
+                if quest is not None:
+                    hud.set(goal=f'Turn in ready quest: {quest.title}',
+                            action='Checking reward bag space')
+                    ensure_reward_bag_space()
+                    set_native_status('turnin', quest.quest_id)
+                    log(f'Resuming already-complete quest {quest.title!r} '
+                        f'(quest {quest.quest_id}); no additional combat')
+                    result = return_and_turnin(
+                        profile=quest_profile, quest_id=quest.quest_id,
+                        pid=pid, capture=cap, driver=driver, nav=nav,
+                        spawns=db, max_seconds=450, log=log)
+                    report['quest_turnin'] = result.to_dict()
+                    delivered_ready_quest = True
+                    if cap().gear_scan_complete:
+                        hud.set(goal=f'Equip rewards from {quest.title}',
+                                action='Checking Mage cloth upgrades')
+                        upgraded = equip_mage_upgrades(
+                            capture=cap, driver=driver, log=log)
+                        if upgraded:
+                            report['equipped_item_ids'] = tuple(upgraded)
+            if args.only == 'turnin' and not delivered_ready_quest:
+                snapshot = cap()
+                history = dict(snapshot.quest_completions)
+                journal = {q.quest_id: q for q in snapshot.quests}
+                # Distinguish a previously completed quest from a still
+                # active ready quest, and from an *unknown* disappearance.
+                # Never invent completion based on absence from the journal.
+                quest_ids = tuple(dict.fromkeys(
+                    step.quest_id for step in quest_profile.steps
+                    if step.kind == 'turnin' and step.supported))
+                report['turnin_audit'] = {
+                    str(qid): {
+                        'in_journal': qid in journal,
+                        'journal_complete': (
+                            journal[qid].complete if qid in journal else None),
+                        'server_history_complete': history.get(qid),
+                    } for qid in quest_ids
+                    if qid in journal or qid in history}
+                report['turnin_status'] = (
+                    'no_ready_active_quest; unknown history is not a '
+                    'safe reason to retry a reward')
+            if args.only in ('all', 'objectives', 'collect') and not delivered_ready_quest:
                 state, current = location()
                 kill = (next_active_kill_quest(
                     quest_profile, state, map_id=current.map_id)
@@ -517,6 +563,9 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         raise LiveControlError(
                             f'Quest {target_quest.quest_id} objectives not '
                             f'complete: {hunt.status}; no turn-in attempted')
+                    hud.set(goal=f'Turn in quest: {quest_title}',
+                            action='Checking bag space before reward')
+                    ensure_reward_bag_space()
                     hud.set(goal=f'Turn in quest: {quest_title}',
                             action='Returning to profile turn-in NPC')
                     set_native_status('turnin', target_quest.quest_id)
@@ -1446,7 +1495,8 @@ def main(argv: list[str] | None = None) -> int:
     return_quest.set_defaults(func=_horde_return_turnin)
     progression = sub.add_parser('horde-progress',
                        help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
-    progression.add_argument('--only', choices=['all','gear','quests','train','vendor','objectives','collect'],
+    progression.add_argument('--only', choices=['all','gear','quests','train','vendor',
+                                                'objectives','collect','turnin'],
                              default='all')
     progression.add_argument('--profiles-root',
                              help='Horde quest profile root (defaults to ~/Questing-profiles)')

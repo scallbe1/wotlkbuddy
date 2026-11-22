@@ -1,0 +1,270 @@
+"""Merchant UI, safe nonquest inventory sales and bag-space recovery.
+
+All merchant identities and coordinates originate in local Horde XML and must
+be verified against CreatureSpawns.db. Only exact observed bag slots with safe
+metadata can be sold, one at a time, with a fresh full-frame comparison.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from time import monotonic, sleep as real_sleep
+from typing import Callable
+
+from wotlkbuddy.horde.combat import creature_entry_from_guid
+from wotlkbuddy.horde.npc_catalog import nearby_service_npcs
+from wotlkbuddy.horde.npc_visit import visit_npc
+from wotlkbuddy.horde.profile import HordeProfile
+from wotlkbuddy.live.codec import ClientTelemetry, MerchantItem
+from wotlkbuddy.live.control import LiveControlError
+from wotlkbuddy.live.world_position import verified_live_position
+
+
+@dataclass(frozen=True)
+class VendorSaleReport:
+    npc_name: str
+    npc_id: int
+    before_free: int
+    after_free: int
+    items_sold: tuple[tuple[int, int, int, int], ...]
+    copper_received: int
+
+
+def next_ready_profile_turnin(profile: HordeProfile, state: ClientTelemetry):
+    """Identify the next active, complete journal quest with exact XML turn-in.
+
+    Never re-submit an absent journal quest merely because a previous reward
+    command returned an ambiguous completion response.
+    """
+    if state.truncated or state.resources is None:
+        raise LiveControlError('Quest journal state incomplete before hand-in')
+    journal = {q.quest_id: q for q in state.quests}
+    history = dict(state.quest_completions)
+    for step in profile.steps:
+        if (step.kind != 'turnin' or not step.supported or
+                not step.npc_name or step.entry <= 0):
+            continue
+        quest = journal.get(step.quest_id)
+        if quest is None or not quest.complete or quest.title != step.name:
+            continue
+        if history.get(quest.quest_id) is True:
+            raise LiveControlError(
+                f'Quest {quest.quest_id} is both server-completed and '
+                'active in journal; refusing duplicate reward submission')
+        return quest
+    return None
+
+
+def safe_sale_candidates(
+    state: ClientTelemetry, *, protected_item_ids: frozenset[int],
+) -> tuple[MerchantItem, ...]:
+    """Never sell an XML quest item, quest-flagged item or unsupported rarity.
+
+    Grey vendor junk and low-rarity unused equipment are eligible; food,
+    reagents, trade goods, bag containers and rare/epic items are retained.
+    """
+    if (not state.merchant_open or not state.merchant_scan_complete or
+            state.resources is None or state.truncated):
+        raise LiveControlError('Complete live merchant inventory scan unavailable')
+    allowed = []
+    for item in state.merchant_items:
+        if item.item_id in protected_item_ids or item.quest_flag != 0 or item.locked:
+            continue
+        if item.quality == 0 or (
+                0 < item.quality <= 2 and item.equip_loc.startswith('INVTYPE_')
+                and item.equip_loc not in ('INVTYPE_BAG', 'INVTYPE_AMMO',
+                                           'INVTYPE_QUIVER', 'INVTYPE_TABARD')):
+            allowed.append(item)
+    return tuple(allowed)
+
+
+def _capture_fresh(capture, first, guard, *, sleep, now, timeout=6):
+    end = now() + timeout
+    while now() < end:
+        sleep(.25)
+        observed = capture()
+        guard(observed)
+        if observed.sequence != first.sequence:
+            return observed
+    raise LiveControlError('Merchant telemetry stopped updating')
+
+
+def sell_at_verified_merchant(
+    *, npc_name: str, npc_id: int, profile: HordeProfile,
+    capture: Callable[[], ClientTelemetry], driver,
+    min_free_slots: int = 3, max_sales: int = 36,
+    sleep: Callable[[float], None] = real_sleep,
+    now: Callable[[], float] = monotonic,
+    log: Callable[[str], None] = lambda _: None,
+) -> VendorSaleReport:
+    """UseContainerItem only after two matching frames for each item/slot.
+
+    Caller has already navigated to the profile/DB-verified merchant NPC.
+    """
+    if not 1 <= min_free_slots <= 64 or not 1 <= max_sales <= 64:
+        raise ValueError('Invalid vendor limits')
+    first = capture()
+    guid = first.player.guid
+    if not guid:
+        raise LiveControlError('Player GUID missing before merchant transaction')
+    protected = frozenset(
+        obj.entry for quest in profile.quests for obj in quest.objectives
+        if obj.kind == 'CollectItem'
+    )
+
+    def guard(s: ClientTelemetry):
+        if (s.truncated or s.player.guid != guid or s.player.dead or
+                s.player.in_combat or s.resources is None or
+                s.resources.class_token.upper() != 'MAGE' or
+                s.player.target_name != npc_name or
+                creature_entry_from_guid(s.player.target_guid) != npc_id or
+                driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+            raise LiveControlError(
+                'Merchant target/GUID, Mage identity or WoW foreground changed')
+
+    guard(first)
+    s = first
+    if not s.merchant_open:
+        log(f'Opening profile merchant {npc_name} ({npc_id})')
+        driver.interact()
+        s = _capture_fresh(capture, s, guard, sleep=sleep, now=now)
+        end = now() + 7
+        while now() < end and not (
+                s.merchant_open or
+                (s.dialog and s.dialog.kind != 'none')):
+            s = _capture_fresh(
+                capture, s, guard, sleep=sleep, now=now, timeout=2)
+        if not s.merchant_open:
+            if s.dialog is None or s.dialog.kind != 'gossip':
+                raise LiveControlError(
+                    f'{npc_name} did not open merchant or service gossip UI')
+            choices = [o for o in s.gossip_services
+                       if o.kind.casefold() in ('vendor', 'merchant')]
+            if not s.gossip_services_complete or len(choices) != 1:
+                raise LiveControlError(
+                    f'{npc_name} has no uniquely verified merchant gossip option')
+            confirmed = _capture_fresh(
+                capture, s, guard, sleep=sleep, now=now)
+            if (confirmed.dialog is None or
+                    confirmed.dialog.kind != 'gossip' or
+                    confirmed.gossip_services != s.gossip_services or
+                    not confirmed.gossip_services_complete):
+                raise LiveControlError('Merchant gossip changed before selection')
+            chosen = choices[0]
+            log(f'{npc_name}: selecting observed merchant option {chosen.index}')
+            driver.chat(f'/run SelectGossipOption({chosen.index})')
+            s = confirmed
+            end = now() + 7
+            while now() < end:
+                s = _capture_fresh(
+                    capture, s, guard, sleep=sleep, now=now, timeout=2)
+                if s.merchant_open:
+                    break
+    if not s.merchant_open:
+        raise LiveControlError(f'{npc_name}: merchant window did not open')
+
+    before_free = first.resources.free_bag_slots
+    starting_money = first.resources.money_copper
+    sold = []
+    try:
+        for _ in range(max_sales):
+            guard(s)
+            eligible = safe_sale_candidates(s, protected_item_ids=protected)
+            if not eligible:
+                break
+            item = eligible[0]
+            # A consecutive fresh frame must preserve the exact slot and
+            # contents before issuing the single bounded UseContainerItem.
+            fresh = _capture_fresh(
+                capture, s, guard, sleep=sleep, now=now)
+            if (not fresh.merchant_open or
+                    safe_sale_candidates(fresh, protected_item_ids=protected) !=
+                    eligible):
+                raise LiveControlError(
+                    'Merchant bag contents changed between sale verification frames')
+            log(f'Selling verified non-quest item {item.item_id} '
+                f'x{item.quantity} in bag {item.bag} slot {item.slot}')
+            driver.chat(f'/run UseContainerItem({item.bag},{item.slot})')
+            after = _capture_fresh(
+                capture, fresh, guard, sleep=sleep, now=now)
+            end = now() + 7
+            while now() < end:
+                remaining = [
+                    x for x in after.merchant_items
+                    if x.bag == item.bag and x.slot == item.slot and
+                    x.item_id == item.item_id]
+                if (after.merchant_open and after.merchant_scan_complete and
+                        not remaining and
+                        after.resources.free_bag_slots >
+                        fresh.resources.free_bag_slots and
+                        after.resources.money_copper >=
+                        fresh.resources.money_copper):
+                    break
+                after = _capture_fresh(
+                    capture, after, guard, sleep=sleep, now=now, timeout=2)
+            else:
+                raise LiveControlError(
+                    f'Sale of item {item.item_id} not confirmed by merchant '
+                    'inventory/space/money; no further items sold')
+            sold.append((item.bag, item.slot, item.item_id, item.quantity))
+            s = after
+        if s.resources.free_bag_slots < min_free_slots:
+            raise LiveControlError(
+                f'Only {s.resources.free_bag_slots} free bag slots after '
+                f'{len(sold)} verified sales; require {min_free_slots}. '
+                'Non-quest sellable items may be exhausted.')
+        log(f'Vendor bag-space recovery complete: {before_free} -> '
+            f'{s.resources.free_bag_slots} free slots; {len(sold)} stacks sold')
+        result = VendorSaleReport(
+            npc_name, npc_id, before_free, s.resources.free_bag_slots,
+            tuple(sold), s.resources.money_copper - starting_money)
+        driver.chat('/click MerchantFrameCloseButton')
+        closed = _capture_fresh(
+            capture, s, guard, sleep=sleep, now=now)
+        if closed.merchant_open:
+            raise LiveControlError(
+                f'{npc_name}: merchant frame did not close after verified sales')
+        s = closed
+        return result
+    finally:
+        if s.merchant_open and driver.wow_is_foreground() and (
+                not driver.emergency_stop_requested()):
+            driver.chat('/click MerchantFrameCloseButton')
+
+
+def free_bag_space(
+    *, profile: HordeProfile, profiles_root: str, pid: int,
+    capture: Callable[[], ClientTelemetry], driver, nav, spawns,
+    min_free_slots: int = 3,
+    log: Callable[[str], None] = lambda _: None,
+) -> VendorSaleReport | None:
+    """Find a real local merchant, sell verified junk/gear, return to caller."""
+    initial = capture()
+    if (initial.truncated or not initial.player.guid or
+            initial.player.dead or initial.player.in_combat or
+            initial.resources is None):
+        raise LiveControlError('Cannot recover bags without safe player telemetry')
+    if initial.resources.free_bag_slots >= min_free_slots:
+        return None
+    real_pid, world = verified_live_position(initial, pid=pid)
+    if real_pid != pid:
+        raise LiveControlError('WoW process changed during vendor routing')
+    options = nearby_service_npcs(
+        profile=profile, spawns=spawns, origin=world.position,
+        map_id=world.map_id, role='merchant',
+        profiles_root=profiles_root, radius=600)
+    if not options:
+        raise LiveControlError(
+            'Full bags: no merchant named by Horde XML and verified in '
+            'CreatureSpawns.db within 600 yards')
+    target = options[0]
+    log(f'Bags low ({initial.resources.free_bag_slots} free); '
+        f'visiting profile merchant {target.name} ({target.entry}) '
+        f'from {target.source}')
+    visit_npc(npc_name=target.name, npc_id=target.entry,
+              pid=pid, capture=capture, driver=driver,
+              nav=nav, spawns=spawns,
+              radius=600, destination_hint=target.position, log=log)
+    return sell_at_verified_merchant(
+        npc_name=target.name, npc_id=target.entry,
+        profile=profile, capture=capture, driver=driver,
+        min_free_slots=min_free_slots, log=log)

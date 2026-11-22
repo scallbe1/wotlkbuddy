@@ -198,6 +198,20 @@ class EquippedArmor:
 
 
 @dataclass(frozen=True)
+class MerchantItem:
+    """Single observed safely eligible unequipped item at a merchant."""
+    bag: int
+    slot: int
+    item_id: int
+    quantity: int
+    quality: int
+    vendor_price: int
+    quest_flag: int
+    locked: bool
+    equip_loc: str
+
+
+@dataclass(frozen=True)
 class TrainerService:
     index: int
     name: str
@@ -232,6 +246,11 @@ class ClientTelemetry:
     trainer_services: tuple[TrainerService, ...] = ()
     gossip_services: tuple[GossipServiceOption, ...] = ()
     gossip_services_complete: bool = False
+    merchant_open: bool = False
+    merchant_scan_complete: bool = False
+    merchant_items: tuple[MerchantItem, ...] = ()
+    fireball_key: str | None = None
+    fireball_cast_remaining_ms: int | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -262,6 +281,13 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     trainer_services: dict[int, TrainerService] = {}
     gossip_service_total: int | None = None
     gossip_service_options: dict[int, GossipServiceOption] = {}
+    merchant_seen = False
+    merchant_scan_complete = False
+    merchant_count = 0
+    merchant_items: dict[tuple[int, int], MerchantItem] = {}
+    fireball_record_seen = False
+    fireball_key = None
+    fireball_cast_remaining_ms = None
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -353,6 +379,52 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                         '\\r' in parts[3] or '\\n' in parts[3]):
                     raise TelemetryError('Invalid quest item name')
                 tracked_item_name = parts[3] or None
+        elif parts[0] == 'F':
+            if (len(parts) != 3 or fireball_record_seen or
+                    parts[1] not in ('-', *'0123456789')):
+                raise TelemetryError('Malformed or duplicate Fireball action record')
+            try:
+                remaining = int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Malformed Fireball cast timing') from exc
+            if not -1 <= remaining <= 20000:
+                raise TelemetryError('Fireball cast timing out of range')
+            fireball_record_seen = True
+            fireball_key = parts[1] if parts[1] != '-' else None
+            fireball_cast_remaining_ms = remaining if remaining >= 0 else None
+        elif parts[0] == 'M':
+            if (len(parts) != 3 or merchant_seen or
+                    parts[1] not in ('0', '1')):
+                raise TelemetryError('Malformed or repeated merchant header')
+            try:
+                merchant_count = int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Malformed merchant candidate count') from exc
+            if not 0 <= merchant_count <= 64 or (
+                    parts[1] == '0' and merchant_count):
+                raise TelemetryError('Invalid merchant inventory count')
+            merchant_seen = True
+            merchant_scan_complete = parts[1] == '1'
+        elif parts[0] == 'D':
+            if (len(parts) != 10 or not merchant_seen or
+                    not merchant_scan_complete):
+                raise TelemetryError('Merchant item without complete header')
+            try:
+                bag, slot, item_id, qty, quality, price, quest, locked = (
+                    int(part) for part in parts[1:9])
+            except ValueError as exc:
+                raise TelemetryError('Malformed merchant item integers') from exc
+            equip = parts[9]
+            if (not 0 <= bag <= 4 or not 1 <= slot <= 36 or
+                    not 1 <= item_id < 2**31 or not 1 <= qty <= 1000 or
+                    not 0 <= quality <= 2 or not 1 <= price < 2**31 or
+                    quest != 0 or locked != 0 or len(equip) > 27 or
+                    (quality > 0 and not equip.startswith('INVTYPE_')) or
+                    (bag, slot) in merchant_items):
+                raise TelemetryError('Unsafe or duplicate merchant item')
+            merchant_items[(bag, slot)] = MerchantItem(
+                bag, slot, item_id, qty, quality, price,
+                quest, False, equip)
         elif parts[0] == 'L':
             if len(parts) not in (2, 3) or loot_count is not None:
                 raise TelemetryError('Invalid or duplicate loot status')
@@ -543,6 +615,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
         raise TelemetryError('Missing player record')
     if trainer_seen and len(trainer_services) != trainer_count:
         raise TelemetryError('Incomplete trainer service list')
+    if merchant_seen and merchant_scan_complete and (
+            len(merchant_items) != merchant_count):
+        raise TelemetryError('Incomplete merchant item list')
     if gossip_service_options and gossip_service_total is None:
         raise TelemetryError('Gossip service options missing count')
     if gossip_service_total is not None and (
@@ -586,4 +661,10 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            trainer_services=tuple(trainer_services.values()),
                            gossip_services=tuple(gossip_service_options[i]
                              for i in sorted(gossip_service_options)),
-                           gossip_services_complete=gossip_service_total is not None)
+                           gossip_services_complete=gossip_service_total is not None,
+                           merchant_open=merchant_seen,
+                           merchant_scan_complete=merchant_scan_complete,
+                           merchant_items=tuple(
+                               merchant_items[k] for k in sorted(merchant_items)),
+                           fireball_key=fireball_key,
+                           fireball_cast_remaining_ms=fireball_cast_remaining_ms)
