@@ -476,6 +476,27 @@ def _horde_progress(args: argparse.Namespace) -> None:
                             capture=cap, driver=driver, log=log)
                         if upgraded:
                             report['equipped_item_ids'] = tuple(upgraded)
+            if args.only == 'turnin' and not delivered_ready_quest:
+                snapshot = cap()
+                history = dict(snapshot.quest_completions)
+                journal = {q.quest_id: q for q in snapshot.quests}
+                # Distinguish a previously completed quest from a still
+                # active ready quest, and from an *unknown* disappearance.
+                # Never invent completion based on absence from the journal.
+                quest_ids = tuple(dict.fromkeys(
+                    step.quest_id for step in quest_profile.steps
+                    if step.kind == 'turnin' and step.supported))
+                report['turnin_audit'] = {
+                    str(qid): {
+                        'in_journal': qid in journal,
+                        'journal_complete': (
+                            journal[qid].complete if qid in journal else None),
+                        'server_history_complete': history.get(qid),
+                    } for qid in quest_ids
+                    if qid in journal or qid in history}
+                report['turnin_status'] = (
+                    'no_ready_active_quest; unknown history is not a '
+                    'safe reason to retry a reward')
             if args.only in ('all', 'objectives', 'collect') and not delivered_ready_quest:
                 state, current = location()
                 kill = (next_active_kill_quest(
