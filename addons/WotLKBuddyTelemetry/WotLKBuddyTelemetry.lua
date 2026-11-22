@@ -581,5 +581,115 @@ SlashCmdList['WOTLKBUDDY'] = function(msg)
     end
 end
 
+-- Native WoW Goal/Action heads-up display. Unlike an external Tk window,
+-- this remains visible in exclusive-fullscreen WoW and is independent of the
+-- RGB telemetry canvas. Python sets only an integer journal quest ID and a
+-- bounded fixed phase using allowlisted slash commands. Live action text
+-- (combat, loot, walking, casting) comes from the game itself.
+local statusFrame = CreateFrame('Frame', 'WotLKBuddyStatusHUD', UIParent)
+statusFrame:SetWidth(370)
+statusFrame:SetHeight(53)
+statusFrame:ClearAllPoints()
+statusFrame:SetPoint('TOPLEFT', UIParent, 'TOPLEFT', 16, -155)
+statusFrame:SetFrameStrata('HIGH')
+statusFrame:EnableMouse(false)
+statusFrame:SetBackdrop({bgFile='Interface\\Buttons\\WHITE8X8'})
+statusFrame:SetBackdropColor(0.04, 0.06, 0.10, 0.88)
+local goalText = statusFrame:CreateFontString(nil, 'OVERLAY', 'GameFontNormal')
+goalText:SetPoint('TOPLEFT', statusFrame, 'TOPLEFT', 9, -9)
+goalText:SetWidth(352)
+goalText:SetJustifyH('LEFT')
+local actionText = statusFrame:CreateFontString(nil, 'OVERLAY', 'GameFontHighlightSmall')
+actionText:SetPoint('TOPLEFT', goalText, 'BOTTOMLEFT', 0, -7)
+actionText:SetWidth(352)
+actionText:SetJustifyH('LEFT')
+
+local hudQuestId = 0
+local hudQuestName = ''
+local hudPhase = 'idle'
+local hudLastAction = ''
+local hudLastActive = 0
+local phaseLabels = {
+    idle='Waiting for next goal',
+    hunt='Complete quest objectives',
+    turnin='Turn in completed quest',
+    quests='Accept available quests',
+    train='Visit class trainer',
+    gear='Check and equip upgrades',
+    vendor='Visit merchant'
+}
+local function setQuestGoal(id)
+    hudQuestId = id
+    hudQuestName = ''
+    if id > 0 and GetNumQuestLogEntries and GetQuestLogTitle then
+        for i=1, GetNumQuestLogEntries() do
+            local title, _, _, _, isHeader, _, _, _, qid =
+                GetQuestLogTitle(i)
+            if not isHeader and qid == id and type(title) == 'string' then
+                hudQuestName = title
+                break
+            end
+        end
+    end
+    if id > 0 and hudQuestName == '' then
+        hudQuestName = 'Quest ' .. tostring(id)
+    end
+end
+SLASH_WOTLKBUDDYGOAL1 = '/wbtgoal'
+SlashCmdList['WOTLKBUDDYGOAL'] = function(message)
+    local id = tonumber(message or '')
+    if not id or id ~= math.floor(id) or id < 0 or id > 999999 then return end
+    setQuestGoal(id)
+    statusFrame:Show()
+end
+SLASH_WOTLKBUDDYPHASE1 = '/wbtphase'
+SlashCmdList['WOTLKBUDDYPHASE'] = function(message)
+    if phaseLabels[message or ''] then
+        hudPhase = message
+        statusFrame:Show()
+    end
+end
+
+local statusElapsed = 0
+statusFrame:SetScript('OnUpdate', function(_, elapsed)
+    statusElapsed = statusElapsed + elapsed
+    if statusElapsed < 0.20 then return end
+    statusElapsed = 0
+    if hudQuestId > 0 and hudQuestName == ('Quest '..hudQuestId) then
+        setQuestGoal(hudQuestId)
+    end
+    local goal = phaseLabels[hudPhase] or phaseLabels.idle
+    if hudQuestId > 0 then
+        goal = goal .. ': ' .. hudQuestName
+    end
+    goalText:SetText('Goal: ' .. string.sub(goal, 1, 65))
+    local action = phaseLabels[hudPhase] or 'Standing by'
+    if LootFrame and LootFrame:IsShown() then
+        action = 'Looting corpse'
+    elseif ClassTrainerFrame and ClassTrainerFrame:IsShown() then
+        action = 'Training Mage spells'
+    elseif UnitCastingInfo and UnitCastingInfo('player') then
+        local spell = UnitCastingInfo('player')
+        action = 'Casting ' .. tostring(spell)
+    elseif UnitChannelInfo and UnitChannelInfo('player') then
+        local spell = UnitChannelInfo('player')
+        action = 'Channeling ' .. tostring(spell)
+    elseif UnitAffectingCombat('player') then
+        action = 'Combat'
+    elseif GetUnitSpeed and (GetUnitSpeed('player') or 0) > 0.2 then
+        action = 'Navigating'
+    elseif hudPhase == 'hunt' then
+        action = 'Searching for quest enemies'
+    elseif hudPhase == 'turnin' then
+        action = 'Interacting with quest giver'
+    end
+    if action ~= hudLastAction then
+        hudLastAction = action
+        hudLastActive = GetTime()
+        actionText:SetText('Action: ' .. string.sub(action, 1, 67))
+    end
+end)
+statusFrame:Show()
+
 queryCompletions()
 publish()
