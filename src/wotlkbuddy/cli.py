@@ -249,6 +249,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
     from wotlkbuddy.horde.quest_offers import accept_npc_offers
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
     from wotlkbuddy.horde.training import train_available_mage_spells
+    from wotlkbuddy.horde.npc_service_turnin import turnin_ready_quests_at_npc
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
     from wotlkbuddy.live.capture import capture_monitor
@@ -367,6 +368,18 @@ def _horde_progress(args: argparse.Namespace) -> None:
                           pid=pid, capture=cap, driver=driver, nav=nav,
                           spawns=db, radius=600,
                           destination_hint=trainer.position, log=log)
+                # NPC services and quest turn-in are not mutually exclusive.
+                # Complete only ready quests explicitly targeting this verified
+                # NPC in the selected profile before opening class training.
+                handed_in = turnin_ready_quests_at_npc(
+                    profile=quest_profile, npc_name=trainer.name,
+                    npc_id=trainer.entry, capture=cap, driver=driver, log=log)
+                report['trainer_quest_turnins'] = handed_in
+                if handed_in and cap().gear_scan_complete:
+                    upgraded = equip_mage_upgrades(
+                        capture=cap, driver=driver, log=log)
+                    if upgraded:
+                        report['equipped_item_ids'] = tuple(upgraded)
                 report['trained_spells'] = train_available_mage_spells(
                     npc_name=trainer.name, npc_id=trainer.entry,
                     capture=cap, driver=driver, log=log)

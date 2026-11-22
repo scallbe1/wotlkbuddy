@@ -6,6 +6,7 @@ from typing import Callable
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.horde.combat import creature_entry_from_guid
+from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 
 
 def train_available_mage_spells(
@@ -43,17 +44,82 @@ def train_available_mage_spells(
 
     guard(first)
     s = first
-    if not s.trainer_open:
-        log(f'Opening class trainer {npc_name}')
-        driver.interact()
-        deadline = now()+8
-        while now() < deadline:
-            s=fresh(s)
+    # A trainer may also have quests or gossip options. Never assume that the
+    # first Interact opens training; inspect the actual client UI instead.
+    for attempt in range(6):
+        if s.trainer_open:
+            break
+        kind = s.dialog.kind if s.dialog else 'none'
+        if kind in ('detail', 'progress', 'reward', 'greeting'):
+            log(f'{npc_name}: observed {kind} quest panel, not training; '
+                'closing without issuing any quest-completion command')
+            s = dismiss_quest_dialog(
+                capture=capture, driver=driver, expected_guid=guid,
+                sleep=sleep, now=now, log=log)
+            guard(s)
+            continue
+        if kind == 'none':
+            log(f'Opening class trainer {npc_name}')
+            driver.interact()
+            deadline = now() + 8
+            last = s
+            while now() < deadline:
+                s = fresh(last)
+                last = s
+                if s.trainer_open or (s.dialog and s.dialog.kind != 'none'):
+                    break
             if s.trainer_open:
                 break
+            if s.dialog is None or s.dialog.kind == 'none':
+                raise LiveControlError(
+                    f'{npc_name}: interaction did not open a visible trainer, '
+                    'gossip or quest panel')
+            # The next iteration processes whatever live UI actually opened.
+            continue
+        if kind != 'gossip':
+            raise LiveControlError(
+                f'{npc_name}: unsupported NPC UI state {kind!r} before training')
+        if not s.gossip_services_complete:
+            raise LiveControlError(
+                f'{npc_name}: complete gossip service telemetry unavailable; '
+                'reinstall updated WotLKBuddyTelemetry addon and /reload')
+        matches = [option for option in s.gossip_services
+                   if option.kind.lower() == 'trainer']
+        if len(matches) != 1:
+            raise LiveControlError(
+                f'{npc_name}: expected one trainer gossip service; '
+                f'observed {[(o.index, o.kind, o.text) for o in s.gossip_services]!r}')
+        selected = matches[0]
+        confirmed = fresh(s)
+        if (confirmed.dialog is None or confirmed.dialog.kind != 'gossip'
+                or not confirmed.gossip_services_complete or
+                confirmed.gossip_services != s.gossip_services):
+            raise LiveControlError(
+                f'{npc_name}: trainer gossip service list changed before selection')
+        guard(confirmed)
+        log(f'{npc_name}: selecting verified training gossip option '
+            f'{selected.index} {selected.text!r}')
+        driver.chat(f'/run SelectGossipOption({selected.index})')
+        deadline = now() + 8
+        last = confirmed
+        while now() < deadline:
+            s = fresh(last)
+            last = s
+            if s.trainer_open:
+                break
+            if s.dialog and s.dialog.kind in ('detail','progress','reward'):
+                raise LiveControlError(
+                    f'{npc_name}: selecting training opened a quest panel '
+                    f'({s.dialog.kind}) instead of class training')
         if not s.trainer_open:
             raise LiveControlError(
-                f'{npc_name} trainer window did not open; unsupported gossip menu')
+                f'{npc_name}: verified training gossip selection did not '
+                'open the class trainer window')
+        break
+    if not s.trainer_open:
+        raise LiveControlError(
+            f'{npc_name}: quest/gossip UI did not yield class trainer '
+            'within bounded attempts')
     bought=[]
     for _ in range(max_spells):
         guard(s)
