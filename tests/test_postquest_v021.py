@@ -142,19 +142,26 @@ class PostquestTests(unittest.TestCase):
     def test_trains_only_observed_affordable_service(self):
         clock=Clock()
         d=Driver()
-        state={'seq':0, 'services':(TrainerService(1,'Frostbolt','Rank 1',10,2),)}
+        state={'seq':0, 'services':(TrainerService(1,'Frostbolt','Rank 1',10,2),),
+               'open': True}
         target=replace(snap().player,
             target_name='Isabella', target_guid='0xF13000084C000001')
         def capture():
             state['seq']+=1
             return snap(sequence=state['seq'], player=target,
-                trainer_open=True, trainer_services=state['services'])
-        d.on_chat=lambda command: state.update(services=()) \
-            if command=='/run BuyTrainerService(1)' else None
+                trainer_open=state['open'], trainer_services=state['services'])
+        def on_chat(command):
+            if command == '/run BuyTrainerService(1)':
+                state['services'] = ()
+            if command == '/click ClassTrainerFrameCloseButton':
+                state['open'] = False
+        d.on_chat=on_chat
         trained=train_available_mage_spells(npc_name='Isabella',npc_id=2124,
             capture=capture,driver=d,now=clock.now,sleep=clock.sleep)
         self.assertEqual(trained,('Frostbolt Rank 1',))
         self.assertIn('/run BuyTrainerService(1)',d.commands)
+        self.assertIn('/click ClassTrainerFrameCloseButton', d.commands)
+        self.assertFalse(state['open'])
 
     def test_visits_nearby_verified_npc_without_unnecessary_travel(self):
         clock=Clock()
