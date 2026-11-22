@@ -81,21 +81,55 @@ def accept_npc_offers(
         else:
             api = 'SelectGossipAvailableQuest' if source == 'gossip' else 'SelectAvailableQuest'
             command = f'/run {api}({option.index})'
-        log(f'{npc_name}: selecting observed quest {option.title!r}')
+        log(f'{npc_name}: selecting observed quest {option.title!r}: {command}')
         driver.chat(command)
-        detail = fresh(verified)
-        if (detail.dialog is None or detail.dialog.kind != 'detail' or
-                detail.dialog.title not in ('',option.title)):
+        # The 3.3.5 UI and our read-only addon update asynchronously. The
+        # first fresh telemetry frame after /click can still show the previous
+        # gossip menu or a transitional 'none' panel. Do not treat that as a
+        # failed quest identity, and NEVER accept it as a quest detail either.
+        # Wait a bounded time for a matching detail, fail immediately on any
+        # different explicit quest title, then require a second matching frame.
+        deadline = now() + 7
+        last = verified
+        detail = None
+        observed = 'no fresh frame'
+        while now() < deadline:
+            frame = fresh(last, timeout=min(2, max(.4, deadline - now())))
+            last = frame
+            ui = frame.dialog
+            observed = ('missing dialogue' if ui is None else
+                        f'{ui.kind} id={ui.quest_id} title={ui.title!r}')
+            if ui is None:
+                continue
+            if ui.kind == 'detail':
+                if ui.title not in ('', option.title):
+                    raise LiveControlError(
+                        f'Wrong quest detail after selecting {option.title!r}: '
+                        f'{observed}; no quest accepted')
+                detail = frame
+                break
+            if ui.kind not in (source, 'none'):
+                raise LiveControlError(
+                    f'Unexpected quest window after selecting {option.title!r}: '
+                    f'{observed}; no quest accepted')
+        if detail is None:
             raise LiveControlError(
-                f'Quest detail did not match verified offered title {option.title!r}')
-        # Require another independent frame of exactly the same detail
-        # before AcceptQuest; blank title is causal only from our menu click.
+                f'Timed out waiting for detail for {option.title!r}; '
+                f'last observed {observed}; no quest accepted')
+        # Require a second independent, consistent detail frame immediately
+        # after the first observed detail. A blank title is only authorized by
+        # our fresh unique menu selection in this same invocation.
         again = fresh(detail)
         if (again.dialog is None or again.dialog.kind != 'detail' or
-                again.dialog.title not in ('',option.title) or
+                again.dialog.title not in ('', option.title) or
                 (detail.dialog.quest_id and again.dialog.quest_id and
                  detail.dialog.quest_id != again.dialog.quest_id)):
-            raise LiveControlError('Selected quest detail changed before acceptance')
+            after = ('missing dialogue' if again.dialog is None else
+                     f'{again.dialog.kind} id={again.dialog.quest_id} '
+                     f'title={again.dialog.title!r}')
+            raise LiveControlError(
+                f'Selected quest detail changed before acceptance: '
+                f'{observed} -> {after}; no quest accepted')
         driver.chat('/run AcceptQuest()')
         deadline = now()+9
         last = again
