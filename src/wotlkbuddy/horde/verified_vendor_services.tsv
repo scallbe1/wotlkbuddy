@@ -1,0 +1,9 @@
+# ID<TAB>NPC name<TAB>merchant service<TAB>source URL
+# Classic/WotLK Tirisfal Deathknell merchant identities, not world XYZ.
+# Never assume a vendor exists on the current private server:
+# CreatureSpawns.db must confirm the actual map/position, followed by
+# exact GUID/name and a real open merchant UI before any inventory sale.
+2115	Joshua Kien	general	https://www.wowhead.com/wotlk/npc=2115/joshua-kien
+2113	Archibald Kava	repair	https://www.wowhead.com/classic/npc=2113/archibald-kava
+2116	Blacksmith Rand	repair	https://www.wowhead.com/classic/npc=2116/blacksmith-rand
+2117	Harold Raims	repair	https://wotlk.evowow.com/?npc=2117
