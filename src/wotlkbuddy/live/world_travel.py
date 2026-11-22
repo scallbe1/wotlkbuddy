@@ -11,11 +11,18 @@ from dataclasses import asdict, dataclass
 from math import atan2, cos, hypot, isfinite, pi, sin
 from time import monotonic, sleep as real_sleep
 from typing import Callable, Sequence
+from weakref import WeakKeyDictionary
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import KeyboardDriver, LiveControlError, _MOVEMENT_SCANCODES
 from wotlkbuddy.live.world_position import WorldPosition
+
+
+# Same-process calibration applies only to a verified character/map and
+# the same physical keyboard driver. Future turns still check actual facing
+# deltas and stop on disagreement. Weak keys avoid retaining old drivers.
+_TURN_CALIBRATIONS = WeakKeyDictionary()
 
 
 def _distance_xy(a: Vec3, b: Vec3) -> float:
@@ -169,21 +176,37 @@ def follow_world_path(
             keyboard.key_up(scan)
         guard()
 
-    # Determine which way the keyboard turns world-facing radians. Different
-    # clients and key configurations can invert expected directions, so measure.
-    notify('Calibrating D-turn using verified live facing (no forward movement)')
-    before = world
-    pulse('turn-right', 0.12)
-    current, world = checked()
-    calibration = _angle(world.facing_rad - before.facing_rad)
-    if not 0.09 <= abs(calibration) <= 1.3:
-        raise LiveControlError('Turn key did not produce a plausible facing change')
-    if _distance_xy(before.position, world.position) > 1.2:
-        raise LiveControlError('Player translated unexpectedly while calibrating turn')
-    right_sign = 1 if calibration > 0 else -1
-    turn_rate = min(6.0, max(1.2, abs(calibration) / 0.12))
-    turns += 1
-    notify(f'Calibrated turn direction={right_sign:+d}, rate={turn_rate:.2f} rad/s')
+    # Reusing measured calibration across nearby Detour legs avoids a
+    # visible 0.12s D-key twitch before every corpse and vendor approach.
+    # Character/map/keyboard must all match; real turn feedback remains
+    # checked for directional agreement on every steering correction.
+    try:
+        cached = _TURN_CALIBRATIONS.get(keyboard)
+    except TypeError:
+        cached = None  # unhashable/extension keyboard: calibrate normally
+    if cached is not None and cached[:2] == (guid, world.map_id):
+        right_sign, turn_rate = cached[2:]
+        notify(f'Reusing verified turn calibration: direction={right_sign:+d}, '
+               f'rate={turn_rate:.2f} rad/s')
+    else:
+        notify('Calibrating D-turn using verified live facing (no forward movement)')
+        before = world
+        pulse('turn-right', 0.12)
+        current, world = checked()
+        calibration = _angle(world.facing_rad - before.facing_rad)
+        if not 0.09 <= abs(calibration) <= 1.3:
+            raise LiveControlError('Turn key did not produce a plausible facing change')
+        if _distance_xy(before.position, world.position) > 1.2:
+            raise LiveControlError('Player translated unexpectedly while calibrating turn')
+        right_sign = 1 if calibration > 0 else -1
+        turn_rate = min(6.0, max(1.2, abs(calibration) / 0.12))
+        turns += 1
+        try:
+            _TURN_CALIBRATIONS[keyboard] = (
+                guid, world.map_id, right_sign, turn_rate)
+        except TypeError:
+            pass
+        notify(f'Calibrated turn direction={right_sign:+d}, rate={turn_rate:.2f} rad/s')
 
     def recover_around_wall(waypoint: Vec3) -> bool:
         """Bounded, measured Q/E sidestep of a *navmesh-checked* local segment.
