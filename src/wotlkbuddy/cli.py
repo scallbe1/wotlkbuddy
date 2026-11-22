@@ -402,11 +402,16 @@ def _horde_progress(args: argparse.Namespace) -> None:
                 report['trained_spells'] = train_available_mage_spells(
                     npc_name=trainer.name, npc_id=trainer.entry,
                     capture=cap, driver=driver, log=log)
-                # Independently verify journal/history after *all* training
-                # UI has been closed. The intermediate "turned_in" report is
-                # authoritative at that instant, but an extra fresh frame
-                # gives useful evidence when the player sees no completion.
-                if handed_in:
+                # An independent post-training snapshot makes the quest
+                # status visible even when a turn-in happened in an earlier
+                # run (and must NOT be submitted again). Only quests explicitly
+                # assigned to this NPC in the current profile are included.
+                trainer_quest_ids = {
+                    step.quest_id for step in quest_profile.steps
+                    if step.kind == 'turnin' and step.entry == trainer.entry
+                    and step.npc_name in ('', trainer.name)}
+                if trainer_quest_ids:
+                    hud.set(action='Rechecking quest journal and server history')
                     post = cap()
                     flags = dict(post.quest_completions)
                     still_active = {q.quest_id for q in post.quests}
@@ -414,11 +419,11 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         str(qid): {
                             'server_history_complete': flags.get(qid) is True,
                             'still_in_journal': qid in still_active,
-                        } for qid in handed_in}
+                        } for qid in sorted(trainer_quest_ids)}
                     report['post_training_quest_verification'] = confirmations
-                    if any(not item['server_history_complete'] or
-                           item['still_in_journal']
-                           for item in confirmations.values()):
+                    if any(not confirmations[str(qid)]['server_history_complete'] or
+                           confirmations[str(qid)]['still_in_journal']
+                           for qid in handed_in):
                         raise LiveControlError(
                             f'Quest hand-in contradicted by post-training '
                             f'journal/history: {confirmations!r}')
