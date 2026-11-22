@@ -84,6 +84,22 @@ The server's live journal (for example, `0/8`) is authoritative when it differs
 from the profile XML count (for example, `x5`). The quest's actual completion
 flags drive movement to the next species.
 
+## v0.19 navigation recovery after wall/doorway collisions
+
+When a short Detour movement leg reports `Measured movement disagrees with
+client facing`, the world follower still immediately releases the movement
+keys and stops that path. The combat hunt can then check the actual live
+position, GUID, map, alive and noncombat state. If verified, it excludes that
+candidate creature spawn for this session and recomputes the next search from
+the observed position. At most **one** alternate-route recovery is attempted;
+a second heading mismatch ends the whole hunt to avoid repeated indoor
+navigation. Other navigation errors continue to abort normally. No unsafe
+heading-tolerance increase or blind movement has been introduced.
+
+This avoids repeatedly trying the same house spawn but does not guarantee
+that Detour can navigate out of every building. In a troublesome indoor area,
+stop and manually move the character back to open ground before restarting.
+
 ## Stop conditions and known limitations
 
 - No client version other than compatible WoW 3.3.5a build 12340 is verified.
