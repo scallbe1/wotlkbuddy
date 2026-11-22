@@ -250,6 +250,8 @@ class PostquestTests(unittest.TestCase):
                         state.update(phase='clicked', delay=2)
                     elif command == '/run AcceptQuest()':
                         state['accepted'] = True
+                        # Acceptance closes the selected quest-detail panel.
+                        state['phase'] = 'accepted'
                 d.on_chat = chat
                 out = accept_npc_offers(
                     npc_name='Shadow Priest Sarvis', npc_id=1569,
