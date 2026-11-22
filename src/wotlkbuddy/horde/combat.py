@@ -33,6 +33,7 @@ class HuntReport:
     loot_attempts: int = 0
     loot_confirmed: int = 0
     loot_skipped: int = 0
+    collected_items: tuple[tuple[int, int, int], ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -124,6 +125,7 @@ def hunt_kill_objectives(
     target_xyz: Callable[[ClientTelemetry], Vec3] | None = None,
     world_position: Callable[[ClientTelemetry], tuple[int, object]] | None = None,
     travel: Callable[..., object] = follow_world_path,
+    collect_items: bool = False,
 ) -> HuntReport:
     """Execute a single profile's remaining kill objectives until done or bounded abort.
 
@@ -154,6 +156,8 @@ def hunt_kill_objectives(
     # after an off-axis collision. Never retry the same problematic spawn.
     navigation_mismatches = 0
     loot_attempts = loot_confirmed = loot_skipped = 0
+    active_tracked_item = 0
+    collected_results: dict[int, tuple[int, int]] = {}
 
     def guard(s: ClientTelemetry) -> None:
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()):
@@ -293,6 +297,29 @@ def hunt_kill_objectives(
             s = fresh(s, 2.65)
             new = s.combat_target
             if s.player.target_guid != target_guid or new.entry_id != expected:
+                if collect_items:
+                    # Loot-item credit comes only after opening the corpse,
+                    # so kill credit cannot prove death for item collection.
+                    # Only reselect the EXACT formerly targeted dead creature.
+                    if s.player.target_guid:
+                        raise LiveControlError(
+                            'Target switched during item-collection fight')
+                    driver.chat('/targetlasttarget')
+                    s = fresh(s)
+                    observed_dead = s.combat_target
+                    if (s.player.target_guid != target_guid or
+                            observed_dead is None or
+                            observed_dead.entry_id != expected or
+                            observed_dead.dead is not True or
+                            s.player.in_combat):
+                        raise LiveControlError(
+                            'CollectItem kill not verified: exact dead corpse '
+                            'could not be reselected')
+                    kills += 1
+                    last_target = expected
+                    log(f'Item-source creature {expected} defeated and '
+                        'exact corpse GUID reselected')
+                    return s
                 # WoW can clear its target as the killing Fireball lands.
                 # Never assume death from a lost GUID; require quest credit
                 # for this exact objective before moving on.
@@ -404,16 +431,53 @@ def hunt_kill_objectives(
     for iteration in range(max_kills * 6):
         s = capture()
         guard(s)
-        current_objective = next_kill_objective(profile, s, quest_id)
+        current_objective = (
+            next_collect_objective(profile, s, quest_id) if collect_items
+            else next_kill_objective(profile, s, quest_id))
         if current_objective is None:
             return HuntReport(
                 quest_id, s.player.name, kills, True, 'objectives_complete',
                 last_target, last_description,
-                loot_attempts, loot_confirmed, loot_skipped)
+                loot_attempts, loot_confirmed, loot_skipped,
+                tuple((item_id, counts[0], counts[1])
+                      for item_id, counts in collected_results.items()))
         if kills >= max_kills:
             raise LiveControlError('Kill limit reached before objective completion')
         spec, observed = current_objective
-        expected = spec.entry
+        allowed_sources = (
+            tuple(dict.fromkeys(
+                source.entry for source in spec.sources
+                if source.kind == 'mob' and 0 < source.entry < 2**24))
+            if collect_items else (spec.entry,))
+        if not allowed_sources:
+            raise LiveControlError(
+                f'CollectItem {spec.entry} has no Mob source IDs in local '
+                'Horde XML; no creature is authorized for item farming')
+        if collect_items and active_tracked_item != spec.entry:
+            driver.chat(f'/wbttrack {spec.entry}')
+            observed_tracker = fresh(s)
+            if (observed_tracker.tracked_item_id != spec.entry or
+                    observed_tracker.tracked_item_count is None):
+                raise LiveControlError(
+                    f'Cannot verify inventory count for item {spec.entry}; '
+                    'reinstall updated WotLKBuddyTelemetry addon and /reload')
+            active_tracked_item = spec.entry
+            s = observed_tracker
+            log(f'Collecting item {spec.entry} from profile Mob IDs '
+                f'{allowed_sources}; inventory={s.tracked_item_count}, '
+                f'journal={observed.description}')
+        if collect_items and (
+                s.tracked_item_id != spec.entry or
+                s.tracked_item_count is None):
+            raise LiveControlError(
+                'Tracked item identity missing or changed during collection')
+        if collect_items:
+            parsed = objective_progress(observed.description)
+            if parsed is None or s.tracked_item_count < parsed[0]:
+                raise LiveControlError(
+                    'Inventory count conflicts with live CollectItem journal')
+            collected_results[spec.entry] = (s.tracked_item_count, spec.count)
+        expected = allowed_sources[0]
         last_description = observed.description
         s = rest(s)
         s = buffs(s)
