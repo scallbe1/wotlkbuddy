@@ -689,7 +689,12 @@ statusFrame:SetScript('OnUpdate', function(_, elapsed)
         actionText:SetText('Action: ' .. string.sub(action, 1, 67))
     end
 end)
-statusFrame:Show()
+statusFrame:Hide()
+SLASH_WOTLKBUDDYHUD1 = '/wbthud'
+SlashCmdList['WOTLKBUDDYHUD'] = function(message)
+    if message == 'show' then statusFrame:Show()
+    elseif message == 'hide' then statusFrame:Hide() end
+end
 
 queryCompletions()
 publish()
