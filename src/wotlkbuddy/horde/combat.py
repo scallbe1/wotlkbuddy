@@ -205,8 +205,21 @@ def hunt_kill_objectives(
             raise LiveControlError('Navigation stopped: '+report.stopped_reason)
         return out
 
-    def attack(s: ClientTelemetry, expected: int) -> ClientTelemetry:
+    def attack(s: ClientTelemetry, expected: int, objective_index: int,
+               previous_credit: tuple[int, int] | None) -> ClientTelemetry:
         nonlocal kills, last_target
+
+        def quest_credit_advanced(snapshot: ClientTelemetry) -> bool:
+            """Credit must increase on the specific live journal objective."""
+            if previous_credit is None:
+                return False
+            for objective in qlog(snapshot).objectives:
+                if objective.index == objective_index:
+                    credit = objective_progress(objective.description)
+                    return (credit is not None and
+                            credit[1] == previous_credit[1] and
+                            credit[0] > previous_credit[0])
+            return False
         if s.mage_buffs.knows_fireball is not True:
             raise LiveControlError('Fireball is not confirmed learned; Mage spell driver cannot fire')
         t = s.combat_target
@@ -237,7 +250,22 @@ def hunt_kill_objectives(
             s = fresh(s, 2.65)
             new = s.combat_target
             if s.player.target_guid != target_guid or new.entry_id != expected:
-                raise LiveControlError('Target changed while casting')
+                # WoW can clear its target as the killing Fireball lands.
+                # Never assume death from a lost GUID; require quest credit
+                # for this exact objective before moving on.
+                for attempt in range(5):
+                    if quest_credit_advanced(s):
+                        kills += 1
+                        last_target = expected
+                        log(f'Creature {expected} credited in quest journal after '
+                            'target disappeared; resuming target search')
+                        return s
+                    if attempt < 4:
+                        s = fresh(s, 0.8)
+                raise LiveControlError(
+                    f'Target changed while casting ({target_guid} -> '
+                    f'{s.player.target_guid or "<none>"}) without confirmed '
+                    'quest kill credit; no further spells sent')
             if not new.dead and new.health >= previous_health:
                 unchanged += 1
             else:
@@ -248,7 +276,11 @@ def hunt_kill_objectives(
 
     def loot(s: ClientTelemetry, corpse: Vec3 | None) -> ClientTelemetry:
         # Loot is best-effort; do not walk to an unknown corpse position.
-        if corpse is None or s.player.in_combat:
+        # Do not approach an unselected corpse: target identity and loot
+        # ownership can no longer be verified after an auto-clear.
+        if (corpse is None or s.player.in_combat or
+                not s.player.target_guid or s.combat_target is None or
+                not s.combat_target.dead):
             return s
         s = navigate(s, corpse)
         if s.player.target_guid and s.combat_target and s.combat_target.dead:
@@ -331,7 +363,8 @@ def hunt_kill_objectives(
                     s.combat_target.fireball_in_range is True):
                 before = qlog(s)
                 before_text = tuple(o.description for o in before.objectives)
-                s = attack(s, expected)
+                s = attack(s, expected, observed.index,
+                           objective_progress(observed.description))
                 s = fresh(s, 1.0)
                 if s.player.in_combat:
                     # A second enemy might be nearby; cannot loot during active combat.
