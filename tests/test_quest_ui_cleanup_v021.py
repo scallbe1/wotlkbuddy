@@ -5,6 +5,7 @@ import unittest
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.quest_offers import accept_npc_offers
+from wotlkbuddy.horde.profile import HordeProfile, OrderStep
 from wotlkbuddy.horde.npc_visit import visit_npc
 from wotlkbuddy.horde.worlddata import Spawn
 from wotlkbuddy.live.codec import QuestRecord, QuestDialog, AvailableQuestOption
@@ -31,6 +32,11 @@ class Sim:
         self.seq = 0
         self.driver.on_chat = self.chat
         self.driver.on_interact = self.interact
+        self.direct_npcs = set()
+        self.blank_direct_title = False
+        self.wrong_direct_id = False
+        self.mutate_second_detail = False
+        self.direct_detail_frames = 0
 
     def remaining(self):
         return [(qid, title) for qid, title in self.offers[self.npc]
@@ -47,8 +53,17 @@ class Sim:
         quests = tuple(QuestRecord(qid, 2, False, title)
                        for qid, title in self.accepted.items())
         title = self.selected[1] if self.selected is not None else ''
+        quest_id = 0
+        if self.dialog == 'detail' and self.npc in self.direct_npcs:
+            self.direct_detail_frames += 1
+            if self.blank_direct_title:
+                title = ''
+            elif self.mutate_second_detail and self.direct_detail_frames >= 2:
+                title = 'Unrelated quest'
+            if self.wrong_direct_id:
+                quest_id = 9999
         return snap(sequence=self.seq, player=player, quests=quests,
-                    dialog=QuestDialog(self.dialog, 0,
+                    dialog=QuestDialog(self.dialog, quest_id,
                                        title if self.dialog == 'detail' else ''),
                     available_quest_menu=menu)
 
@@ -66,15 +81,22 @@ class Sim:
             self.dialog = 'none'
 
     def interact(self):
+        # One offered quest may open its detail panel *directly*, without
+        # a gossip/available-quest list. This occurs with Novice Elreth.
+        if self.remaining() and self.npc in self.direct_npcs:
+            self.selected = self.remaining()[0]
+            self.direct_detail_frames = 0
+            self.dialog = 'detail'
+            return
         # Once all offers have been accepted, a repeat interaction opens an
         # unfinished active quest progress/turn-in screen rather than gossip.
         self.dialog = 'gossip' if self.remaining() else 'progress'
 
-    def collect(self):
+    def collect(self, *, profile=None):
         return accept_npc_offers(
             npc_name=self.npc, npc_id=self.ids[self.npc],
             capture=self.capture, driver=self.driver,
-            now=self.clock.now, sleep=self.clock.sleep)
+            now=self.clock.now, sleep=self.clock.sleep, profile=profile)
 
 
 class QuestUiCleanupTests(unittest.TestCase):
@@ -88,6 +110,50 @@ class QuestUiCleanupTests(unittest.TestCase):
         self.assertEqual(game.collect(), (376,))
         self.assertEqual(game.dialog, 'none')
         self.assertEqual(tuple(game.accepted), (3098, 3901, 376))
+
+    def test_elreth_direct_detail_accepted_after_two_sarvis_quests(self):
+        game = Sim()
+        self.assertEqual(game.collect(), (3098, 3901))
+        self.assertEqual(game.dialog, 'none')
+        game.npc = 'Novice Elreth'
+        game.direct_npcs.add('Novice Elreth')
+        elreth_profile = HordeProfile(
+            'Undead starter', 'test.xml', (), (),
+            (OrderStep('pickup', quest_id=376, name='The Damned',
+                       entry=1661, npc_name='Novice Elreth'),), .2, 2, ())
+        result = game.collect(profile=elreth_profile)
+        self.assertEqual(result, (376,))
+        self.assertEqual(tuple(game.accepted), (3098, 3901, 376))
+        self.assertEqual(game.dialog, 'none')
+        self.assertEqual(game.driver.commands.count('/run AcceptQuest()'), 3)
+
+    def test_direct_detail_requires_matching_profile_pickup(self):
+        for mismatch in ('wrong-title', 'wrong-npc', 'missing-profile',
+                         'blank-title', 'wrong-quest-id', 'changed-title'):
+            with self.subTest(mismatch=mismatch):
+                game = Sim()
+                game.npc = 'Novice Elreth'
+                game.dialog = 'none'
+                game.direct_npcs.add('Novice Elreth')
+                title = 'Other title' if mismatch == 'wrong-title' else 'The Damned'
+                entry = 999 if mismatch == 'wrong-npc' else 1661
+                profile = HordeProfile(
+                    'Undead starter', 'test.xml', (), (),
+                    (OrderStep('pickup', quest_id=376, name=title,
+                               entry=entry, npc_name='Novice Elreth'),),
+                    .2, 2, ())
+                if mismatch == 'missing-profile':
+                    profile = None
+                if mismatch == 'blank-title':
+                    game.blank_direct_title = True
+                if mismatch == 'wrong-quest-id':
+                    game.wrong_direct_id = True
+                if mismatch == 'changed-title':
+                    game.mutate_second_detail = True
+                with self.assertRaisesRegex(LiveControlError, 'direct|Direct'):
+                    game.collect(profile=profile)
+                self.assertEqual(game.accepted, {})
+                self.assertNotIn('/run AcceptQuest()', game.driver.commands)
 
     def test_visit_dismisses_stale_progress_before_targeting_another_npc(self):
         clock = Clock()

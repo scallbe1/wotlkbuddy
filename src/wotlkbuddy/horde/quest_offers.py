@@ -12,11 +12,12 @@ from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
+from wotlkbuddy.horde.profile import HordeProfile, condition_value
 
 
 def accept_npc_offers(
     *, npc_name: str, npc_id: int, capture: Callable[[], ClientTelemetry],
-    driver, max_quests: int = 4,
+    driver, max_quests: int = 4, profile: HordeProfile | None = None,
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     log: Callable[[str], None] = lambda _: None,
@@ -53,6 +54,8 @@ def accept_npc_offers(
             sleep=sleep, now=now, log=log)
 
     for _ in range(max_quests):
+        opened_by_us = False
+        baseline_journal = {q.quest_id: q.title for q in state.quests}
         if state.dialog is None:
             raise LiveControlError('Quest menu telemetry missing')
         if state.dialog.kind not in ('gossip', 'greeting'):
@@ -61,7 +64,9 @@ def accept_npc_offers(
             if state.dialog.kind != 'none':
                 state = dismiss()
             guard(state)
+            baseline_journal = {q.quest_id: q.title for q in state.quests}
             driver.interact()
+            opened_by_us = True
             deadline = now() + 7
             previous = state
             while now() < deadline:
@@ -72,6 +77,92 @@ def accept_npc_offers(
             if state.dialog is None or state.dialog.kind == 'none':
                 raise LiveControlError(
                     f'{npc_name}: interaction opened no verifiable quest dialogue')
+        if state.dialog.kind == 'detail' and opened_by_us:
+            # NPCs with one offer sometimes open QuestFrameDetailPanel directly,
+            # without a GossipFrame/available quest list. Only our fresh
+            # interaction with the already GUID-verified NPC can authorize this
+            # path. The current Horde quest profile must independently identify
+            # exactly one pickup with the same NPC, title and quest ID.
+            if profile is None:
+                raise LiveControlError(
+                    f'{npc_name}: direct quest detail requires a Horde quest '
+                    'profile to verify quest ID/title; no quest accepted')
+            observed_title = state.dialog.title
+            if not observed_title:
+                raise LiveControlError(
+                    f'{npc_name}: direct quest detail has no visible title; '
+                    'no quest accepted')
+            matching = [step for step in profile.steps
+                        if (step.kind == 'pickup' and step.supported and
+                            step.entry == npc_id and
+                            step.npc_name in ('', npc_name) and
+                            step.name == observed_title and step.quest_id > 0)]
+            if len(matching) != 1:
+                known_titles = [step.name for step in profile.steps
+                                if (step.kind == 'pickup' and step.entry == npc_id
+                                    and step.npc_name in ('', npc_name))]
+                raise LiveControlError(
+                    f'{npc_name}: unverified direct offer {observed_title!r}; '
+                    f'profile pickup titles for NPC {npc_id} are '
+                    f'{known_titles!r}; no quest accepted')
+            step = matching[0]
+            if (state.dialog.quest_id not in (0, step.quest_id) or
+                    step.quest_id in baseline_journal or
+                    any(title == observed_title for title in baseline_journal.values()) or
+                    dict(state.quest_completions).get(step.quest_id, False)):
+                raise LiveControlError(
+                    f'{npc_name}: direct offer {observed_title!r} conflicts with '
+                    'its verified quest ID or active/completed journal; no acceptance')
+            # Honor resolvable profile conditions; an unknown conditional
+            # dependency must never be silently interpreted as True.
+            completed = {qid for qid, done in state.quest_completions if done}
+            for expression in step.conditions:
+                allowed = condition_value(
+                    expression, level=state.player.level, race='Undead',
+                    active_quests=set(baseline_journal),
+                    completed_quests=completed)
+                if allowed is not True:
+                    raise LiveControlError(
+                        f'{npc_name}: direct quest condition is not verified '
+                        f'true: {expression!r}; no acceptance')
+            confirmed = fresh(state)
+            if (confirmed.dialog is None or confirmed.dialog.kind != 'detail' or
+                    confirmed.dialog.title != observed_title or
+                    confirmed.dialog.quest_id not in (0, step.quest_id) or
+                    any(q.quest_id == step.quest_id or q.title == observed_title
+                        for q in confirmed.quests)):
+                raise LiveControlError(
+                    f'{npc_name}: direct quest detail changed before accepting '
+                    f'{observed_title!r}; no acceptance')
+            guard(confirmed)
+            log(f'{npc_name}: directly opened verified profile quest '
+                f'{observed_title!r} (quest {step.quest_id}); accepting')
+            driver.chat('/run AcceptQuest()')
+            previous = confirmed
+            deadline = now() + 9
+            accepted_state = None
+            while now() < deadline:
+                current = fresh(previous, timeout=min(3, max(.4, deadline - now())))
+                previous = current
+                new_quests = [(q.quest_id, q.title) for q in current.quests
+                              if q.quest_id not in baseline_journal]
+                if len(new_quests) == 1 and new_quests[0] == (
+                        step.quest_id, observed_title):
+                    accepted_state = current
+                    break
+                if new_quests:
+                    raise LiveControlError(
+                        f'{npc_name}: wrong quest added after direct offer: '
+                        f'{new_quests!r}; stopping')
+            if accepted_state is None:
+                raise LiveControlError(
+                    f'{npc_name}: direct offer {observed_title!r} was not '
+                    'confirmed in the journal after AcceptQuest()')
+            accepted.append(step.quest_id)
+            log(f'Accepted {observed_title!r} (quest {step.quest_id}) — '
+                'journal confirmed from direct NPC detail')
+            state = dismiss()
+            continue
         if state.dialog.kind not in ('gossip', 'greeting'):
             if state.dialog.kind in ('progress', 'reward', 'detail'):
                 # An active quest's objective/turn-in panel has no *available*

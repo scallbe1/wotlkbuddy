@@ -245,6 +245,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
     from wotlkbuddy.horde.gear import equip_mage_upgrades
     from wotlkbuddy.horde.npc_visit import visit_npc
     from wotlkbuddy.horde.quest_offers import accept_npc_offers
+    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
     from wotlkbuddy.horde.training import train_available_mage_spells
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
@@ -282,13 +283,22 @@ def _horde_progress(args: argparse.Namespace) -> None:
         with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
                 NavigationProxy(py32,dll) as nav:
             if args.only in ('all','quests'):
+                # Direct QuestFrame details on single-offer NPCs do not have
+                # a gossip offer list. Resolve and verify that NPC + quest
+                # title/ID against the same starter profile horde-next uses.
+                profiles_root = (args.profiles_root or
+                                 str(Path.home() / 'Questing-profiles'))
+                chosen = select_profile_from_loader(
+                    profiles_root, level=first.player.level, race='Undead')
+                quest_profile = load_horde_profile(chosen)
+                log(f'Quest pickup verification profile: {quest_profile.name}')
                 quests={}
                 for name,entry in (('Shadow Priest Sarvis',1569),('Novice Elreth',1661)):
                     visit_npc(npc_name=name, npc_id=entry, pid=pid, capture=cap,
                               driver=driver, nav=nav, spawns=db, log=log)
                     quests[name]=accept_npc_offers(
                         npc_name=name, npc_id=entry, capture=cap, driver=driver,
-                        max_quests=4, log=log)
+                        max_quests=4, profile=quest_profile, log=log)
                 report['accepted_quests']=quests
             if args.only in ('all','train'):
                 name,entry='Isabella',2124
@@ -1135,6 +1145,8 @@ def main(argv: list[str] | None = None) -> int:
                        help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
     progression.add_argument('--only', choices=['all','gear','quests','train'],
                              default='all')
+    progression.add_argument('--profiles-root',
+                             help='Horde quest profile root (defaults to ~/Questing-profiles)')
     progression.add_argument('--nav-dll', help='Navigation.dll + adjacent mmaps')
     progression.add_argument('--python32', help='Python 32-bit for nav worker')
     progression.add_argument('--spawns-db')
