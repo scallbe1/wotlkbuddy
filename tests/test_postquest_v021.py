@@ -213,5 +213,96 @@ class PostquestTests(unittest.TestCase):
         self.assertIn('/run AcceptQuest()',d.commands)
 
 
+    def test_delayed_quest_detail_waits_for_stale_gossip_and_blank_panel(self):
+        for intermediate in ('gossip', 'none'):
+            with self.subTest(intermediate=intermediate):
+                clock = Clock()
+                d = Driver()
+                state = {'seq': 0, 'phase': 'gossip', 'delay': 0, 'accepted': False}
+                title = 'Glyphic Scroll'
+                target = replace(
+                    snap().player, target_name='Shadow Priest Sarvis',
+                    target_guid='0xF130000621000001')
+                def capture():
+                    state['seq'] += 1
+                    if state['phase'] == 'clicked':
+                        if state['delay'] > 0:
+                            state['delay'] -= 1
+                            kind = intermediate
+                        else:
+                            kind = 'detail'
+                    elif state['accepted']:
+                        kind = 'none'
+                    else:
+                        kind = 'gossip'
+                    menu = (AvailableQuestOption('gossip', 1, title, 1),) \
+                        if kind == 'gossip' and not state['accepted'] else ()
+                    quests = (QuestRecord(3095, 2, False, title),) \
+                        if state['accepted'] else ()
+                    return snap(
+                        sequence=state['seq'], player=target, quests=quests,
+                        dialog=QuestDialog(kind, 0,
+                                           title if kind == 'detail' else ''),
+                        available_quest_menu=menu)
+                def chat(command):
+                    if command == '/click GossipTitleButton1':
+                        state.update(phase='clicked', delay=2)
+                    elif command == '/run AcceptQuest()':
+                        state['accepted'] = True
+                d.on_chat = chat
+                out = accept_npc_offers(
+                    npc_name='Shadow Priest Sarvis', npc_id=1569,
+                    capture=capture, driver=d, max_quests=1,
+                    now=clock.now, sleep=clock.sleep)
+                self.assertEqual(out, (3095,))
+                self.assertEqual(d.commands.count('/run AcceptQuest()'), 1)
+
+    def test_wrong_quest_detail_title_never_gets_accepted(self):
+        clock = Clock()
+        d = Driver()
+        state = {'seq': 0, 'clicked': False}
+        target = replace(
+            snap().player, target_name='Shadow Priest Sarvis',
+            target_guid='0xF130000621000001')
+        def capture():
+            state['seq'] += 1
+            kind = 'detail' if state['clicked'] else 'gossip'
+            menu = () if state['clicked'] else (
+                AvailableQuestOption('gossip', 1, 'Glyphic Scroll', 1),)
+            return snap(
+                sequence=state['seq'], player=target,
+                dialog=QuestDialog(
+                    kind, 0, 'Different quest' if kind == 'detail' else ''),
+                available_quest_menu=menu)
+        d.on_chat = lambda command: state.update(clicked=True)
+        with self.assertRaisesRegex(LiveControlError, 'Wrong quest detail'):
+            accept_npc_offers(
+                npc_name='Shadow Priest Sarvis', npc_id=1569,
+                capture=capture, driver=d, max_quests=1,
+                now=clock.now, sleep=clock.sleep)
+        self.assertNotIn('/run AcceptQuest()', d.commands)
+
+    def test_gossip_never_transitions_to_detail_times_out_without_accept(self):
+        clock = Clock()
+        d = Driver()
+        state = {'seq': 0}
+        target = replace(
+            snap().player, target_name='Shadow Priest Sarvis',
+            target_guid='0xF130000621000001')
+        def capture():
+            state['seq'] += 1
+            return snap(
+                sequence=state['seq'], player=target,
+                dialog=QuestDialog('gossip', 0),
+                available_quest_menu=(
+                    AvailableQuestOption('gossip', 1, 'Glyphic Scroll', 1),))
+        with self.assertRaisesRegex(LiveControlError, 'Timed out waiting for detail'):
+            accept_npc_offers(
+                npc_name='Shadow Priest Sarvis', npc_id=1569,
+                capture=capture, driver=d, max_quests=1,
+                now=clock.now, sleep=clock.sleep)
+        self.assertEqual(d.commands, ['/click GossipTitleButton1'])
+
+
 if __name__=='__main__':
     unittest.main()
