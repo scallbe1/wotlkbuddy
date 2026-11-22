@@ -361,95 +361,126 @@ def follow_route(
         current = updated
         return dx, dy
 
+    def walk_continuously(destination: MapWaypoint) -> str:
+        """Hold forward between real telemetry samples, until arrival or turning.
+
+        Unlike repeated key taps, ordinary walking remains continuous while
+        addon frames arrive every ~0.5s. Always release the key on ALL exits.
+        """
+        nonlocal current, bearing, speed, forward_seconds, total_actions
+        nonlocal total_moves, stuck_count, last_distance
+        if total_actions >= 240:
+            raise LiveControlError('Route action limit reached')
+        before = capture()
+        check(before)
+        if hypot(before.player.map_x - current.player.map_x,
+                 before.player.map_y - current.player.map_y) > 0.003:
+            raise LiveControlError('Unexpected movement between route checks')
+        current = before
+        previous = before
+        previous_at = now()
+        moving_since = previous_at
+        previous_distance = hypot(destination.x - before.player.map_x,
+                                  destination.y - before.player.map_y)
+        diverging_count = 0
+        code = _MOVEMENT_SCANCODES['forward']
+        keyboard.key_down(code)
+        held_at = now()
+        total_moves += 1
+        total_actions += 1
+        try:
+            while True:
+                # At every point in the key hold, Escape and focus loss are
+                # checked by wait(). Sampling does NOT lift the movement key.
+                wait(min(0.20, max_step_seconds / 3))
+                sample = capture()
+                check(sample)
+                stamp = now()
+                if sample.sequence == previous.sequence:
+                    if stamp - previous_at > 2.0:
+                        raise LiveControlError('Telemetry stopped updating while moving')
+                    continue
+                dx = sample.player.map_x - previous.player.map_x
+                dy = sample.player.map_y - previous.player.map_y
+                displacement = hypot(dx, dy)
+                delta_t = max(stamp - previous_at, 0.001)
+                previous_at = stamp
+                previous = sample
+                current = sample
+                last_distance = hypot(destination.x - current.player.map_x,
+                                      destination.y - current.player.map_y)
+                if displacement >= 0.000025:
+                    moving_since = stamp
+                    stuck_count = 0
+                    bearing = degrees(atan2(dy, dx))
+                    speed = displacement / delta_t
+                elif stamp - moving_since > 2.0:
+                    raise LiveControlError(
+                        'Forward movement unconfirmed for 2s; obstruction or delayed telemetry'
+                    )
+                if last_distance <= arrival_radius:
+                    return 'arrived'
+                # Close enough that another complete telemetry tick would risk
+                # crossing the arrival circle. Release and reassess rather than
+                # committing to another half-second blindly.
+                if speed is not None and last_distance <= arrival_radius + min(0.0003, speed * 0.25):
+                    return 'arrived'
+                if last_distance > previous_distance + 0.00012:
+                    diverging_count += 1
+                else:
+                    diverging_count = 0
+                if diverging_count >= 3:
+                    raise LiveControlError('Moving away from waypoint repeatedly')
+                previous_distance = last_distance
+                if bearing is not None:
+                    desired = degrees(atan2(destination.y - current.player.map_y,
+                                            destination.x - current.player.map_x))
+                    if abs(shortest_angle_difference(bearing, desired)) > 30:
+                        return 'turn'
+        finally:
+            keyboard.key_up(code)
+            forward_seconds += max(0.0, now() - held_at)
+
     try:
         for index, destination in enumerate(targets, 1):
             last_distance = hypot(destination.x - current.player.map_x,
                                   destination.y - current.player.map_y)
             notify(f'Waypoint {index}/{len(targets)}: {destination.label or "travel"} '
                    f'(map distance {last_distance:.5f})')
-            stall_at_waypoint = 0
-            # Do not spend the entire session oscillating near a single point.
-            moves_this_waypoint = 0
+            walks_this_waypoint = 0
             while last_distance > arrival_radius:
                 if now() - started >= max_seconds:
                     raise LiveControlError('Route time limit reached')
-                if moves_this_waypoint >= 60:
-                    raise LiveControlError('Could not reach waypoint in 60 forward steps')
-                # Measure actual direction from a brief movement if unknown or
-                # after rotation; otherwise use the previous measured heading.
-                if bearing is None:
-                    # A full-length heading probe is more reliable than a
-                    # 0.25s tap against the addon's 0.5s update interval.
-                    probe_seconds = min(0.45, max_step_seconds)
-                    dx, dy = act('forward', probe_seconds)
-                    total_moves += 1
-                    moves_this_waypoint += 1
-                    displacement = hypot(dx, dy)
-                    last_distance = hypot(destination.x-current.player.map_x,
-                                          destination.y-current.player.map_y)
-                    if last_distance <= arrival_radius:
-                        break
-                    if displacement < 0.000025:
-                        stuck_count += 1
-                        if stuck_count >= 3:
-                            raise LiveControlError(
-                                'No movement confirmed after three forward attempts; '
-                                'possible obstruction or delayed position telemetry'
-                            )
-                        notify(f'  Forward measurement inconclusive ({stuck_count}/3); retrying')
-                        continue
-                    stuck_count = 0
-                    bearing = degrees(atan2(dy, dx))
-                    speed = displacement / probe_seconds
-                desired = degrees(atan2(destination.y-current.player.map_y,
-                                        destination.x-current.player.map_x))
-                difference = shortest_angle_difference(bearing, desired)
-                if abs(difference) > 22:
-                    # A destination *behind* the character is fine: rotate in
-                    # manageable chunks then measure direction again.
-                    duration = min(0.65, max(0.10, abs(difference) / turn_rate * 0.85))
+                if walks_this_waypoint >= 30:
+                    raise LiveControlError('Could not reach waypoint within 30 walk segments')
+                if bearing is not None:
+                    desired = degrees(atan2(destination.y - current.player.map_y,
+                                            destination.x - current.player.map_x))
+                    difference = shortest_angle_difference(bearing, desired)
+                else:
+                    difference = 0.0
+                if bearing is not None and abs(difference) > 30:
+                    # Correct only when the route genuinely changes direction.
+                    # Full turns are supported, including destinations behind us.
+                    duration = min(0.65, max(0.10, abs(difference) / turn_rate))
                     key = 'turn-right' if difference > 0 else 'turn-left'
                     drift_x, drift_y = act(key, duration)
                     total_turns += 1
                     if hypot(drift_x, drift_y) > 0.00035:
                         raise LiveControlError('Unexpected translation during turn')
+                    # Turn-rate estimate is not exact; refresh the measured
+                    # bearing from the next continuous walking segment.
                     bearing = None
                     notify(f'  Turning {"right" if difference > 0 else "left"} '
-                           f'(heading difference {abs(difference):.0f}°, '
-                           f'key held {duration:.2f}s)')
+                           f'({abs(difference):.0f}° estimated, key held {duration:.2f}s)')
                     continue
-                # Walk normally for about 0.5..1 second, not 0.12s micro-pulses.
-                # Taper near arrival to avoid walking past the point.
-                remaining = max(0.0, last_distance - arrival_radius)
-                step = max_step_seconds if speed is None else min(max_step_seconds,
-                                                        max(0.20, remaining / max(speed, 0.00001) * 0.8))
-                step = min(step, max_step_seconds)
-                dx, dy = act('forward', step)
-                total_moves += 1
-                moves_this_waypoint += 1
-                displacement = hypot(dx, dy)
-                if displacement < 0.000025:
-                    stuck_count += 1
-                    if stuck_count >= 3:
-                        raise LiveControlError(
-                            'No movement confirmed after three forward attempts; '
-                            'possible obstruction or delayed position telemetry'
-                        )
-                else:
-                    stuck_count = 0
-                    bearing = degrees(atan2(dy, dx))
-                    speed = displacement / step
-                distance = hypot(destination.x-current.player.map_x,
-                                 destination.y-current.player.map_y)
-                if distance > last_distance + 0.00012:
-                    stall_at_waypoint += 1
-                else:
-                    stall_at_waypoint = 0
-                if stall_at_waypoint >= 3:
-                    raise LiveControlError('Moving away from waypoint repeatedly')
-                last_distance = distance
+                outcome = walk_continuously(destination)
+                walks_this_waypoint += 1
+                if outcome == 'arrived':
+                    break
             reached += 1
-            bearing = None  # refresh on next leg; corners may change direction
+            # Carry heading across waypoint boundaries for smooth straight-line
+            # travel. At genuine corners the normal 30° correction is applied.
             notify(f'  Reached waypoint {index} ({last_distance:.5f} map units remaining)')
     except LiveControlError as exc:
         reason = str(exc)

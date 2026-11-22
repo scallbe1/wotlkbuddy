@@ -521,7 +521,8 @@ def main(argv: list[str] | None = None) -> int:
                         help='Max short off-path link to an existing trail segment (0.0005..0.01)')
     follow.add_argument('--arrival-radius', type=float, default=0.00045)
     follow.add_argument('--turn-rate', type=float, default=180.4)
-    follow.add_argument('--step-seconds', type=float, default=0.8)
+    follow.add_argument('--step-seconds', type=float, default=0.8,
+                        help='Upper sampling interval while holding forward (0.4..1.0s)')
     follow.add_argument('--max-seconds', type=float, default=300)
     follow.add_argument('--countdown', type=float, default=5)
     follow.add_argument('--monitor', type=int, default=0)

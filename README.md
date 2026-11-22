@@ -247,3 +247,12 @@ uses a longer heading probe, and requires **three** consecutive unconfirmed
 forward actions before stopping. The failure is labelled "no movement
 confirmed" rather than asserting the character is physically stuck.
 Route traversal still requires attended, previously walked terrain.
+
+## v0.10 continuous movement follower
+
+The `live-follow` command holds W across successive half-second telemetry
+updates instead of tapping W for every sample. It releases W only for route
+turns, stopping at a waypoint, a user abort, lost focus, combat, stale frames,
+or repeated unconfirmed motion. It does not change the Lua addon or route
+format. The local simulation has 0.5-second telemetry to exercise held-key
+feedback; in-game validation is still required.
