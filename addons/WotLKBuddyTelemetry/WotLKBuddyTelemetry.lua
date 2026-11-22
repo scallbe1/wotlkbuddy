@@ -239,7 +239,7 @@ local function tickData()
             local itemId = link and tonumber(string.match(link, 'item:(%d+)')) or 0
             local itemLevel, equipSlot = -1, ''
             if link and GetItemInfo then
-                local cached, _, _, level, _, _, _, _, slot =
+                local cached, _, _, _, level, _, _, _, _, slot =
                     pcall(GetItemInfo, link)
                 if cached then
                     itemLevel = tonumber(level) or -1
