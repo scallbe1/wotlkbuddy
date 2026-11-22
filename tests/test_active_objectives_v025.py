@@ -63,8 +63,9 @@ class ActiveQuestSelectionTests(unittest.TestCase):
             quest_completions=((3901, True),))
         chosen = next_active_kill_quest(profile(), state, map_id=0)
         self.assertEqual(chosen.quest_id, 5001)
-        finished = replace(state,
-                           quests=(replace(state.quests[0], complete=True),))
+        finished = replace(
+            state, quests=(replace(state.quests[0], complete=True),
+                           state.quests[1]))
         self.assertEqual(next_active_kill_quest(profile(), finished,
                                                 map_id=0).quest_id, 5001)
 
