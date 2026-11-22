@@ -353,3 +353,19 @@ for redistribution. This is a third-party source dependency, not navmesh data.
 ```
 py -3.12 -m wotlkbuddy horde-nav-plan --profiles-root "$HOME\Questing-profiles" --race Undead --level 1 --quest-id 363 --map-id 0
 ```
+
+## Read the live player's world position (v0.15)
+
+`horde-world-position` is a **read-only** 3.3.5a (build 12340) position
+reader. It validates the player's in-memory GUID against the on-screen addon
+telemetry GUID and reports actual world X/Y/Z, never guessed zone-map offsets.
+
+```powershell
+py -3.12 -m wotlkbuddy horde-world-position --countdown 5
+```
+
+Optionally add `--live-player` to `horde-nav-plan` to use this position as
+its path start (not the quest giver NPC). A matching `Navigation.dll`, 32-bit
+Python, and the corresponding `mmaps/` are still needed to calculate a real
+intermediate waypoint path. No movement is enabled by either command.
+See [live XYZ diagnostic guide](docs/LIVE_WORLD_XYZ_V015.md).

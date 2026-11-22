@@ -308,9 +308,40 @@ def _horde_nav_plan(args: argparse.Namespace) -> None:
     output['route_kind'] = 'NPC_WORLD_XYZ_REFERENCE_ONLY_NOT_PLAYER_NAVIGATION'
     output['straight_world_distance_yards'] = round(distance_world(
         corridor.giver_xyz, corridor.turnin_xyz), 2)
+    # A real live position is required for planning a player-to-NPC path.
+    # The existing NPC-to-NPC route remains a reference until this is verified.
+    path_start = corridor.giver_xyz
+    if args.live_player:
+        from wotlkbuddy.live.capture import capture_monitor
+        from wotlkbuddy.live.world_position import verified_live_position
+        if not 0 <= args.countdown <= 20:
+            raise ValueError('--countdown must be between 0 and 20 seconds')
+        if args.countdown:
+            print(f'Switch to WoW now; observing in {args.countdown:g}s.',
+                  file=sys.stderr, flush=True)
+            time.sleep(args.countdown)
+        snapshot = capture_monitor(args.monitor)
+        if snapshot.resources is None or snapshot.resources.class_token.upper() != 'MAGE' or \
+                snapshot.resources.race_token.lower() not in ('undead', 'scourge', 'orc', 'troll', 'bloodelf'):
+            raise ValueError('Live Horde Mage telemetry required for --live-player')
+        if not any(q.quest_id == args.quest_id for q in snapshot.quests):
+            raise ValueError('Requested quest not active in the live player quest journal')
+        pid, world = verified_live_position(snapshot, pid=args.pid)
+        if world.map_id != args.map_id:
+            raise ValueError(f'Live world map ID {world.map_id} differs from '
+                             f'--map-id {args.map_id}; cannot mix maps')
+        path_start = world.position
+        output['live_player'] = {'name': snapshot.player.name,
+                                 'guid': world.player_guid, 'pid': pid,
+                                 'world_xyz': [world.x, world.y, world.z]}
+        output['route_kind'] = 'PLAYER_WORLD_XYZ_TO_QUEST_TURNIN_READ_ONLY'
+        output['straight_player_to_turnin_yards'] = round(distance_world(
+            path_start, corridor.turnin_xyz), 2)
     output['ready_to_walk'] = False
-    output['reason'] = ('Real player world XYZ, navmesh waypoint follower and '
-                        'combat/aggro handling not yet integrated')
+    output['reason'] = ('No executable navmesh waypoint follower or aggro/combat handling is integrated'
+                        if args.live_player else
+                        'Real player world XYZ, navmesh waypoint follower and combat/aggro '
+                        'handling not yet integrated')
     if args.nav_dll:
         dll = Path(args.nav_dll).expanduser().resolve()
         # 32-bit subprocess protects the main 64-bit Python process from
@@ -318,18 +349,19 @@ def _horde_nav_plan(args: argparse.Namespace) -> None:
         with NavigationProxy(args.python32, dll) as nav:
             if not nav.ping():
                 raise RuntimeError('Navigation worker did not respond')
-            points = nav.find_path(args.map_id, corridor.giver_xyz,
+            points = nav.find_path(args.map_id, path_start,
                                    corridor.turnin_xyz)
         if len(points) < 2:
             output['path_status'] = 'NO_NAVMESH_PATH'
             output['path_points'] = []
         else:
             # Guard against a partial path presented as success.
-            if distance_world(points[0], corridor.giver_xyz) > 10 or \
+            if distance_world(points[0], path_start) > 10 or \
                     distance_world(points[-1], corridor.turnin_xyz) > 10:
                 output['path_status'] = 'PARTIAL_OR_UNMATCHED_PATH'
             else:
-                output['path_status'] = 'REFERENCE_PATH_GENERATED'
+                output['path_status'] = ('PLAYER_PATH_GENERATED_READ_ONLY' if args.live_player
+                                         else 'REFERENCE_PATH_GENERATED')
             output['path_points'] = [[v.x, v.y, v.z] for v in points]
             output['path_distance_yards'] = round(sum(
                 distance_world(a, b) for a, b in zip(points, points[1:])), 2)
@@ -339,6 +371,36 @@ def _horde_nav_plan(args: argparse.Namespace) -> None:
     print(json.dumps(output, indent=2, ensure_ascii=False))
     print('No movement, combat or quest interaction was attempted. '
           'Spawn locations are not a traversable path.', file=_sys.stderr)
+
+def _horde_world_position(args: argparse.Namespace) -> None:
+    """Read player world XYZ from memory with a live addon GUID cross-check.
+
+    Diagnostic only: nothing is clicked, cast, or moved.
+    """
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.world_position import verified_live_position
+    if not 0 <= args.countdown <= 20:
+        raise ValueError('--countdown must be between 0 and 20 seconds')
+    if args.countdown:
+        print(f'Switch to WoW now; reading live world position in {args.countdown:g}s.',
+              file=sys.stderr, flush=True)
+        time.sleep(args.countdown)
+    observed = capture_monitor(args.monitor)
+    pid, world = verified_live_position(observed, pid=args.pid)
+    print(json.dumps({
+        'status': 'WORLD_XYZ_OBSERVED_READ_ONLY',
+        'character': observed.player.name,
+        'level': observed.player.level,
+        'zone': observed.player.zone_name,
+        'pid': pid,
+        'guid_matched': True,
+        'world': world.to_dict(),
+        'map_ui': {'x': observed.player.map_x, 'y': observed.player.map_y,
+                   'continent': observed.player.continent, 'map_zone': observed.player.map_zone},
+        'ready_to_walk': False,
+        'reason': 'No navmesh follower, obstacle avoidance or combat interruption is enabled',
+    }, indent=2, ensure_ascii=False))
+
 
 def _list_wow(_args: argparse.Namespace) -> None:
     from wotlkbuddy.game.win32 import list_processes
@@ -713,7 +775,18 @@ def main(argv: list[str] | None = None) -> int:
                     help='Real world map id (Eastern Kingdoms = 0), NOT map_zone telemetry')
     np.add_argument('--nav-dll', help='x86 Navigation.dll with mmaps folder beside it')
     np.add_argument('--python32', help='Full path to Python x86, with wotlkbuddy installed')
+    np.add_argument('--live-player', action='store_true',
+                    help='Read current character world XYZ (read-only; no movement)')
+    np.add_argument('--countdown', type=float, default=5)
+    np.add_argument('--monitor', type=int, default=0)
+    np.add_argument('--pid', type=int, help='Wow.exe PID if multiple instances run')
     np.set_defaults(func=_horde_nav_plan)
+    wp = sub.add_parser('horde-world-position',
+                        help='Read-only live player world XYZ with addon GUID cross-check')
+    wp.add_argument('--countdown', type=float, default=5)
+    wp.add_argument('--monitor', type=int, default=0)
+    wp.add_argument('--pid', type=int, help='Wow.exe PID; only needed with multiple clients')
+    wp.set_defaults(func=_horde_world_position)
     procs = sub.add_parser("processes", help="List local Wow.exe processes (Windows)")
     procs.set_defaults(func=_list_wow)
     profile = sub.add_parser("profile", help="Read and inspect a profile")
