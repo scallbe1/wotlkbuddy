@@ -82,7 +82,8 @@ class KeyboardQuestInput:
 
     def chat(self, command: str) -> None:
         allowed_combat = command in (
-            '/targetenemy', '/cleartarget', '/cast Arcane Intellect',
+            '/targetenemy', '/targetlasttarget', '/cleartarget',
+            '/cast Arcane Intellect',
             '/cast Frost Armor', '/cast Fireball', '/cast Frostbolt',
         ) or re.fullmatch(r'/run LootSlot\(([1-9]|1[0-6])\)', command) is not None
         if (not allowed_combat and
