@@ -244,6 +244,9 @@ def _horde_progress(args: argparse.Namespace) -> None:
     """
     from pathlib import Path
     from wotlkbuddy.horde.gear import equip_mage_upgrades
+    from wotlkbuddy.horde.active_objectives import next_active_kill_quest
+    from wotlkbuddy.horde.combat import hunt_kill_objectives
+    from wotlkbuddy.horde.return_turnin import return_and_turnin
     from wotlkbuddy.horde.npc_catalog import (
         nearby_profile_quest_givers, nearby_service_npcs)
     from wotlkbuddy.horde.npc_visit import visit_npc
@@ -285,7 +288,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
         hud.set(goal='Equip better Mage armor', action='Checking bags and equipment')
         equipped = equip_mage_upgrades(capture=cap, driver=driver, log=log)
         report['equipped_item_ids'] = equipped
-    if args.only in ('all', 'quests', 'train', 'vendor'):
+    if args.only in ('all', 'quests', 'train', 'vendor', 'objectives'):
         if not args.nav_dll or not args.python32:
             raise ValueError('NPC navigation requires --nav-dll and --python32')
         dll = Path(args.nav_dll).expanduser().resolve()
@@ -429,6 +432,56 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         raise LiveControlError(
                             f'Quest hand-in contradicted by post-training '
                             f'journal/history: {confirmations!r}')
+            if args.only in ('all', 'objectives'):
+                state, current = location()
+                target_quest = next_active_kill_quest(
+                    quest_profile, state, map_id=current.map_id)
+                if target_quest is None:
+                    active_unfinished = [
+                        {'quest_id': q.quest_id, 'title': q.title}
+                        for q in state.quests if not q.complete]
+                    report['active_objective'] = {
+                        'status': 'no_verified_kill_objective',
+                        'unfinished_quests': active_unfinished}
+                    log('No eligible KillMob objective in live journal and '
+                        'loaded Horde XML. Collection/use-object objectives '
+                        'are not yet executable; no combat was started.')
+                else:
+                    quest_title = target_quest.title
+                    hud.set(goal=f'Complete active quest: {quest_title}',
+                            action='Selecting profile-verified objective enemy')
+                    log(f'Active objective from profile: {quest_title!r} '
+                        f'(quest {target_quest.quest_id}), '
+                        f'KillMob entry {target_quest.mob_entry}, '
+                        f'journal={target_quest.objective_description!r}')
+                    hunt = hunt_kill_objectives(
+                        profile=quest_profile, quest_id=target_quest.quest_id,
+                        pid=pid, capture=cap, driver=driver, nav=nav, spawns=db,
+                        max_seconds=args.max_seconds, max_kills=args.max_kills,
+                        log=log)
+                    report['active_objective'] = hunt.to_dict()
+                    if not hunt.objectives_complete:
+                        raise LiveControlError(
+                            f'Quest {target_quest.quest_id} objectives not '
+                            f'complete: {hunt.status}; no turn-in attempted')
+                    hud.set(goal=f'Turn in quest: {quest_title}',
+                            action='Returning to profile turn-in NPC')
+                    completed = return_and_turnin(
+                        profile=quest_profile, quest_id=target_quest.quest_id,
+                        pid=pid, capture=cap, driver=driver, nav=nav, spawns=db,
+                        max_seconds=450, log=log)
+                    report['quest_turnin'] = completed.to_dict()
+                    if completed.status not in ('turned_in', 'already_turned_in'):
+                        raise LiveControlError(
+                            f'Quest {target_quest.quest_id} hand-in failed: '
+                            f'{completed.status}: {completed.explanation}')
+                    if cap().gear_scan_complete:
+                        hud.set(goal=f'Equip rewards from {quest_title}',
+                                action='Checking Mage cloth upgrades')
+                        upgraded = equip_mage_upgrades(
+                            capture=cap, driver=driver, log=log)
+                        if upgraded:
+                            report['equipped_item_ids'] = tuple(upgraded)
     hud.set(action='Workflow complete')
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
@@ -1295,7 +1348,7 @@ def main(argv: list[str] | None = None) -> int:
     return_quest.set_defaults(func=_horde_return_turnin)
     progression = sub.add_parser('horde-progress',
                        help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
-    progression.add_argument('--only', choices=['all','gear','quests','train','vendor'],
+    progression.add_argument('--only', choices=['all','gear','quests','train','vendor','objectives'],
                              default='all')
     progression.add_argument('--profiles-root',
                              help='Horde quest profile root (defaults to ~/Questing-profiles)')
@@ -1307,6 +1360,10 @@ def main(argv: list[str] | None = None) -> int:
     progression.add_argument('--countdown', type=float, default=5)
     progression.add_argument('--monitor', type=int, default=0)
     progression.add_argument('--pid', type=int)
+    progression.add_argument('--max-kills', type=int, default=18,
+                             help='Bound the objective hunt kill count')
+    progression.add_argument('--max-seconds', type=float, default=900,
+                             help='Bound the objective hunt duration')
     progression.add_argument('--no-hud', action='store_true',
                              help='Disable click-through Goal/Action overlay')
     progression.set_defaults(func=_horde_progress)
