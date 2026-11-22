@@ -11,6 +11,7 @@ from typing import Callable
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.horde.combat import creature_entry_from_guid
+from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 
 
 def accept_npc_offers(
@@ -45,23 +46,47 @@ def accept_npc_offers(
 
     guard(first)
     state = first
+
+    def dismiss() -> ClientTelemetry:
+        return dismiss_quest_dialog(
+            capture=capture, driver=driver, expected_guid=guid,
+            sleep=sleep, now=now, log=log)
+
     for _ in range(max_quests):
         if state.dialog is None:
             raise LiveControlError('Quest menu telemetry missing')
-        if state.dialog.kind not in ('gossip','greeting'):
+        if state.dialog.kind not in ('gossip', 'greeting'):
+            # An incomplete active quest can open a 'progress' screen after
+            # accepting another quest. Closing it is not a turn-in action.
+            if state.dialog.kind != 'none':
+                state = dismiss()
+            guard(state)
             driver.interact()
-            state = fresh(state)
-        if state.dialog.kind not in ('gossip','greeting'):
-            if state.dialog.kind in ('none','detail'):
-                # Do not accept an unknown already-open detail panel.
-                log(f'{npc_name}: no verified available-quest list')
+            deadline = now() + 7
+            previous = state
+            while now() < deadline:
+                state = fresh(previous, timeout=min(2, max(.4, deadline - now())))
+                previous = state
+                if state.dialog is not None and state.dialog.kind != 'none':
+                    break
+            if state.dialog is None or state.dialog.kind == 'none':
+                raise LiveControlError(
+                    f'{npc_name}: interaction opened no verifiable quest dialogue')
+        if state.dialog.kind not in ('gossip', 'greeting'):
+            if state.dialog.kind in ('progress', 'reward', 'detail'):
+                # An active quest's objective/turn-in panel has no *available*
+                # quest list. Never call CompleteQuest for an incomplete quest.
+                log(f'{npc_name}: saw {state.dialog.kind} panel, not available '
+                    'quests; closing without quest completion')
+                state = dismiss()
                 break
             raise LiveControlError('Unexpected quest UI while gathering offers')
         source = state.dialog.kind
         visible = [o for o in state.available_quest_menu
                    if o.source == source and o.title]
         if not visible:
-            log(f'{npc_name}: no additional quest offers')
+            log(f'{npc_name}: no additional quest offers in verified {source} list')
+            state = dismiss()
             break
         visible.sort(key=lambda o: o.index)
         option = visible[0]
@@ -147,11 +172,11 @@ def accept_npc_offers(
                 f'Acceptance of {option.title!r} not uniquely confirmed in quest journal')
         accepted.append(result)
         log(f'Accepted {option.title!r} (quest {result}) — journal confirmed')
-        state = last
-        if state.dialog is not None and state.dialog.kind == 'detail':
-            driver.chat('/click QuestFrameCloseButton')
-            state = fresh(state)
-        if state.dialog is None or state.dialog.kind not in ('gossip','greeting'):
-            driver.interact()
-            state = fresh(state)
+        # Close any leftover quest/progress/gossip screen before trying the
+        # next offer. Otherwise Interact can open an active quest progress panel
+        # and leave that panel over a *different* NPC's gossip window.
+        state = dismiss()
+    # Whether we accepted zero or four quests, finish with no quest UI open.
+    if state.dialog is not None and state.dialog.kind != 'none':
+        dismiss()
     return tuple(accepted)

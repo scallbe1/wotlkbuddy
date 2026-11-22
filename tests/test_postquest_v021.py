@@ -204,7 +204,8 @@ class PostquestTests(unittest.TestCase):
             if command=='/run AcceptQuest()':
                 state['accept']=True
                 state['dialog']='none'
-            if command=='/click QuestFrameCloseButton':state['dialog']='none'
+            if command in ('/click QuestFrameCloseButton', '/run CloseGossip()'):
+                state['dialog']='none'
         d.on_chat=chat
         d.on_interact=lambda:state.update(dialog='gossip')
         accepted=accept_npc_offers(npc_name='Novice Elreth',npc_id=1661,
@@ -249,6 +250,8 @@ class PostquestTests(unittest.TestCase):
                         state.update(phase='clicked', delay=2)
                     elif command == '/run AcceptQuest()':
                         state['accepted'] = True
+                        # Acceptance closes the selected quest-detail panel.
+                        state['phase'] = 'accepted'
                 d.on_chat = chat
                 out = accept_npc_offers(
                     npc_name='Shadow Priest Sarvis', npc_id=1569,
