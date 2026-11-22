@@ -406,3 +406,15 @@ cannot be verified is never guessed. See
 [the v0.17.1 troubleshooting guide](docs/SARVIS_GOSSIP_TURNIN_V0171.md).
 **Reinstall the addon and `/reload` after updating**; the binary navigation
 DLL and mmaps do not need to change for this fix.
+
+## v0.17.2 — live Sarvis reward-panel compatibility
+
+The 3.3.5a client accepted the verified `/click GossipTitleButtonN` input but
+then showed `reward id=0 title=''`. The turn-in controller now permits a
+nameless progress/reward panel **only after** a unique, completed, exact-title
+active quest at Sarvis has been verified twice and its matching button clicked
+in the same invocation. An already-open unidentified reward window is first
+closed (without claiming anything) and reidentified through Sarvis's list.
+Quest identity mismatches and unknown reward/payment states still stop; success
+requires server-completed history. The v0.17.1 addon does **not** need to be
+reinstalled. See [v0.17.2 retry guide](docs/SARVIS_UNTAGGED_REWARD_V0172.md).

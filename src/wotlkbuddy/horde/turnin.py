@@ -100,6 +100,13 @@ def turnin_rude_awakening(
     if q.objectives and not q.complete:
         return report('objectives_incomplete', 'Quest objectives not all finished')
     last = state
+    # The 3.3.5a client may omit BOTH quest ID and quest title on a QuestFrame
+    # reward panel. Only an observed, unique, completed NPC menu selection (or
+    # our own CompleteQuest call after a verified progress frame) can authorize
+    # such a panel. An unidentified panel already open at invocation is NOT
+    # evidence: close it and independently re-identify the quest first.
+    selected_verified_menu = False
+    requested_verified_completion = False
 
     def wait_for(pred: Callable[[ClientTelemetry], bool]) -> ClientTelemetry | None:
         nonlocal last
@@ -122,11 +129,19 @@ def turnin_rude_awakening(
 
     def dialog_ok(s: ClientTelemetry, kind: str) -> bool:
         d = s.dialog
-        return (d is not None and d.kind == kind and
-                s.player.target_name == npc_name and
-                (d.quest_id == quest_id or
-                 (d.quest_id == 0 and d.title == expected_title)) and
-                (not d.title or d.title == expected_title))
+        if d is None or d.kind != kind or s.player.target_name != npc_name:
+            return False
+        # A different nonzero ID or different nonempty title overrides all
+        # inferred identity, even following an otherwise verified click.
+        if d.quest_id not in (0, quest_id) or d.title not in ('', expected_title):
+            return False
+        if d.quest_id == quest_id or d.title == expected_title:
+            return True
+        # ID=0 AND title='' is not evidence on its own. In this invocation,
+        # require the exact verified active quest selection, or (for reward)
+        # our own CompleteQuest after a separately verified progress panel.
+        return (selected_verified_menu or
+                (kind == 'reward' and requested_verified_completion))
 
     guard()
     if state.player.target_name != npc_name:
@@ -134,6 +149,21 @@ def turnin_rude_awakening(
         driver.chat('/targetexact ' + npc_name)
         if wait_for(lambda s: s.player.target_name == npc_name) is None:
             return report('npc_not_targeted', 'Cannot target Sarvis; move closer')
+
+    guard()
+    if (last.dialog and last.dialog.kind in ('progress', 'reward') and
+            last.dialog.quest_id == 0 and last.dialog.title == ''):
+        # The user may be retrying with the reward panel still open from a
+        # previous attempt. We cannot inherit evidence across process runs.
+        # Close without claiming anything, then reopen and verify the menu.
+        notify('Open quest panel has no ID/title; closing it to reverify '
+               'the exact quest through Sarvis before any reward action')
+        driver.chat('/click QuestFrameCloseButton')
+        if wait_for(lambda s: s.dialog is not None and
+                    s.dialog.kind in ('none', 'gossip', 'greeting')) is None:
+            return report('dialog_reset_unverified',
+                          'Could not close unidentified quest panel; '
+                          'no reward attempted', target=True)
 
     guard()
     if not any(dialog_ok(last, kind) for kind in ('progress', 'reward')) and not \
@@ -187,6 +217,10 @@ def turnin_rude_awakening(
             command = f'/run {api}({chosen.index})'
         notify(f'Choosing verified active quest {expected_title!r}: '
                f'{source} index {chosen.index}, action {command}')
+        # The menu has been matched in two different frames, with the exact
+        # title, completed state, button identity and stable player/target.
+        # This is the causal evidence for a nameless QuestFrame response.
+        selected_verified_menu = True
         driver.chat(command)
         selected = wait_for(lambda s: dialog_ok(s, 'progress') or dialog_ok(s, 'reward'))
         if selected is None:
@@ -205,6 +239,7 @@ def turnin_rude_awakening(
             return report('dialog_unverified', 'Quest progress panel not stable', target=True)
         notify('Verified Rude Awakening progress panel; requesting completion')
         guard()
+        requested_verified_completion = True
         driver.chat('/run CompleteQuest()')
         if wait_for(lambda s: dialog_ok(s, 'reward')) is None:
             return report('reward_not_open', 'CompleteQuest did not open reward panel',
@@ -228,6 +263,9 @@ def turnin_rude_awakening(
         return report('quest_missing_before_reward',
                       'Quest disappeared before reward submission', target=True, dialog=True)
     guard()
+    if dialog.quest_id == 0 and not dialog.title:
+        notify('Verified reward by fresh transition from the uniquely matched '
+               'Rude Awakening selection (client omitted ID/title)')
     notify('Reward panel verified: zero choices and zero required money; submitting reward')
     driver.chat('/run GetQuestReward(0)')
     confirmed = wait_for(lambda s: history(s) is True and not active(s))
