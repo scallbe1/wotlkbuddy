@@ -92,7 +92,7 @@ def guarded_waypoint(
         raise ValueError('max_map_distance must be 0.001..0.003')
     if not 10.0 <= max_elapsed_seconds <= 45.0:
         raise ValueError('max_elapsed_seconds must be 10..45')
-    if max_forward_pulses * forward_duration + max_turn_pulses * 0.15 > 1.5:
+    if max_forward_pulses * forward_duration + max_turn_pulses * 0.18 > 1.5:
         raise ValueError('Cumulative key-down budget cannot exceed 1.5 seconds')
 
     stopped = stop_requested or (lambda: False)
@@ -172,7 +172,11 @@ def guarded_waypoint(
             reason = 'distance_budget'
             break
         prior_distance = distance
-        move = pulse('forward', forward_duration)
+        # A full-length step can overshoot a nearby waypoint while heading is
+        # still being corrected. Keep a nonzero probe for valid feedback,
+        # but taper it as the remaining map distance decreases.
+        step_duration = min(forward_duration, max(0.08, forward_duration * distance / 0.0005))
+        move = pulse('forward', step_duration)
         forward_count += 1
         step = hypot(move.dx, move.dy)
         if step < 0.00003:
@@ -224,7 +228,7 @@ def guarded_waypoint(
         if turn_count >= max_turn_pulses:
             reason = 'turn_limit'
             break
-        duration = min(0.15, max(0.05, abs(delta) / estimated_rate * 0.7))
+        duration = min(0.18, max(0.05, abs(delta) / estimated_rate * 0.7))
         turn_key = 'turn-right' if delta > 0 else 'turn-left'
         turn = pulse(turn_key, duration)
         turn_count += 1
