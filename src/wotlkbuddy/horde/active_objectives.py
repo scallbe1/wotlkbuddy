@@ -72,3 +72,66 @@ def next_active_kill_quest(
             objective_description=observed.description,
             profile_step=index)
     return None
+
+@dataclass(frozen=True)
+class ActiveCollectQuest:
+    quest_id: int
+    title: str
+    item_id: int
+    required_count: int
+    sources: tuple[int, ...]
+    journal_description: str
+    profile_step: int
+
+
+def next_active_collect_quest(
+    profile: HordeProfile, telemetry: ClientTelemetry, *, map_id: int,
+) -> ActiveCollectQuest | None:
+    """Plan an active CollectItem stage; sources must be explicit XML Mob IDs.
+
+    The quest item is never confused with a creature entry. When no Mob IDs
+    are present, return the objective with an empty sources tuple so callers
+    can report an actionable data gap instead of inventing a target.
+    """
+    from wotlkbuddy.horde.combat import next_collect_objective
+    from wotlkbuddy.horde.combat import objective_progress
+
+    if (telemetry.truncated or telemetry.player.dead or
+            telemetry.player.in_combat or not telemetry.player.guid or
+            telemetry.resources is None or
+            telemetry.resources.class_token.upper() != 'MAGE' or
+            telemetry.resources.race_token.lower() not in ('undead', 'scourge')):
+        raise LiveControlError('Unsafe Mage state for collection planning')
+    journal = {q.quest_id: q for q in telemetry.quests}
+    completed = {qid for qid, done in telemetry.quest_completions if done}
+    for index, step in enumerate(profile.steps, 1):
+        if (step.kind != 'objective' or step.objective_type != 'CollectItem'
+                or not step.supported or step.quest_id not in journal
+                or step.quest_id in completed or journal[step.quest_id].complete):
+            continue
+        evaluations = [condition_value(
+            expression, level=telemetry.player.level, race='Undead',
+            class_name='Mage', map_id=map_id,
+            active_quests=set(journal), completed_quests=completed)
+            for expression in step.conditions]
+        if any(val is not True for val in evaluations):
+            continue
+        try:
+            match = next_collect_objective(profile, telemetry, step.quest_id)
+        except LiveControlError:
+            continue
+        if match is None:
+            continue
+        spec, observed = match
+        if spec.entry != step.entry or spec.count != step.count:
+            continue
+        parsed = objective_progress(observed.description)
+        if parsed is None or parsed[1] != spec.count:
+            continue
+        sources = tuple(dict.fromkeys(
+            src.entry for src in spec.sources if
+            src.kind == 'mob' and 0 < src.entry < 2**24))
+        return ActiveCollectQuest(step.quest_id, journal[step.quest_id].title,
+                                  spec.entry, spec.count, sources,
+                                  observed.description, index)
+    return None

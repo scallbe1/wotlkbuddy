@@ -92,7 +92,10 @@ class KeyboardQuestInput:
         ) or re.fullmatch(r'/run LootSlot\(([1-9]|1[0-6])\)', command) is not None
         allowed_goal = re.fullmatch(
             r'/wbtgoal (0|[1-9][0-9]{0,5})', command) is not None
+        allowed_item_track = re.fullmatch(
+            r'/wbttrack (0|[1-9][0-9]{0,5})', command) is not None
         if (not allowed_combat and not allowed_goal and
+                not allowed_item_track and
                 command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/click QuestFrameCloseButton', '/click ClassTrainerFrameCloseButton', '/run CloseGossip()') and
                 not re.fullmatch(r'/run GetQuestReward\((0|[1-9]|1[0-2])\)', command) and
                 not re.fullmatch(r'/run EquipItemByName\(([1-9][0-9]{0,7}),(1|3|5|6|7|8|9|10|15)\)', command) and

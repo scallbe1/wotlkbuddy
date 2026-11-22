@@ -244,7 +244,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
     """
     from pathlib import Path
     from wotlkbuddy.horde.gear import equip_mage_upgrades
-    from wotlkbuddy.horde.active_objectives import next_active_kill_quest
+    from wotlkbuddy.horde.active_objectives import (
+        next_active_kill_quest, next_active_collect_quest)
     from wotlkbuddy.horde.combat import hunt_kill_objectives
     from wotlkbuddy.horde.return_turnin import return_and_turnin
     from wotlkbuddy.horde.npc_catalog import (
@@ -303,7 +304,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
         set_native_status('gear')
         equipped = equip_mage_upgrades(capture=cap, driver=driver, log=log)
         report['equipped_item_ids'] = equipped
-    if args.only in ('all', 'quests', 'train', 'vendor', 'objectives'):
+    if args.only in ('all', 'quests', 'train', 'vendor', 'objectives', 'collect'):
         if not args.nav_dll or not args.python32:
             raise ValueError('NPC navigation requires --nav-dll and --python32')
         dll = Path(args.nav_dll).expanduser().resolve()
@@ -450,33 +451,66 @@ def _horde_progress(args: argparse.Namespace) -> None:
                         raise LiveControlError(
                             f'Quest hand-in contradicted by post-training '
                             f'journal/history: {confirmations!r}')
-            if args.only in ('all', 'objectives'):
+            if args.only in ('all', 'objectives', 'collect'):
                 state, current = location()
-                target_quest = next_active_kill_quest(
+                kill = (next_active_kill_quest(
                     quest_profile, state, map_id=current.map_id)
+                    if args.only != 'collect' else None)
+                collection = next_active_collect_quest(
+                    quest_profile, state, map_id=current.map_id)
+                collecting = collection is not None and (
+                    kill is None or
+                    args.only == 'collect' or
+                    collection.profile_step <= kill.profile_step)
+                target_quest = collection if collecting else kill
                 if target_quest is None:
                     active_unfinished = [
                         {'quest_id': q.quest_id, 'title': q.title}
                         for q in state.quests if not q.complete]
                     report['active_objective'] = {
-                        'status': 'no_verified_kill_objective',
+                        'status': 'no_supported_objective',
                         'unfinished_quests': active_unfinished}
-                    log('No eligible KillMob objective in live journal and '
-                        'loaded Horde XML. Collection/use-object objectives '
-                        'are not yet executable; no combat was started.')
+                    log('No eligible CollectItem/KillMob objective in live '
+                        'journal and loaded Horde XML; no combat started')
+                elif collecting and not collection.sources:
+                    report['active_objective'] = {
+                        'status': 'missing_item_mob_sources',
+                        'quest_id': collection.quest_id,
+                        'title': collection.title,
+                        'item_id': collection.item_id,
+                        'required_count': collection.required_count,
+                        'source_profile': quest_profile.source_path,
+                        'explanation': (
+                            'This CollectItem objective lacks explicit Mob '
+                            'source IDs in installed Horde XML; cannot safely '
+                            'choose enemies from an item ID alone')}
+                    log(f'Cannot collect item {collection.item_id} for quest '
+                        f'{collection.quest_id}: source XML does not identify '
+                        'creatures that drop it. No combat started.')
                 else:
                     quest_title = target_quest.title
                     hud.set(goal=f'Complete active quest: {quest_title}',
                             action='Selecting profile-verified objective enemy')
                     set_native_status('hunt', target_quest.quest_id)
-                    log(f'Active objective from profile: {quest_title!r} '
-                        f'(quest {target_quest.quest_id}), '
-                        f'KillMob entry {target_quest.mob_entry}, '
-                        f'journal={target_quest.objective_description!r}')
+                    if collecting:
+                        log(f'CollectItem from profile: {quest_title!r} '
+                            f'(quest {collection.quest_id}), '
+                            f'item={collection.item_id} x'
+                            f'{collection.required_count}, '
+                            f'Mob IDs={collection.sources}; '
+                            f'journal={collection.journal_description!r}')
+                    else:
+                        log(f'Active objective from profile: {quest_title!r} '
+                            f'(quest {kill.quest_id}), '
+                            f'KillMob entry {kill.mob_entry}, '
+                            f'journal={kill.objective_description!r}')
                     hunt = hunt_kill_objectives(
                         profile=quest_profile, quest_id=target_quest.quest_id,
                         pid=pid, capture=cap, driver=driver, nav=nav, spawns=db,
-                        max_seconds=args.max_seconds, max_kills=args.max_kills,
+                        max_seconds=args.max_seconds,
+                        max_kills=(args.collect_max_kills if collecting
+                                   else args.max_kills),
+                        collect_items=collecting,
                         log=log)
                     report['active_objective'] = hunt.to_dict()
                     if not hunt.objectives_complete:
@@ -516,7 +550,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
 
 
 def _horde_next(args: argparse.Namespace) -> None:
-    """Run a verified profile step; complete KillMob objectives and return to NPC."""
+    """Run a verified profile step, including source-backed item collection."""
+    from wotlkbuddy.live.control import LiveControlError
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
     from wotlkbuddy.horde.planner import plan_mage
     from wotlkbuddy.live.status_hud import GoalActionHUD
@@ -557,19 +592,43 @@ def _horde_next(args: argparse.Namespace) -> None:
     def progress(line):
         print(line, file=sys.stderr, flush=True)
         hud.note(line)
+    # Show the source-of-truth mapping when planning a collection quest.
+    # The objective ItemId is never itself treated as an NPC template ID.
+    collection_sources = None
+    if step is not None and step.objective_type == 'CollectItem':
+        quest_def = next((q for q in profile.quests
+                          if q.quest_id == step.quest_id), None)
+        item_def = next((item for item in quest_def.objectives
+                         if item.kind == 'CollectItem' and
+                         item.entry == step.entry), None) if quest_def else None
+        mob_ids = list(dict.fromkeys(
+            src.entry for src in item_def.sources
+            if src.kind == 'mob' and src.entry > 0)) if item_def else []
+        collection_sources = {
+            'item_id': step.entry,
+            'required_count': step.count,
+            'mob_source_ids': mob_ids,
+            'source_profile': profile.source_path,
+            'ready_to_farm': bool(mob_ids and item_def is not None),
+            'explanation': ('XML supplies explicit mob source IDs'
+                            if mob_ids else
+                            'No Mob source IDs for this item in installed XML')}
     print(json.dumps({'profile': profile.name, 'character_guid': snap.player.guid,
                       'next_action': decision.to_dict(),
                       'npc': (step.npc_name if step else None),
-                      'quest_title': (step.name if step else None)},
+                      'quest_title': (step.name if step else None),
+                      **({'collection_sources': collection_sources}
+                         if collection_sources is not None else {})},
                      indent=2, ensure_ascii=False))
     if not args.enable_input:
         print('READ ONLY: add --enable-input to execute one supported action.',
               file=sys.stderr)
         return
     if decision.action == 'QUEST_OBJECTIVE' and step is not None and \
-            step.objective_type == 'KillMob':
+            step.objective_type in ('KillMob', 'CollectItem'):
         if not getattr(args, 'enable_combat', False):
-            print('Profile kill objective detected. Add --enable-combat, --nav-dll '
+            print('Profile combat/collection objective detected. '
+                  'Add --enable-combat, --nav-dll '
                   'and --python32 to run bounded Mage combat.', file=sys.stderr)
             return
         if not args.nav_dll or not args.python32:
@@ -584,6 +643,12 @@ def _horde_next(args: argparse.Namespace) -> None:
         if not dll.is_file() or not (dll.parent / 'mmaps').is_dir() or not python32.is_file():
             raise ValueError('Combat requires existing Navigation.dll, sibling mmaps, and x86 Python')
         driver = KeyboardQuestInput(interact_key=args.interact_key)
+        collecting = step.objective_type == 'CollectItem'
+        if collecting and (collection_sources is None or
+                           not collection_sources['mob_source_ids']):
+            raise LiveControlError(
+                f'CollectItem {step.entry} has no profile Mob source IDs; '
+                'cannot safely choose target creatures')
         with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
                 NavigationProxy(python32, dll) as nav:
             hud.set(goal=f'Complete quest: {goal_name}',
@@ -591,7 +656,10 @@ def _horde_next(args: argparse.Namespace) -> None:
             report = hunt_kill_objectives(
                 profile=profile, quest_id=decision.quest_id, pid=_pid,
                 capture=cap, driver=driver, nav=nav, spawns=db,
-                max_seconds=args.max_seconds, max_kills=args.max_kills,
+                max_seconds=args.max_seconds,
+                max_kills=(args.collect_max_kills if collecting
+                           else args.max_kills),
+                collect_items=collecting,
                 log=progress,
             )
             print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
@@ -1354,6 +1422,7 @@ def main(argv: list[str] | None = None) -> int:
     next_step.add_argument('--python32', help='x86 Python executable for Detour worker')
     next_step.add_argument('--spawns-db', help='Optional CreatureSpawns.db path')
     next_step.add_argument('--max-kills', type=int, default=18)
+    next_step.add_argument('--collect-max-kills', type=int, default=40)
     next_step.add_argument('--max-seconds', type=float, default=900)
     next_step.add_argument('--countdown', type=float, default=5)
     next_step.add_argument('--monitor', type=int, default=0)
@@ -1377,7 +1446,7 @@ def main(argv: list[str] | None = None) -> int:
     return_quest.set_defaults(func=_horde_return_turnin)
     progression = sub.add_parser('horde-progress',
                        help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
-    progression.add_argument('--only', choices=['all','gear','quests','train','vendor','objectives'],
+    progression.add_argument('--only', choices=['all','gear','quests','train','vendor','objectives','collect'],
                              default='all')
     progression.add_argument('--profiles-root',
                              help='Horde quest profile root (defaults to ~/Questing-profiles)')
@@ -1391,6 +1460,8 @@ def main(argv: list[str] | None = None) -> int:
     progression.add_argument('--pid', type=int)
     progression.add_argument('--max-kills', type=int, default=18,
                              help='Bound the objective hunt kill count')
+    progression.add_argument('--collect-max-kills', type=int, default=40,
+                             help='Bound kills while collecting quest item drops')
     progression.add_argument('--max-seconds', type=float, default=900,
                              help='Bound the objective hunt duration')
     progression.add_argument('--no-hud', action='store_true',
