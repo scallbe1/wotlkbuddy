@@ -1,9 +1,10 @@
-# WotLKBuddy v0.3 — real-client quest journal telemetry (read-only)
+# WotLKBuddy v0.3.1 — real-client quest journal telemetry (read-only)
 
 **What this milestone actually implements:** A WoW 3.3.5a (TOC interface
 30300) Lua addon gathers local player state and active quest journal entries.
 It encodes the data into a 192×80 pixel stripe in the upper-left corner of the
-game display. Python decodes screenshots through the optional `mss` package and
+game display. Python decodes screenshots through the optional `mss` package, dynamically
+calibrates the on-screen tile pitch when WoW scales the UI, and
 validates a versioned framing checksum. The CLI prints JSON lines; the journal
 can be queried as a read-only `QuestState` without inventing completed-quest
 history or quest objective creature/item IDs.
@@ -76,7 +77,8 @@ Prerequisites: Git for Windows, Python 3.11 or later, **WoW 3.3.5a client**
   `Interface/AddOns/WotLKBuddyTelemetry/`; restart and check the exact folder.
 - `Telemetry marker not visible`: ensure WoW is logged in and actually visible
   on screen, the addon is enabled, and the top-left stripe is unobstructed.
-  Run `/wbt show` in game; try `--monitor 0` (all monitors).
+  Run `/wbt show` in game; try `--monitor 0` (all monitors). **Keep the
+  PowerShell window away from the top-left telemetry box** while recording.
 - `Bad checksum` or `Unsupported protocol`: use the bundled matching addon
   and Python package, make sure nothing rescales/filters the capture, and keep
   the stripe unobstructed.
@@ -90,7 +92,9 @@ Prerequisites: Git for Windows, Python 3.11 or later, **WoW 3.3.5a client**
 
 ## Protocol and safety
 
-- Screenshot payload version 3, 48 columns × 20 rows, 4 pixels per tile.
+- Screenshot payload version 3, 48 columns × 20 rows, 4 **nominal** pixels per tile. In practice,
+  WoW may render each tile at a fractional physical size; the Python reader
+  discovers the actual pitch from the four-color marker and caches the layout.
 - Four colored magic tiles, two metadata tiles (version, length, sequence and
   weighted 16-bit checksum), followed by little-endian RGB byte triples.
 - An interrupted frame is rejected; `TRUNCATED` is reported rather than
