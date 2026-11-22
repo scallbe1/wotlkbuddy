@@ -202,6 +202,73 @@ def _horde_mage_plan(args: argparse.Namespace) -> None:
           file=sys.stderr)
 
 
+def _horde_next(args: argparse.Namespace) -> None:
+    """Run one observed profile action; never guess unsupported combat/quest steps.
+
+    Does not walk to a distant NPC. The active character must be in range.
+    """
+    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.planner import plan_mage
+    from wotlkbuddy.horde.interaction import KeyboardQuestInput, pickup_planned_quest
+    from wotlkbuddy.horde.turnin import turnin_profile_quest
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.world_position import verified_live_position
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    print('PROFILE-DRIVEN HORDE STEP: observe next action; no movement or combat.',
+          file=sys.stderr, flush=True)
+    print(f'Switch to WoW now; starting in {args.countdown:g}s.', file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    cap = lambda: capture_monitor(args.monitor)
+    snap = cap()
+    if snap.truncated or not snap.player.guid or not snap.player.name:
+        raise ValueError('Verified, nontruncated active character required')
+    if snap.resources is None or snap.resources.class_token.upper() != 'MAGE' or \
+            snap.resources.race_token.lower() not in ('undead', 'scourge'):
+        raise ValueError('This Horde execution adapter requires a verified Undead Mage')
+    _pid, world = verified_live_position(snap, pid=args.pid)
+    chosen = select_profile_from_loader(args.profiles_root, level=snap.player.level,
+                                        race='Undead')
+    profile = load_horde_profile(chosen)
+    completed = {qid for qid, done in snap.quest_completions if done}
+    decision = plan_mage(snap, profile, world_map_id=world.map_id,
+                         known_completed_quests=completed)
+    step = (profile.steps[decision.profile_step - 1]
+            if 1 <= decision.profile_step <= len(profile.steps) else None)
+    print(json.dumps({'profile': profile.name, 'character_guid': snap.player.guid,
+                      'next_action': decision.to_dict(),
+                      'npc': (step.npc_name if step else None),
+                      'quest_title': (step.name if step else None)},
+                     indent=2, ensure_ascii=False))
+    if not args.enable_input:
+        print('READ ONLY: add --enable-input to execute one supported action.',
+              file=sys.stderr)
+        return
+    if decision.action not in ('PICK_UP_QUEST', 'TURN_IN_QUEST'):
+        print(f'Not executed: {decision.action} needs {decision.capability_needed}.',
+              file=sys.stderr)
+        return
+    if step is None or step.quest_id != decision.quest_id or not step.npc_name:
+        raise ValueError('Next quest action is missing a verified profile NPC')
+    driver = KeyboardQuestInput(interact_key=args.interact_key)
+    log = lambda line: print(line, file=sys.stderr, flush=True)
+    if decision.action == 'PICK_UP_QUEST':
+        result = pickup_planned_quest(profile, capture=cap, driver=driver,
+                  quest_id=decision.quest_id, expected_guid=snap.player.guid,
+                  world_map_id=world.map_id, known_completed_quests=completed,
+                  progress=log)
+        successful = result.status in ('accepted', 'already_in_journal')
+    else:
+        result = turnin_profile_quest(profile, quest_id=decision.quest_id,
+                  capture=cap, driver=driver, expected_guid=snap.player.guid,
+                  progress=log)
+        successful = result.status in ('turned_in', 'already_turned_in')
+    print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+    if not successful:
+        raise RuntimeError(f'Profile quest action not confirmed: {result.status}: '
+                           f'{result.explanation}')
+
+
 def _horde_quest_363(args: argparse.Namespace) -> None:
     """One attended Rude Awakening delivery and guarded turn-in for the active Mage.
 
@@ -851,6 +918,16 @@ def main(argv: list[str] | None = None) -> int:
     pickup.add_argument('--countdown', type=float, default=5)
     pickup.add_argument('--monitor', type=int, default=0)
     pickup.set_defaults(func=_horde_quest_pickup)
+    next_step = sub.add_parser('horde-next',
+                               help='Read profile decision or execute one nearby NPC pickup/turn-in')
+    next_step.add_argument('--profiles-root', required=True)
+    next_step.add_argument('--interact-key', choices=['f', 'g'], default='f')
+    next_step.add_argument('--enable-input', action='store_true',
+                           help='Explicitly authorize one nearby NPC interaction')
+    next_step.add_argument('--countdown', type=float, default=5)
+    next_step.add_argument('--monitor', type=int, default=0)
+    next_step.add_argument('--pid', type=int, help='WoW PID if multiple clients run')
+    next_step.set_defaults(func=_horde_next)
     deliver = sub.add_parser('horde-quest-363',
                              help='Attended Rude Awakening delivery and verified hand-in')
     deliver.add_argument('--profiles-root', required=True)

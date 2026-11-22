@@ -163,9 +163,10 @@ class GossipTurninTests(unittest.TestCase):
         with patch.object(driver, '_tap') as tap:
             driver.chat('/run SelectGossipActiveQuest(2)')
             driver.chat('/run SelectActiveQuest(32)')
+            driver.chat('/run SelectGossipAvailableQuest(1)')
             self.assertTrue(tap.called)
         for command in ('/run SelectGossipActiveQuest(0)',
-                        '/run SelectGossipAvailableQuest(1)',
+                        '/run SelectGossipAvailableQuest(0)',
                         '/run SelectGossipActiveQuest(33)',
                         '/run SelectGossipActiveQuest(2);print(1)'):
             with self.subTest(command=command),self.assertRaises(ValueError):

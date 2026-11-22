@@ -130,6 +130,15 @@ class QuestMenuOption:
 
 
 @dataclass(frozen=True)
+class AvailableQuestOption:
+    """NPC offered quest, as listed in a currently visible gossip/greeting menu."""
+    source: str
+    index: int
+    title: str
+    ui_button: int | None = None
+
+
+@dataclass(frozen=True)
 class ClientTelemetry:
     sequence: int
     player: PlayerRecord
@@ -138,7 +147,8 @@ class ClientTelemetry:
     resources: PlayerResources | None = None
     dialog: QuestDialog | None = None
     quest_completions: tuple[tuple[int, bool], ...] = ()  # verified server cache only
-    quest_menu: tuple[QuestMenuOption, ...] = ()  # active quest list, never available quests
+    quest_menu: tuple[QuestMenuOption, ...] = ()  # active turn-in options
+    available_quest_menu: tuple[AvailableQuestOption, ...] = ()  # quest pickup options
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -151,6 +161,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     dialog = None
     completion_states: dict[int, bool] = {}
     menu: dict[tuple[str, int], QuestMenuOption] = {}
+    available: dict[tuple[str, int], AvailableQuestOption] = {}
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -244,6 +255,19 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise TelemetryError('Out-of-range or duplicate active quest-list entry')
             menu[key] = QuestMenuOption(parts[1], index, parts[3] == '1', parts[4],
                                         button or None)
+        elif parts[0] == 'V':
+            if len(parts) != 5 or parts[1] not in ('gossip', 'greeting') or \
+                    not parts[3] or len(parts[3]) > 100:
+                raise TelemetryError('Invalid available quest-list entry')
+            try:
+                index = int(parts[2])
+                button = int(parts[4])
+            except ValueError as exc:
+                raise TelemetryError('Malformed available quest-list index/button') from exc
+            key = parts[1], index
+            if not 1 <= index <= 32 or not 0 <= button <= 32 or key in available:
+                raise TelemetryError('Out-of-range or duplicate available quest-list entry')
+            available[key] = AvailableQuestOption(parts[1], index, parts[3], button or None)
         elif parts[0] == 'C':
             if len(parts) != 3:
                 raise TelemetryError('Invalid completed-quest status row')
@@ -269,10 +293,11 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
         raise TelemetryError('Invalid player health values')
     if not (0 <= player.map_x <= 1 and 0 <= player.map_y <= 1):
         raise TelemetryError('Invalid normalized map coordinates')
-    if menu and (dialog is None or dialog.kind not in ('gossip', 'greeting') or
-                 any(source != dialog.kind for source, _index in menu)):
+    if (menu or available) and (dialog is None or dialog.kind not in ('gossip', 'greeting') or
+                 any(source != dialog.kind for source, _index in (*menu, *available))):
         raise TelemetryError('Quest-list entries do not match the active NPC UI')
-    buttons = [option.ui_button for option in menu.values() if option.ui_button is not None]
+    buttons = [option.ui_button for option in (*menu.values(), *available.values())
+               if option.ui_button is not None]
     if len(buttons) != len(set(buttons)):
         raise TelemetryError('Multiple active quest options claim the same UI button')
     entries = tuple(QuestRecord(q.quest_id, q.level, q.complete, q.title,
@@ -280,4 +305,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     return ClientTelemetry(sequence, player, entries, truncated=truncated,
                            resources=resources, dialog=dialog,
                            quest_completions=tuple(sorted(completion_states.items())),
-                           quest_menu=tuple(menu.values()))
+                           quest_menu=tuple(menu.values()),
+                           available_quest_menu=tuple(available.values()))

@@ -1,4 +1,4 @@
-"""Guarded first (WotLK #363) quest turn-in using the observed 3.3.5 quest UI.
+"""Profile-driven guarded quest turn-in using observed WoW 3.3.5a UI.
 
 No assumption that a quest disappearing from the journal proves completion.
 Never uses unverified NPC selection or reward choices. Does not navigate.
@@ -33,8 +33,9 @@ class QuestTurninReport:
         return asdict(self)
 
 
-def turnin_rude_awakening(
-    profile: HordeProfile, *, capture: Callable[[], ClientTelemetry],
+def turnin_profile_quest(
+    profile: HordeProfile, *, quest_id: int,
+    capture: Callable[[], ClientTelemetry],
     driver: QuestInput, character: str | None = None,
     expected_guid: str | None = None, timeout: float = 8.0,
     sleep: Callable[[float], None] = real_sleep,
@@ -50,12 +51,13 @@ def turnin_rude_awakening(
     if not isfinite(timeout) or not 2 <= timeout <= 20:
         raise ValueError('timeout must be 2..20 seconds')
     notify = progress or (lambda _: None)
-    quest_id, expected_title = 363, 'Rude Awakening'
+    if quest_id <= 0:
+        raise ValueError('Valid profile quest ID required')
     step = next((s for s in profile.steps if s.kind == 'turnin' and
-                 s.quest_id == quest_id and s.npc_name), None)
-    if step is None or step.entry != 1569 or step.npc_name != 'Shadow Priest Sarvis':
-        raise LiveControlError('Unverified #363 turn-in NPC in Horde quest profile')
-    npc_name, npc_id = step.npc_name, step.entry
+                 s.quest_id == quest_id and s.npc_name and s.entry > 0 and s.name), None)
+    if step is None:
+        raise LiveControlError(f'Unverified quest {quest_id} turn-in NPC in Horde quest profile')
+    npc_name, npc_id, expected_title = step.npc_name, step.entry, step.name
     state = capture()
     player = state.player
     if (state.truncated or not player.name or not player.guid or
@@ -90,13 +92,13 @@ def turnin_rude_awakening(
         return any(q.quest_id == quest_id for q in s.quests)
 
     if history(state) is True:
-        return report('already_turned_in', 'Completion history confirms quest 363')
+        return report('already_turned_in', f'Completion history confirms quest {quest_id}')
     q = next((q for q in state.quests if q.quest_id == quest_id), None)
     if q is None:
         return report('quest_not_in_journal',
-                      'Quest 363 not active; absent quest alone does not confirm turn-in')
+                      f'Quest {quest_id} not active; absence alone does not confirm turn-in')
     if q.title != expected_title:
-        return report('quest_title_mismatch', 'Quest journal title does not match #363')
+        return report('quest_title_mismatch', f'Quest journal title does not match profile quest {quest_id}')
     if q.objectives and not q.complete:
         return report('objectives_incomplete', 'Quest objectives not all finished')
     last = state
@@ -145,10 +147,10 @@ def turnin_rude_awakening(
 
     guard()
     if state.player.target_name != npc_name:
-        notify('Targeting Shadow Priest Sarvis (1569)')
+        notify(f'Targeting {npc_name} ({npc_id})')
         driver.chat('/targetexact ' + npc_name)
         if wait_for(lambda s: s.player.target_name == npc_name) is None:
-            return report('npc_not_targeted', 'Cannot target Sarvis; move closer')
+            return report('npc_not_targeted', f'Cannot target {npc_name}; move closer')
 
     guard()
     if (last.dialog and last.dialog.kind in ('progress', 'reward') and
@@ -157,7 +159,7 @@ def turnin_rude_awakening(
         # previous attempt. We cannot inherit evidence across process runs.
         # Close without claiming anything, then reopen and verify the menu.
         notify('Open quest panel has no ID/title; closing it to reverify '
-               'the exact quest through Sarvis before any reward action')
+               f'the exact quest through {npc_name} before any reward action')
         driver.chat('/click QuestFrameCloseButton')
         if wait_for(lambda s: s.dialog is not None and
                     s.dialog.kind in ('none', 'gossip', 'greeting')) is None:
@@ -168,15 +170,14 @@ def turnin_rude_awakening(
     guard()
     if not any(dialog_ok(last, kind) for kind in ('progress', 'reward')) and not \
             (last.dialog and last.dialog.kind in ('gossip', 'greeting')):
-        notify('Interacting with Shadow Priest Sarvis')
+        notify(f'Interacting with {npc_name}')
         driver.interact()
         observed = wait_for(lambda s: s.dialog is not None and s.dialog.kind != 'none')
         if observed is None:
             return report('npc_out_of_range', 'No dialog; NPC may not be within range', target=True)
 
     # A multi-quest NPC first opens a list of active quests, not the individual
-    # progress/reward panel. This is exactly the Sarvis state seen in the live
-    # v0.16.1 test. Select by exact observed title and list index, never by
+    # progress/reward panel. Select by exact observed title and list index,
     # guessing index 1 or selecting an available/new quest.
     if last.dialog and last.dialog.kind in ('gossip', 'greeting'):
         source = last.dialog.kind
@@ -237,7 +238,7 @@ def turnin_rude_awakening(
     if dialog_ok(last, 'progress'):
         if wait_for(lambda s: dialog_ok(s, 'progress')) is None:
             return report('dialog_unverified', 'Quest progress panel not stable', target=True)
-        notify('Verified Rude Awakening progress panel; requesting completion')
+        notify(f'Verified {expected_title} progress panel; requesting completion')
         guard()
         requested_verified_completion = True
         driver.chat('/run CompleteQuest()')
@@ -265,14 +266,26 @@ def turnin_rude_awakening(
     guard()
     if dialog.quest_id == 0 and not dialog.title:
         notify('Verified reward by fresh transition from the uniquely matched '
-               'Rude Awakening selection (client omitted ID/title)')
+               f'{expected_title} selection (client omitted ID/title)')
     notify('Reward panel verified: zero choices and zero required money; submitting reward')
     driver.chat('/run GetQuestReward(0)')
     confirmed = wait_for(lambda s: history(s) is True and not active(s))
     if confirmed is not None:
-        return report('turned_in', 'Quest 363 confirmed in server completion history',
+        return report('turned_in', f'Quest {quest_id} confirmed in server completion history',
                       target=True, dialog=True, submitted=True, history=True)
     return report('completion_unverified',
                   'Reward submission attempted, but completed quest history was not verified; '
                   'journal disappearance alone is insufficient',
                   target=True, dialog=True, submitted=True)
+
+
+def turnin_rude_awakening(profile: HordeProfile, *, capture: Callable[[], ClientTelemetry],
+                           driver: QuestInput, character: str | None = None,
+                           expected_guid: str | None = None, timeout: float = 8.0,
+                           sleep: Callable[[float], None] = real_sleep,
+                           now: Callable[[], float] = monotonic,
+                           progress: Callable[[str], None] | None = None) -> QuestTurninReport:
+    """Legacy quest-363 adapter; new callers use the profile-driven function."""
+    return turnin_profile_quest(profile, quest_id=363, capture=capture, driver=driver,
+                               character=character, expected_guid=expected_guid,
+                               timeout=timeout, sleep=sleep, now=now, progress=progress)
