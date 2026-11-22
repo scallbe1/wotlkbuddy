@@ -213,3 +213,33 @@ def prepare_quest_corridor(profile: HordeProfile, db: CreatureSpawnDatabase,
                          giver_match.position if giver_match is not None else None,
                          turnin_match.position if turnin_match is not None else None,
                          len(givens), len(turns))
+
+
+def nearest_objective_spawns(db: CreatureSpawnDatabase, *, entry: int, map_id: int,
+                             origin: Vec3, hotspots: tuple[Vec3, ...],
+                             radius: float = 360, limit: int = 15) -> tuple[Spawn, ...]:
+    """Bound nearby spawn search using profile hotspot geography and world XYZ."""
+    if not 0 < entry < 2**24 or not 30 <= radius <= 800 or not 1 <= limit <= 100:
+        raise ValueError('Invalid objective spawn search limits')
+    # The database's existing find() only returns the first N unsorted rows.
+    # Restrict SQL with an XY bounding box and then sort in 3D; never rely on
+    # arbitrary SQLite row order to pick a hunting destination.
+    rows = db._conn.execute(
+        'SELECT x,y,z FROM spawns WHERE entry=? AND map_id=? AND '
+        'x BETWEEN ? AND ? AND y BETWEEN ? AND ? LIMIT 2000',
+        (entry, map_id, origin.x-radius, origin.x+radius,
+         origin.y-radius, origin.y+radius),
+    ).fetchall()
+    results = []
+    for row in rows:
+        try:
+            xyz = Vec3(*map(float, row))
+        except (TypeError, ValueError):
+            continue
+        if (any(not isfinite(v) for v in (xyz.x, xyz.y, xyz.z)) or
+                distance_world(origin, xyz) > radius or
+                (hotspots and min(distance_world(xyz, h) for h in hotspots) > 100)):
+            continue
+        results.append(Spawn(entry, map_id, xyz.x, xyz.y, xyz.z))
+    results.sort(key=lambda s: distance_world(origin, s.position))
+    return tuple(results[:limit])
