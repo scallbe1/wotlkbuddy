@@ -561,6 +561,24 @@ def hunt_kill_objectives(
                 else:
                     s = loot(s, corpse_xyz, dead_guid, expected)
                 latest = qlog(s)
+                if collect_items:
+                    if (s.tracked_item_id != spec.entry or
+                            s.tracked_item_count is None):
+                        raise LiveControlError(
+                            'Item tracker lost during corpse looting')
+                    updated = next(
+                        (obj for obj in latest.objectives
+                         if obj.index == observed.index), None)
+                    count = (objective_progress(updated.description)
+                             if updated is not None else None)
+                    if count is None or count[0] > s.tracked_item_count:
+                        raise LiveControlError(
+                            'Collected inventory item count does not '
+                            'confirm live quest journal progress')
+                    collected_results[spec.entry] = (
+                        s.tracked_item_count, spec.count)
+                    log(f'CollectItem {spec.entry} inventory='
+                        f'{s.tracked_item_count}, journal={count[0]}/{count[1]}')
                 after_text = tuple(o.description for o in latest.objectives)
                 if latest.complete or after_text != before_text:
                     no_credit = 0
