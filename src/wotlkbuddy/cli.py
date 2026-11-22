@@ -215,7 +215,7 @@ def _horde_next(args: argparse.Namespace) -> None:
     from wotlkbuddy.live.world_position import verified_live_position
     if not 2 <= args.countdown <= 20:
         raise ValueError('--countdown must be 2..20 seconds')
-    print('PROFILE-DRIVEN HORDE STEP: observe next action; no movement or combat.',
+    print('PROFILE-DRIVEN HORDE STEP: observe next action; combat needs --enable-combat and navmesh.',
           file=sys.stderr, flush=True)
     print(f'Switch to WoW now; starting in {args.countdown:g}s.', file=sys.stderr, flush=True)
     time.sleep(args.countdown)
@@ -243,6 +243,36 @@ def _horde_next(args: argparse.Namespace) -> None:
     if not args.enable_input:
         print('READ ONLY: add --enable-input to execute one supported action.',
               file=sys.stderr)
+        return
+    if decision.action == 'QUEST_OBJECTIVE' and step is not None and \
+            step.objective_type == 'KillMob':
+        if not getattr(args, 'enable_combat', False):
+            print('Profile kill objective detected. Add --enable-combat, --nav-dll '
+                  'and --python32 to run bounded Mage combat.', file=sys.stderr)
+            return
+        if not args.nav_dll or not args.python32:
+            raise ValueError('Combat requires both --nav-dll and --python32')
+        from pathlib import Path
+        from wotlkbuddy.horde.combat import hunt_kill_objectives
+        from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
+        from wotlkbuddy.navigation.proxy import NavigationProxy
+        from wotlkbuddy.horde.interaction import KeyboardQuestInput
+        dll = Path(args.nav_dll).expanduser().resolve()
+        python32 = Path(args.python32).expanduser().resolve()
+        if not dll.is_file() or not (dll.parent / 'mmaps').is_dir() or not python32.is_file():
+            raise ValueError('Combat requires existing Navigation.dll, sibling mmaps, and x86 Python')
+        driver = KeyboardQuestInput(interact_key=args.interact_key)
+        with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
+                NavigationProxy(python32, dll) as nav:
+            report = hunt_kill_objectives(
+                profile=profile, quest_id=decision.quest_id, pid=_pid,
+                capture=cap, driver=driver, nav=nav, spawns=db,
+                max_seconds=args.max_seconds, max_kills=args.max_kills,
+                log=lambda line: print(line, file=sys.stderr, flush=True),
+            )
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+        if not report.objectives_complete:
+            raise RuntimeError('Objective hunt not completed: ' + report.status)
         return
     if decision.action not in ('PICK_UP_QUEST', 'TURN_IN_QUEST'):
         print(f'Not executed: {decision.action} needs {decision.capability_needed}.',
@@ -924,6 +954,13 @@ def main(argv: list[str] | None = None) -> int:
     next_step.add_argument('--interact-key', choices=['f', 'g'], default='f')
     next_step.add_argument('--enable-input', action='store_true',
                            help='Explicitly authorize one nearby NPC interaction')
+    next_step.add_argument('--enable-combat', action='store_true',
+                           help='Explicitly authorize attended Mage kill-objective combat')
+    next_step.add_argument('--nav-dll', help='x86 Navigation.dll with adjacent mmaps')
+    next_step.add_argument('--python32', help='x86 Python executable for Detour worker')
+    next_step.add_argument('--spawns-db', help='Optional CreatureSpawns.db path')
+    next_step.add_argument('--max-kills', type=int, default=18)
+    next_step.add_argument('--max-seconds', type=float, default=900)
     next_step.add_argument('--countdown', type=float, default=5)
     next_step.add_argument('--monitor', type=int, default=0)
     next_step.add_argument('--pid', type=int, help='WoW PID if multiple clients run')
