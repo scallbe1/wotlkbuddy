@@ -310,12 +310,14 @@ def turnin_profile_quest(
                           'no reward submitted', target=True, dialog=True)
         # Require *two* fresh, matching frames of actual reward item identities
         # before choosing. A changed/missing option cannot carry authorization.
-        stable = wait_for(lambda s: (
-            dialog_ok(s, 'reward') and s.dialog.reward_choices == dialog.reward_choices and
-            s.dialog.required_money == 0 and
-            s.reward_choices == reward.reward_choices and
-            active(s)))
-        if stable is None:
+        # Inspect the *very next* fresh frame. Waiting until any later
+        # matching frame could mistakenly accept a flickering option list.
+        stable = wait_for(lambda s: True)
+        if (stable is None or not dialog_ok(stable, 'reward') or
+                stable.dialog.reward_choices != dialog.reward_choices or
+                stable.dialog.required_money != 0 or
+                stable.reward_choices != reward.reward_choices or
+                not active(stable)):
             return report('reward_unverified',
                           'Reward option list changed or vanished before selection',
                           target=True, dialog=True)
