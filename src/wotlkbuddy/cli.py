@@ -229,6 +229,36 @@ def _live_burst(args: argparse.Namespace) -> None:
           file=sys.stderr)
 
 
+def _live_heading(args: argparse.Namespace) -> None:
+    """Human-armed, three-pulse bearing calibration; no path steering."""
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import WindowsKeyboard
+    from wotlkbuddy.live.heading import calibrate_heading
+    if not args.enable_input:
+        raise ValueError('Refusing keyboard input: explicitly pass --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    print('HEADING TEST: forward / short turn / forward; maximum 3 pulses. '
+          'Use safe flat ground, no enemies, default W/A/D bindings. '
+          'Press Escape or switch windows to abort.', file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g} seconds.',
+          file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    kb = WindowsKeyboard()
+    report = calibrate_heading(
+        capture=lambda: capture_monitor(args.monitor), keyboard=kb,
+        turn_key=args.turn_key, turn_duration=args.turn_duration,
+        forward_duration=args.forward_duration,
+        stop_requested=kb.emergency_stop_requested,
+    )
+    print(json.dumps(report.to_dict(), ensure_ascii=False))
+    print('Heading is an approximate 2D map-screen angle, NOT world yaw or '
+          'a collision-safe navigation instruction.', file=sys.stderr)
+    if not report.direction_matches_key:
+        print('NOTE: Observed bearing did not match requested turn direction; '
+              'check key bindings, map projection or telemetry noise.', file=sys.stderr)
+
+
 def _live_record(args: argparse.Namespace) -> None:
     """Record manual route positions and observed quest progress, without input."""
     from wotlkbuddy.live.capture import capture_monitor
@@ -321,6 +351,17 @@ def main(argv: list[str] | None = None) -> int:
     burst.add_argument('--countdown', type=float, default=5)
     burst.add_argument('--monitor', type=int, default=0)
     burst.set_defaults(func=_live_burst)
+    heading = sub.add_parser('live-heading',
+                             help='Calibrate apparent heading with forward/turn/forward pulses')
+    heading.add_argument('--enable-input', action='store_true',
+                         help='Explicit opt-in required for each test')
+    heading.add_argument('--turn-key', choices=['turn-left', 'turn-right'],
+                         default='turn-right')
+    heading.add_argument('--turn-duration', type=float, default=0.18)
+    heading.add_argument('--forward-duration', type=float, default=0.15)
+    heading.add_argument('--countdown', type=float, default=5)
+    heading.add_argument('--monitor', type=int, default=0)
+    heading.set_defaults(func=_live_heading)
     trail = sub.add_parser('live-record', help='Record manually walked route and quest events')
     trail.add_argument('--seconds', type=float, default=90)
     trail.add_argument('--interval', type=float, default=0.7)

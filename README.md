@@ -1,6 +1,6 @@
 # WotLKBuddy
 
-**Version 0.5.0 — live telemetry, bounded movement feedback, and quest-progress recording.**
+**Version 0.6.0 — live telemetry, bounded movement, quest progress, and heading calibration.**
 
 A Python-first framework for a future WotLK 3.3.5a (client build 12340)
 automation application. The architecture and feature targets are informed by
@@ -8,7 +8,7 @@ automation application. The architecture and feature targets are informed by
 new implementation and currently contains no upstream C# sources, .NET code,
 or vendored native binaries.
 
-## v0.5.0 — feedback-controlled movement experiments + quest observation
+## v0.6.0 — controlled heading calibration and quest observation
 
 The first live-client **observation** interface is implemented. An optional
 WoW 3.3.5a Lua addon publishes player HP, level, combat/death status, map-relative
@@ -20,7 +20,7 @@ JSONL. `live-status` shows a readable quest journal; `live-probe` performs
 one explicitly authorized short WASD keypress. v0.5 adds a **bounded**
 forward/backward burst of at most six individually validated key pulses,
 plus a **read-only** session recorder of map-relative positions and observable
-quest progress. There is still **no autonomous navigation, combat or questing**. See [docs/LIVE_CLIENT.md](docs/LIVE_CLIENT.md)
+quest progress. v0.6 adds a human-armed three-pulse forward/turn/forward heading experiment. There is still **no autonomous navigation, combat or questing**. See [docs/LIVE_CLIENT.md](docs/LIVE_CLIENT.md)
 for the exact Windows installation/test steps.
 
 ```powershell
@@ -32,6 +32,8 @@ py -3.12 -m wotlkbuddy live-status --countdown 5
 py -3.12 -m wotlkbuddy live-probe --enable-input --key forward --duration 0.18 --countdown 5
 # v0.5: explicitly opt in to a short, bounded sequence, in a safe open area:
 py -3.12 -m wotlkbuddy live-burst --enable-input --key forward --pulses 3 --duration 0.15 --countdown 5
+# v0.6: optional three-pulse heading experiment (W / turn right / W)
+py -3.12 -m wotlkbuddy live-heading --enable-input --turn-key turn-right --countdown 5
 # Alternatively, record a normal/manual questing walk without any keyboard input:
 py -3.12 -m wotlkbuddy live-record --seconds 90 --output darkshore-walk.jsonl
 ```
@@ -69,6 +71,7 @@ py -3.12 -m wotlkbuddy live-record --seconds 90 --output darkshore-walk.jsonl
   foreground/combat/identity checks, and Escape/Ctrl+C interruption.
 - v0.5 read-only manual-route and quest-progress recorder, including observed
   objective deltas, quest appearances/disappearances and completion flags.
+- v0.6 human-armed heading calibration with Escape/focus guards, position-drift checks, and apparent-map bearing report.
 - Automated cross-platform unit tests and GitHub Actions workflow.
 
 ## Not yet implemented

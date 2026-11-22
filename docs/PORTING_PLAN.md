@@ -104,3 +104,14 @@ new Python tests for each subsystem before connecting it to the live client.
 - **Not yet complete:** a world-coordinate source, camera/heading estimation,
   a verified 3D navmesh bridge, combat routines, or NPC interaction actions.
   Do not enable general quest profiles with the current input primitives.
+
+
+## v0.6 milestone — heading calibration
+
+- v0.5 real-client testing: three bounded forward pulses in Darkshore all
+  produced consistent nonzero motion.
+- v0.6 adds an explicitly armed forward/turn/forward test with automatic
+  key-release attempts and stops for Escape, combat, missing telemetry,
+  wrong window, changed map/character and unexpected position drift.
+- Result is apparent 2D map-screen heading. No world-coordinate navigation,
+  autonomous steering, obstacle awareness or live QuestGamePort yet.
