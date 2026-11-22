@@ -288,3 +288,12 @@ interact with an already configured F/G key, and only accept **Rude Awakening
 (363)** from **Undertaker Mordo** when the displayed quest ID is verified.
 This is deliberately a single-quest, attended integration test, **not** an
 unattended quest bot. See [Aarr's first quest](docs/FIRST_QUEST_V012.md).
+
+## v0.12.1 — WotLK quest-detail title fallback
+
+The v0.12 client test with Aarr showed a quest DETAIL frame with ID 0.
+The updated read-only addon exports the current quest title using `GetTitleText()`.
+Quest 363 can now be accepted only when the NPC is confirmed as Undertaker Mordo
+and the open detail is confirmed on two fresh frames with either ID 363
+or ID 0 plus the **exact** title `Rude Awakening`. ID 0 without a
+matching title is never sufficient. Reinstall the addon and `/reload` first.
