@@ -126,6 +126,7 @@ class QuestMenuOption:
     index: int   # UI index, not a quest ID
     complete: bool
     title: str
+    ui_button: int | None = None  # exact verified visible button number, not quest list index
 
 
 @dataclass(frozen=True)
@@ -230,17 +231,19 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 if payment < 0: payment = None
             dialog = QuestDialog(parts[1], quest_id, title, choices, payment)
         elif parts[0] == 'A':
-            if len(parts) != 5 or parts[1] not in ('gossip', 'greeting') or \
+            if len(parts) not in (5, 6) or parts[1] not in ('gossip', 'greeting') or \
                     parts[3] not in ('0', '1') or not parts[4] or len(parts[4]) > 100:
                 raise TelemetryError('Invalid active quest-list entry')
             try:
                 index = int(parts[2])
+                button = int(parts[5]) if len(parts) == 6 else 0
             except ValueError as exc:
-                raise TelemetryError('Malformed active quest-list index') from exc
+                raise TelemetryError('Malformed active quest-list index/button') from exc
             key = parts[1], index
-            if index < 1 or index > 32 or key in menu:
+            if not 1 <= index <= 32 or not 0 <= button <= 32 or key in menu:
                 raise TelemetryError('Out-of-range or duplicate active quest-list entry')
-            menu[key] = QuestMenuOption(parts[1], index, parts[3] == '1', parts[4])
+            menu[key] = QuestMenuOption(parts[1], index, parts[3] == '1', parts[4],
+                                        button or None)
         elif parts[0] == 'C':
             if len(parts) != 3:
                 raise TelemetryError('Invalid completed-quest status row')
@@ -269,6 +272,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     if menu and (dialog is None or dialog.kind not in ('gossip', 'greeting') or
                  any(source != dialog.kind for source, _index in menu)):
         raise TelemetryError('Quest-list entries do not match the active NPC UI')
+    buttons = [option.ui_button for option in menu.values() if option.ui_button is not None]
+    if len(buttons) != len(set(buttons)):
+        raise TelemetryError('Multiple active quest options claim the same UI button')
     entries = tuple(QuestRecord(q.quest_id, q.level, q.complete, q.title,
                                 tuple(obj[q.quest_id])) for q in quests.values())
     return ClientTelemetry(sequence, player, entries, truncated=truncated,

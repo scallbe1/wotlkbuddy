@@ -166,6 +166,15 @@ local function tickData()
     if (dialog == 'detail' or dialog == 'progress' or dialog == 'reward') and GetTitleText then
         dialogQuestTitle = safe(GetTitleText(), 100)
     end
+    -- Use the *currently shown* quest panel's text only if the client API
+    -- does not supply a title. Do not reuse stale text from an invisible panel.
+    if dialogQuestTitle == '' and dialog == 'progress' and QuestProgressTitleText
+            and QuestProgressTitleText:IsShown() then
+        dialogQuestTitle = safe(QuestProgressTitleText:GetText(), 100)
+    elseif dialogQuestTitle == '' and (dialog == 'detail' or dialog == 'reward')
+            and QuestInfoTitleHeader and QuestInfoTitleHeader:IsShown() then
+        dialogQuestTitle = safe(QuestInfoTitleHeader:GetText(), 100)
+    end
     local rewardChoices, moneyRequired = -1, -1
     if dialog == 'reward' then
         if GetNumQuestChoices then rewardChoices = GetNumQuestChoices() or -1 end
@@ -180,6 +189,23 @@ local function tickData()
     elseif completionCache then
         completed = completionCache[363] and 1 or 0
     end
+    -- Find the exact on-screen button associated with each *active* quest.
+    -- GossipTitleButtonN's frame N is NOT the same as its GetID(): available
+    -- quests appear first, so a quest with active index 1 may be button 3.
+    -- The frame is the one a human actually clicks. 0 = no unique visible match.
+    local function activeButton(source, questIndex)
+        local number = 0
+        for i = 1, 32 do
+            local button = _G[(source == 'gossip' and 'GossipTitleButton' or 'QuestTitleButton') .. i]
+            if button and button:IsShown() and button:GetID() == questIndex and
+                    ((source == 'gossip' and button.type == 'Active') or
+                     (source == 'greeting' and button.isActive == 1)) then
+                if number ~= 0 then return 0 end
+                number = i
+            end
+        end
+        return number
+    end
     -- Active quest-list entries are different from the quest progress/reward
     -- panel. The 3.3.5a GossipFrame API returns four fields per active quest:
     -- title, level, isLowLevel, isComplete. QuestFrameGreetingPanel uses
@@ -193,7 +219,8 @@ local function tickData()
             local isComplete = options[(i - 1) * 4 + 4]
             if title then
                 appendLine(table.concat({'A', 'gossip', tostring(i),
-                    isComplete and '1' or '0', safe(title, 100)}, '\t'))
+                    isComplete and '1' or '0', safe(title, 100),
+                    tostring(activeButton('gossip', i))}, '\t'))
             end
         end
     elseif dialog == 'greeting' and GetNumActiveQuests and GetActiveTitle then
@@ -202,7 +229,8 @@ local function tickData()
             local title, isComplete = GetActiveTitle(i)
             if title then
                 appendLine(table.concat({'A', 'greeting', tostring(i),
-                    isComplete and '1' or '0', safe(title, 100)}, '\t'))
+                    isComplete and '1' or '0', safe(title, 100),
+                    tostring(activeButton('greeting', i))}, '\t'))
             end
         end
     end

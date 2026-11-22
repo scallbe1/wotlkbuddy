@@ -394,3 +394,15 @@ DLL/terrain assets must be supplied separately; no Python package includes them.
 ### v0.16.1: bounded collision recovery
 
 `horde-nav-deliver` now attempts up to two small, navmesh-checked lateral recoveries when a physical wall prevents forward progress. It tries **E (strafe right)** first, then **Q (strafe left)** if right cannot move; measures real world XYZ after every step; and advances past the corner before resuming Detour waypoints. Confirm Q/E are WoW strafe bindings. It still stops on combat or unknown motion. For the original immediate-stop behavior use `--no-stuck-recovery`. See [docs/OBSTACLE_RECOVERY_V0161.md](docs/OBSTACLE_RECOVERY_V0161.md).
+
+## v0.17.1 — Sarvis quest-list UI button fix
+
+When an NPC's active quest is listed in GossipFrame/QuestFrame, the telemetry
+addon now reports the actual visible UI button mapped to the exact completed
+quest entry. The verified turn-in driver uses `/click GossipTitleButtonN` or
+`/click QuestTitleButtonN` instead of relying on the direct selection API.
+The new button number is not necessarily the active-quest index. A button that
+cannot be verified is never guessed. See
+[the v0.17.1 troubleshooting guide](docs/SARVIS_GOSSIP_TURNIN_V0171.md).
+**Reinstall the addon and `/reload` after updating**; the binary navigation
+DLL and mmaps do not need to change for this fix.

@@ -173,14 +173,32 @@ def turnin_rude_awakening(
             return report('quest_menu_unverified',
                           'Active quest list changed before selection; no input sent', target=True)
         guard()
-        api = 'SelectGossipActiveQuest' if source == 'gossip' else 'SelectActiveQuest'
-        notify(f'Choosing verified active quest {expected_title!r} from {source} entry {chosen.index}')
-        driver.chat(f'/run {api}({chosen.index})')
+        # Prefer a verified real UI button: this executes the same OnClick
+        # handler as a user clicking the listed quest. It avoids relying on a
+        # direct SelectGossipActiveQuest call from an already-open chat box,
+        # which did not advance the quest in the first live v0.17 trial.
+        if chosen.ui_button is not None:
+            frame = 'GossipTitleButton' if source == 'gossip' else 'QuestTitleButton'
+            command = f'/click {frame}{chosen.ui_button}'
+        else:
+            # Backwards-compatible selection for an older addon with no
+            # verified button mapping; never guess a GossipTitleButton number.
+            api = 'SelectGossipActiveQuest' if source == 'gossip' else 'SelectActiveQuest'
+            command = f'/run {api}({chosen.index})'
+        notify(f'Choosing verified active quest {expected_title!r}: '
+               f'{source} index {chosen.index}, action {command}')
+        driver.chat(command)
         selected = wait_for(lambda s: dialog_ok(s, 'progress') or dialog_ok(s, 'reward'))
         if selected is None:
+            after = last.dialog
+            observed = ('none' if after is None else
+                        f'{after.kind} id={after.quest_id} title={after.title!r}')
+            entries = [(o.index, o.title, o.complete, o.ui_button)
+                       for o in last.quest_menu]
             return report('quest_selection_unverified',
-                          'Selected the verified active quest but did not observe its '
-                          'progress/reward frame; no completion attempted', target=True)
+                          f'Selection via {command} did not yield verified '
+                          f'progress/reward. Last observed UI: {observed}; '
+                          f'active entries: {entries!r}; no completion attempted', target=True)
 
     if dialog_ok(last, 'progress'):
         if wait_for(lambda s: dialog_ok(s, 'progress')) is None:
