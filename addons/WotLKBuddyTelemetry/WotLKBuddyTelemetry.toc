@@ -1,0 +1,5 @@
+## Interface: 30300
+## Title: WotLKBuddy Telemetry
+## Notes: Read-only player and quest log telemetry for WotLKBuddy. No automated gameplay actions.
+## Version: 0.3.0
+WotLKBuddyTelemetry.lua

@@ -1,12 +1,28 @@
 # WotLKBuddy
 
-**Version 0.2.0 — Python QuestBot simulation, not yet a working in-game WoW bot.**
+**Version 0.3.0 — real-client read-only player/quest journal telemetry plus offline QuestBot.**
 
 A Python-first framework for a future WotLK 3.3.5a (client build 12340)
 automation application. The architecture and feature targets are informed by
 [CopilotBuddy](https://github.com/Likon69/CopilotBuddy). This repository is a
 new implementation and currently contains no upstream C# sources, .NET code,
 or vendored native binaries.
+
+## v0.3.0 — read-only live client telemetry
+
+The first live-client **observation** interface is implemented. An optional
+WoW 3.3.5a Lua addon publishes player HP, level, combat/death status, map-relative
+position, target identity, and active quest journal IDs/titles/objectives as
+colored pixels. Python captures and checksum-validates the strip and prints
+JSONL. No client memory offsets, injection, key presses or game actions are
+used; the **bot cannot yet play WoW**. See [docs/LIVE_CLIENT.md](docs/LIVE_CLIENT.md)
+for the exact Windows installation/test steps.
+
+```powershell
+py -3.12 -m pip install -e ".[live,dev]"
+py -3.12 -m wotlkbuddy install-addon --wow-dir "C:\Games\WoW 3.3.5a"
+py -3.12 -m wotlkbuddy live-watch --seconds 30 > telemetry.jsonl
+```
 
 ## What is implemented
 
@@ -37,12 +53,12 @@ or vendored native binaries.
 
 ## Not yet implemented
 
-The **live `GamePort` / `QuestGamePort` implementation** is the immediate blocker. There is no
+A **complete live `GamePort` / `QuestGamePort` implementation** remains the immediate blocker. There is no
 validated WoW object manager, runtime offset resolution, Lua game-thread
 executor, injected code, live movement/spell commands, class combat routines,
 flight paths, quests, vendors, dungeon mechanics, battlegrounds, gatherings,
 or complete Honorbuddy profile execution. The QuestBot is not yet wired to the
-WoW client. The existing native navigation DLL
+WoW client as an action-capable bot. v0.3 includes a read-only telemetry source. The existing native navigation DLL
 has **not** been tested live from this package. The UI runs the simulator only.
 
 ## Quick start
@@ -131,6 +147,8 @@ src/wotlkbuddy/
 
 ## Development plan
 
+See [docs/LIVE_CLIENT.md](docs/LIVE_CLIENT.md) for client-side telemetry installation.
+
 See [docs/QUESTBOT.md](docs/QUESTBOT.md) for supported quest actions, demo
 commands and live integration requirements.
 
@@ -139,21 +157,13 @@ upstream module mapping, and validation gates. Each new live feature must be
 validated in-game against WoW 3.3.5a build 12340; unit-test passing alone
 is not proof of game compatibility.
 
-## Publishing as a new repository
+## Repository
 
-Create a new empty GitHub repository named `wotlkbuddy` and run:
-
-```bash
-git init
-git add .
-git commit -m "Initial WotLKBuddy Python port"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/wotlkbuddy.git
-git push -u origin main
-```
+Development happens at https://github.com/scallbe1/wotlkbuddy, with
+feature branches, automated tests and reviewable pull requests.
 
 ## Scope note
 
 The application is Python-first; an optional external C++ Detour DLL remains
 for navigation during the migration. Strict 100% Python including navigation
-would require a separate replacement of Detour/Recast (not done in v0.1.0).
+would require a separate replacement of Detour/Recast (not done in v0.3.0).
