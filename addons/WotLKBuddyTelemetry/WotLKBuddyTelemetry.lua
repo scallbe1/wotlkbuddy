@@ -394,6 +394,108 @@ local function tickData()
             end
         end
     end
+    -- Optional bounded inventory scan for Mage cloth upgrades. No equipment
+    -- changes are made by this addon. Do not truncate core quest telemetry when
+    -- the inventory has too many records: Z=0 disables automatic gear actions.
+    local armorSlots = {
+        INVTYPE_HEAD=1, INVTYPE_SHOULDER=3, INVTYPE_CHEST=5,
+        INVTYPE_ROBE=5, INVTYPE_WAIST=6, INVTYPE_LEGS=7,
+        INVTYPE_FEET=8, INVTYPE_WRIST=9, INVTYPE_HAND=10,
+        INVTYPE_CLOAK=15
+    }
+    local function armorInfo(link)
+        if not link or not GetItemInfo then return nil, false end
+        local name, _, _, level, req, category, subtype, _, equip =
+            GetItemInfo(link)
+        if not name then return nil, true end
+        if category ~= 'Armor' or subtype ~= 'Cloth' or not armorSlots[equip] then
+            return nil, false
+        end
+        local id = tonumber(string.match(link, 'item:(%d+)')) or 0
+        if id < 1 then return nil, true end
+        local stats = GetItemStats and GetItemStats(link) or {}
+        if type(stats) ~= 'table' then stats = {} end
+        -- Weight Mage primary attributes. Item level is only a tie-breaker.
+        local score = math.floor(
+            20*(stats.ITEM_MOD_SPELL_POWER_SHORT or 0) +
+            10*(stats.ITEM_MOD_INTELLECT_SHORT or 0) +
+            5*(stats.ITEM_MOD_SPIRIT_SHORT or 0) +
+            3*(stats.ITEM_MOD_STAMINA_SHORT or 0) +
+            6*(stats.ITEM_MOD_SPELL_HASTE_RATING_SHORT or 0) +
+            6*(stats.ITEM_MOD_SPELL_CRIT_RATING_SHORT or 0) + 0.5)
+        local canEquip = IsEquippableItem and IsEquippableItem(link) and 1 or 0
+        return {id=id, name=safe(name, 55), ilvl=tonumber(level) or -1,
+                req=tonumber(req) or -1, inv=armorSlots[equip],
+                score=score, allowed=canEquip}, false
+    end
+    local rows = {}
+    local gearComplete = 1
+    for slot = 1, 19 do
+        local link = GetInventoryItemLink and GetInventoryItemLink('player', slot)
+        if link then
+            local gear, unknown = armorInfo(link)
+            if unknown then gearComplete = 0 end
+            if gear and gear.inv == slot then
+                table.insert(rows, table.concat({'W', tostring(slot),
+                    tostring(gear.id), tostring(gear.ilvl),
+                    tostring(gear.score)}, '\t'))
+            end
+        end
+    end
+    local found = 0
+    for bag = 0, 4 do
+        for slot = 1, GetContainerNumSlots(bag) or 0 do
+            local link = GetContainerItemLink(bag, slot)
+            if link then
+                local item, unknown = armorInfo(link)
+                if unknown then gearComplete = 0 end
+                if item then
+                    found = found + 1
+                    if found <= 20 then
+                        table.insert(rows, table.concat({'U', tostring(bag),
+                            tostring(slot), tostring(item.id), tostring(item.inv),
+                            tostring(item.ilvl), tostring(item.req),
+                            tostring(item.score), tostring(item.allowed),
+                            item.name}, '\t'))
+                    else
+                        gearComplete = 0
+                    end
+                end
+            end
+        end
+    end
+    local bytes = 4
+    for _, row in ipairs(rows) do bytes = bytes + string.len(row) + 1 end
+    if gearComplete == 1 and payloadBytes + bytes <= CAPACITY - 20 then
+        for _, row in ipairs(rows) do appendLine(row) end
+        appendLine('Z\t1')
+    elseif payloadBytes + 4 <= CAPACITY - 20 then
+        appendLine('Z\t0')
+    end
+    -- Class trainer services are read only. Expose *available* services, not
+    -- unavailable ranks, and require a complete frame before any purchase.
+    if ClassTrainerFrame and ClassTrainerFrame:IsShown() and
+            GetNumTrainerServices and GetTrainerServiceInfo then
+        local total = math.min(GetNumTrainerServices() or 0, 120)
+        local services = {}
+        for i = 1, total do
+            local name, rank, category = GetTrainerServiceInfo(i)
+            if category == 'available' and name then
+                local cost = GetTrainerServiceCost and GetTrainerServiceCost(i) or -1
+                local required = GetTrainerServiceLevelReq and
+                    GetTrainerServiceLevelReq(i) or -1
+                table.insert(services, table.concat({'Y', tostring(i),
+                    safe(name, 55), safe(rank, 25), tostring(cost or -1),
+                    tostring(required or -1)}, '\t'))
+            end
+        end
+        local needed = 6
+        for _, row in ipairs(services) do needed = needed + string.len(row) + 1 end
+        if payloadBytes + needed <= CAPACITY - 20 then
+            appendLine(table.concat({'N','1',tostring(#services)}, '\t'))
+            for _, row in ipairs(services) do appendLine(row) end
+        end
+    end
     if isTruncated then table.insert(lines, 'E\tTRUNCATED') end
     return table.concat(lines, '\n') .. '\n'
 end

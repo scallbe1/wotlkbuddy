@@ -223,7 +223,81 @@ def _execute_profile_return(*, profile, quest_id, pid, capture, driver,
             max_seconds=max_seconds, log=log)
     print('Quest turn-in:', json.dumps(result.to_dict(), indent=2,
                                         ensure_ascii=False))
+    # A quest reward may be a new cloth upgrade; verify and equip it now.
+    from wotlkbuddy.horde.gear import equip_mage_upgrades
+    if capture().gear_scan_complete:
+        try:
+            upgraded = equip_mage_upgrades(capture=capture, driver=driver, log=log)
+            if upgraded:
+                print('Equipped upgrades:', list(upgraded))
+        except LiveControlError as exc:
+            log(f'Post-reward gear check stopped: {exc}')
     return result
+
+
+def _horde_progress(args: argparse.Namespace) -> None:
+    """Attended post-quest equipment, nearby quest pickup and Mage training.
+
+    Each action requires live validation; never reruns an already handed-in
+    quest or assumes an NPC/quest title on a customized server.
+    """
+    from pathlib import Path
+    from wotlkbuddy.horde.gear import equip_mage_upgrades
+    from wotlkbuddy.horde.npc_visit import visit_npc
+    from wotlkbuddy.horde.quest_offers import accept_npc_offers
+    from wotlkbuddy.horde.training import train_available_mage_spells
+    from wotlkbuddy.horde.interaction import KeyboardQuestInput
+    from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.world_position import verified_live_position
+    from wotlkbuddy.navigation.proxy import NavigationProxy
+    from wotlkbuddy.live.control import LiveControlError
+    if not args.enable_input:
+        raise ValueError('Post-quest input requires explicit --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be between 2 and 20 seconds')
+    log = lambda line: print(line, file=sys.stderr, flush=True)
+    log(f'Switch to WoW now; post-quest progression begins in {args.countdown:g}s.')
+    time.sleep(args.countdown)
+    cap=lambda: capture_monitor(args.monitor)
+    first=cap()
+    if (first.truncated or first.player.dead or first.player.in_combat or
+            first.resources is None or
+            first.resources.class_token.upper() != 'MAGE' or
+            first.resources.race_token.lower() not in ('scourge','undead')):
+        raise LiveControlError('Only a verified living out-of-combat Undead Mage is supported')
+    pid, world=verified_live_position(first, pid=args.pid)
+    if world.map_id != 0:
+        raise LiveControlError('This Deathknell progression run requires world map ID 0')
+    driver=KeyboardQuestInput(interact_key=args.interact_key)
+    report={}
+    if args.only in ('all','gear'):
+        equipped=equip_mage_upgrades(capture=cap, driver=driver, log=log)
+        report['equipped_item_ids']=equipped
+    if args.only in ('all','quests','train'):
+        dll=Path(args.nav_dll).expanduser().resolve()
+        py32=Path(args.python32).expanduser().resolve()
+        if not dll.is_file() or not (dll.parent/'mmaps').is_dir() or not py32.is_file():
+            raise ValueError('NPC visits need Navigation.dll, adjacent mmaps and x86 Python')
+        with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
+                NavigationProxy(py32,dll) as nav:
+            if args.only in ('all','quests'):
+                quests={}
+                for name,entry in (('Shadow Priest Sarvis',1569),('Novice Elreth',1661)):
+                    visit_npc(npc_name=name, npc_id=entry, pid=pid, capture=cap,
+                              driver=driver, nav=nav, spawns=db, log=log)
+                    quests[name]=accept_npc_offers(
+                        npc_name=name, npc_id=entry, capture=cap, driver=driver,
+                        max_quests=4, log=log)
+                report['accepted_quests']=quests
+            if args.only in ('all','train'):
+                name,entry='Isabella',2124
+                visit_npc(npc_name=name, npc_id=entry, pid=pid, capture=cap,
+                          driver=driver, nav=nav, spawns=db, log=log)
+                report['trained_spells']=train_available_mage_spells(
+                    npc_name=name, npc_id=entry, capture=cap, driver=driver,
+                    log=log)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
 
 
 def _horde_next(args: argparse.Namespace) -> None:
@@ -304,6 +378,16 @@ def _horde_next(args: argparse.Namespace) -> None:
                 log=lambda line: print(line, file=sys.stderr, flush=True))
             print('Quest turn-in:', json.dumps(
                 handin.to_dict(), indent=2, ensure_ascii=False))
+            from wotlkbuddy.horde.gear import equip_mage_upgrades
+            if cap().gear_scan_complete:
+                try:
+                    upgraded = equip_mage_upgrades(capture=cap, driver=driver,
+                                                    log=lambda line: print(
+                                                        line, file=sys.stderr, flush=True))
+                    if upgraded:
+                        print('Equipped upgrades:', list(upgraded))
+                except LiveControlError as exc:
+                    print(f'Post-reward gear check stopped: {exc}', file=sys.stderr)
         return
     if decision.action not in ('PICK_UP_QUEST', 'TURN_IN_QUEST'):
         print(f'Not executed: {decision.action} needs {decision.capability_needed}.',
@@ -1047,6 +1131,19 @@ def main(argv: list[str] | None = None) -> int:
     return_quest.add_argument('--monitor', type=int, default=0)
     return_quest.add_argument('--pid', type=int)
     return_quest.set_defaults(func=_horde_return_turnin)
+    progression = sub.add_parser('horde-progress',
+                       help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
+    progression.add_argument('--only', choices=['all','gear','quests','train'],
+                             default='all')
+    progression.add_argument('--nav-dll', help='Navigation.dll + adjacent mmaps')
+    progression.add_argument('--python32', help='Python 32-bit for nav worker')
+    progression.add_argument('--spawns-db')
+    progression.add_argument('--interact-key', choices=['f','g'], default='f')
+    progression.add_argument('--enable-input', action='store_true')
+    progression.add_argument('--countdown', type=float, default=5)
+    progression.add_argument('--monitor', type=int, default=0)
+    progression.add_argument('--pid', type=int)
+    progression.set_defaults(func=_horde_progress)
     deliver = sub.add_parser('horde-quest-363',
                              help='Attended Rude Awakening delivery and verified hand-in')
     deliver.add_argument('--profiles-root', required=True)

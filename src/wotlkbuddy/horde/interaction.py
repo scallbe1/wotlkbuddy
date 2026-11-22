@@ -28,7 +28,7 @@ _LETTERS = dict(zip('qwertyuiopasdfghjklzxcvbnm',
                      0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32]))
 _DIGITS = dict(zip('1234567890', [0x02, 0x03, 0x04, 0x05, 0x06,
                                    0x07, 0x08, 0x09, 0x0a, 0x0b]))
-_SPECIAL = {' ': (0x39, False), '/': (0x35, False),
+_SPECIAL = {' ': (0x39, False), '/': (0x35, False), ',': (0x33, False),
             '(': (0x0a, True), ')': (0x0b, True),
             "'": (0x28, False), '-': (0x0c, False)}
 _INTERACT_KEYS = {'f': 0x21, 'g': 0x22}
@@ -88,6 +88,8 @@ class KeyboardQuestInput:
         if (not allowed_combat and
                 command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/click QuestFrameCloseButton') and
                 not re.fullmatch(r'/run GetQuestReward\((0|[1-9]|1[0-2])\)', command) and
+                not re.fullmatch(r'/run EquipItemByName\(([1-9][0-9]{0,7}),(1|3|5|6|7|8|9|10|15)\)', command) and
+                not re.fullmatch(r'/run BuyTrainerService\(([1-9]|[1-9][0-9]|1[01][0-9]|120)\)', command) and
                 not re.fullmatch(r'/run Select(?:GossipActiveQuest|ActiveQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and
                 not re.fullmatch(r'/click (?:GossipTitleButton|QuestTitleButton)([1-9]|[12][0-9]|3[0-2])', command) and
                 not re.fullmatch(r'/run Select(?:GossipAvailableQuest|AvailableQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and

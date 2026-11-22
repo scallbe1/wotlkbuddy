@@ -93,7 +93,7 @@ class WorldTravelReport:
 def follow_world_path(
     path: Sequence[Vec3], *, sample: Callable[[], tuple[ClientTelemetry, WorldPosition]],
     keyboard: KeyboardDriver, stop_requested: Callable[[], bool],
-    expected_quest_id: int = 363, expected_map_id: int = 0,
+    expected_quest_id: int | None = 363, expected_map_id: int = 0,
     max_seconds: float = 180, arrival_yards: float = 1.8,
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
@@ -118,7 +118,8 @@ def follow_world_path(
             first.resources.class_token.upper() != 'MAGE' or \
             first.resources.race_token.lower() not in ('scourge', 'undead', 'orc', 'troll', 'bloodelf'):
         raise LiveControlError('Live Horde Mage telemetry required before world navigation')
-    if not any(q.quest_id == expected_quest_id for q in first.quests):
+    if expected_quest_id is not None and not any(
+            q.quest_id == expected_quest_id for q in first.quests):
         raise LiveControlError(f'Quest {expected_quest_id} not active; refusing to navigate')
     if world0.map_id != expected_map_id or world0.player_guid.lower() != guid.lower():
         raise LiveControlError('World map/GUID inconsistent with live addon before navigation')
@@ -148,7 +149,8 @@ def follow_world_path(
             raise LiveControlError('Character, map, telemetry, or alive state changed')
         if snap.player.in_combat:
             raise LiveControlError('Aggro/combat detected; stopped movement; combat driver not implemented')
-        if not any(q.quest_id == expected_quest_id for q in snap.quests):
+        if expected_quest_id is not None and not any(
+                q.quest_id == expected_quest_id for q in snap.quests):
             raise LiveControlError('Quest journal changed while walking; stopping')
         return snap, pos
 
