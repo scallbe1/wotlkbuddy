@@ -1,0 +1,377 @@
+"""Practical map-waypoint follower for the WoW telemetry/keyboard interface.
+
+Works with *zone-map coordinates*, not world XYZ. Routes must be recorded or
+inspected on clear terrain before running. This code does not sense obstacles,
+perform quests, attack or interact. Unlike the earlier calibration experiments,
+it allows full turns and walks in useful chunks, sampling progress periodically.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+import json
+from math import atan2, degrees, hypot, isfinite
+from pathlib import Path
+from time import monotonic, sleep as real_sleep
+from typing import Callable
+
+from wotlkbuddy.live.codec import ClientTelemetry
+from wotlkbuddy.live.control import (
+    KeyboardDriver, LiveControlError, _MOVEMENT_SCANCODES, _validate_telemetry,
+)
+from wotlkbuddy.live.heading import shortest_angle_difference
+
+
+@dataclass(frozen=True)
+class MapWaypoint:
+    x: float
+    y: float
+    label: str = ''
+
+
+@dataclass(frozen=True)
+class MapRoute:
+    zone: str
+    continent: int
+    map_zone: int
+    waypoints: tuple[MapWaypoint, ...]
+    character: str = ''
+
+    def to_dict(self) -> dict:
+        return {'schema_version': 1, 'zone': self.zone,
+                'continent': self.continent, 'map_zone': self.map_zone,
+                'character': self.character, 'waypoints': [asdict(w) for w in self.waypoints]}
+
+
+@dataclass(frozen=True)
+class TravelReport:
+    character: str
+    zone: str
+    waypoints_requested: int
+    waypoints_reached: int
+    stopped_reason: str
+    start_map_x: float
+    start_map_y: float
+    end_map_x: float
+    end_map_y: float
+    forward_seconds: float
+    turn_seconds: float
+    moves: int
+    turns: int
+    last_waypoint_distance: float
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def _coordinate(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+        raise ValueError(f'{name} must be a finite number')
+    result = float(value)
+    if not 0 < result < 1:
+        raise ValueError(f'{name} must be inside normalized zone map (0..1)')
+    return result
+
+
+def parse_route(value: object) -> MapRoute:
+    if not isinstance(value, dict) or value.get('schema_version') != 1:
+        raise ValueError('Route requires schema_version: 1')
+    zone, continent, map_zone = value.get('zone'), value.get('continent'), value.get('map_zone')
+    if not isinstance(zone, str) or not zone.strip() or len(zone) > 90:
+        raise ValueError('Route requires a zone name')
+    if (type(continent) is not int or type(map_zone) is not int or
+            continent < 1 or map_zone < 1):
+        raise ValueError('Route requires valid continent and map_zone IDs')
+    character = value.get('character', '')
+    if not isinstance(character, str):
+        raise ValueError('Route character must be a string')
+    raw = value.get('waypoints')
+    if not isinstance(raw, list) or not 2 <= len(raw) <= 128:
+        raise ValueError('Route requires 2..128 waypoints (including start anchor)')
+    pts = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f'Waypoint {i + 1} must be an object')
+        label = item.get('label', '')
+        if not isinstance(label, str) or len(label) > 100:
+            raise ValueError(f'Waypoint {i + 1} label is invalid')
+        pts.append(MapWaypoint(_coordinate(item.get('x'), 'x'),
+                               _coordinate(item.get('y'), 'y'), label))
+    # A route is a *path*, not an attempt to cross unobserved terrain in one jump.
+    for a, b in zip(pts, pts[1:]):
+        if hypot(a.x - b.x, a.y - b.y) > 0.03:
+            raise ValueError('Adjacent waypoints exceed 0.03 map units; record intermediate positions')
+    return MapRoute(zone.strip(), continent, map_zone, tuple(pts), character)
+
+
+def load_route(path: str | Path) -> MapRoute:
+    return parse_route(json.loads(Path(path).read_text(encoding='utf-8')))
+
+
+def route_from_trail(path: str | Path, *, spacing: float = 0.003) -> MapRoute:
+    """Convert existing `live-record` positions into a replayable map route.
+
+    Downsample a walked trail; preserve first/last positions, identity and zone.
+    Reject discontinuities instead of plotting straight across an unknown gap.
+    """
+    if not isfinite(spacing) or not 0.0005 <= spacing <= 0.01:
+        raise ValueError('Spacing must be 0.0005..0.01 map units')
+    positions = []
+    for lineno, line in enumerate(Path(path).read_text(encoding='utf-8').splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f'Invalid JSONL line {lineno}') from exc
+        if not isinstance(row, dict):
+            raise ValueError(f'Invalid event at line {lineno}')
+        if row.get('type') == 'position':
+            positions.append(row)
+    if len(positions) < 2:
+        raise ValueError('Record a route with at least two distinct positions')
+    a = positions[0]
+    route = {'schema_version': 1, 'zone': a.get('zone'),
+             'continent': a.get('continent'), 'map_zone': a.get('map_zone'),
+             'character': a.get('character'), 'waypoints': []}
+    points: list[tuple[float, float]] = []
+    previous = None
+    for i, p in enumerate(positions):
+        if any(p.get(k) != a.get(k) for k in ('zone', 'continent', 'map_zone', 'character')):
+            raise ValueError('Recorded trail crossed zones or changed characters')
+        if p.get('in_combat') or p.get('dead'):
+            raise ValueError('Recorded trail contains combat or death; use a safe travel recording')
+        x, y = _coordinate(p.get('map_x'), 'map_x'), _coordinate(p.get('map_y'), 'map_y')
+        if previous is not None and hypot(x-previous[0], y-previous[1]) > 0.03:
+            raise ValueError('Recorded trail contains a position jump; cannot safely replay')
+        previous = (x, y)
+        points.append((x, y))
+    kept_indices = [0]
+    for i in range(1, len(points) - 1):
+        px, py = points[kept_indices[-1]]
+        x, y = points[i]
+        # Retain corners even if they are closer together than spacing. A
+        # recorded switchback must not be replaced by a straight shortcut.
+        ax, ay = points[i - 1]
+        bx, by = points[i + 1]
+        before = (x - ax, y - ay)
+        after = (bx - x, by - y)
+        corner = False
+        if hypot(*before) > 0.00002 and hypot(*after) > 0.00002:
+            cross = before[0] * after[1] - before[1] * after[0]
+            dot = before[0] * after[0] + before[1] * after[1]
+            corner = abs(degrees(atan2(cross, dot))) >= 25
+        if corner or hypot(x - px, y - py) >= spacing:
+            kept_indices.append(i)
+    if kept_indices[-1] != len(points) - 1:
+        kept_indices.append(len(points) - 1)
+    kept = [{'x': points[i][0], 'y': points[i][1],
+             'label': 'start' if i == 0 else ('finish' if i == len(points)-1 else '')}
+            for i in kept_indices]
+    route['waypoints'] = kept
+    return parse_route(route)
+
+
+def follow_route(
+    route: MapRoute, *, capture: Callable[[], ClientTelemetry],
+    keyboard: KeyboardDriver, stop_requested: Callable[[], bool] | None = None,
+    arrival_radius: float = 0.00045, turn_rate: float = 180.4,
+    max_step_seconds: float = 0.8, max_seconds: float = 120,
+    sleep: Callable[[float], None] = real_sleep,
+    now: Callable[[], float] = monotonic,
+    progress: Callable[[str], None] | None = None,
+) -> TravelReport:
+    """Follow recorded map waypoints with ordinary walk/turn/check behaviour.
+
+    No 80-degree steering restriction. Can turn around fully. This is a
+    bounded, attended route replay over user-verified unobstructed ground,
+    *not* a terrain-aware or quest-interaction engine.
+    """
+    if not 0.0002 <= arrival_radius <= 0.002:
+        raise ValueError('arrival_radius must be 0.0002..0.002')
+    if not 100 <= turn_rate <= 300 or not isfinite(turn_rate):
+        raise ValueError('turn_rate must be 100..300 degrees/sec')
+    if not 0.4 <= max_step_seconds <= 1.0 or not isfinite(max_step_seconds):
+        raise ValueError('max_step_seconds must be 0.4..1.0')
+    if not 15 <= max_seconds <= 300 or not isfinite(max_seconds):
+        raise ValueError('max_seconds must be 15..300')
+
+    stop = stop_requested or (lambda: False)
+    notify = progress or (lambda message: None)
+    started = now()
+    if stop() or not keyboard.wow_is_foreground():
+        raise LiveControlError('Escape pressed or WoW not in foreground')
+    initial = capture()
+    _validate_telemetry(initial)
+    p0 = initial.player
+    if ((p0.zone_name, p0.continent, p0.map_zone) !=
+            (route.zone, route.continent, route.map_zone)):
+        raise LiveControlError('Route zone/continent/map_zone does not match character')
+    if route.character and route.character != p0.name:
+        raise LiveControlError('Route was recorded by another character')
+    # Always start at the beginning of the recorded route (or reversed route).
+    if hypot(p0.map_x-route.waypoints[0].x, p0.map_y-route.waypoints[0].y) > 0.003:
+        raise LiveControlError('Too far from route start; move to recorded start location first')
+
+    current = initial
+    total_moves = total_turns = reached = 0
+    forward_seconds = turn_seconds = 0.0
+    bearing: float | None = None
+    speed: float | None = None
+    reason = 'complete'
+    stuck_count = 0
+    last_distance = 0.0
+    # Per-run action limit prevents runaway loops on a bad path.
+    total_actions = 0
+
+    def check(snapshot: ClientTelemetry) -> None:
+        _validate_telemetry(snapshot)
+        p = snapshot.player
+        if (p.guid != p0.guid or p.name != p0.name or
+                p.continent != p0.continent or p.map_zone != p0.map_zone or
+                p.zone_name != p0.zone_name):
+            raise LiveControlError('Character or zone changed while following route')
+
+    def wait(dt: float) -> None:
+        remaining = dt
+        while remaining > 1e-6:
+            if stop():
+                raise LiveControlError('Emergency stop (Escape)')
+            if not keyboard.wow_is_foreground():
+                raise LiveControlError('WoW lost foreground focus')
+            if now() - started >= max_seconds:
+                raise LiveControlError('Route time limit reached')
+            piece = min(0.05, remaining)
+            sleep(piece)
+            remaining -= piece
+
+    def act(key: str, duration: float) -> tuple[float, float]:
+        nonlocal current, total_actions, forward_seconds, turn_seconds
+        if stop() or not keyboard.wow_is_foreground():
+            raise LiveControlError('Escape or loss of focus')
+        if now() - started >= max_seconds:
+            raise LiveControlError('Route time limit reached')
+        if total_actions >= 240:
+            raise LiveControlError('Route action limit reached')
+        before = capture()
+        check(before)
+        # Never keep walking if the player has moved unexpectedly between checks.
+        if hypot(before.player.map_x-current.player.map_x,
+                 before.player.map_y-current.player.map_y) > 0.003:
+            raise LiveControlError('Unexpected movement between route checks')
+        current = before
+        code = _MOVEMENT_SCANCODES[key]
+        keyboard.key_down(code)
+        try:
+            wait(duration)
+        finally:
+            keyboard.key_up(code)
+        if key == 'forward':
+            forward_seconds += duration
+        else:
+            turn_seconds += duration
+        total_actions += 1
+        # Addon updates ~every 0.5s. Wait for a new snapshot rather than
+        # guessing based on a stale map coordinate.
+        updated = None
+        for _ in range(8):
+            if stop() or not keyboard.wow_is_foreground():
+                raise LiveControlError('Escape or focus lost after input')
+            candidate = capture()
+            if candidate.sequence != before.sequence:
+                check(candidate)
+                updated = candidate
+                break
+            wait(0.15)
+        if updated is None:
+            raise LiveControlError('Telemetry stopped updating')
+        dx = updated.player.map_x - before.player.map_x
+        dy = updated.player.map_y - before.player.map_y
+        current = updated
+        return dx, dy
+
+    try:
+        for index, destination in enumerate(route.waypoints[1:], 1):
+            last_distance = hypot(destination.x - current.player.map_x,
+                                  destination.y - current.player.map_y)
+            notify(f'Waypoint {index}/{len(route.waypoints)-1}: {destination.label or "travel"} '
+                   f'(map distance {last_distance:.5f})')
+            stall_at_waypoint = 0
+            # Do not spend the entire session oscillating near a single point.
+            moves_this_waypoint = 0
+            while last_distance > arrival_radius:
+                if now() - started >= max_seconds:
+                    raise LiveControlError('Route time limit reached')
+                if moves_this_waypoint >= 60:
+                    raise LiveControlError('Could not reach waypoint in 60 forward steps')
+                # Measure actual direction from a brief movement if unknown or
+                # after rotation; otherwise use the previous measured heading.
+                if bearing is None:
+                    dx, dy = act('forward', 0.25)
+                    total_moves += 1
+                    moves_this_waypoint += 1
+                    displacement = hypot(dx, dy)
+                    if displacement < 0.000025:
+                        raise LiveControlError('Character is stuck (no forward movement)')
+                    bearing = degrees(atan2(dy, dx))
+                    speed = displacement / 0.25
+                    last_distance = hypot(destination.x-current.player.map_x,
+                                          destination.y-current.player.map_y)
+                    if last_distance <= arrival_radius:
+                        break
+                desired = degrees(atan2(destination.y-current.player.map_y,
+                                        destination.x-current.player.map_x))
+                difference = shortest_angle_difference(bearing, desired)
+                if abs(difference) > 22:
+                    # A destination *behind* the character is fine: rotate in
+                    # manageable chunks then measure direction again.
+                    duration = min(0.65, max(0.10, abs(difference) / turn_rate * 0.85))
+                    key = 'turn-right' if difference > 0 else 'turn-left'
+                    drift_x, drift_y = act(key, duration)
+                    total_turns += 1
+                    if hypot(drift_x, drift_y) > 0.00035:
+                        raise LiveControlError('Unexpected translation during turn')
+                    bearing = None
+                    notify(f'  Turn {"right" if difference > 0 else "left"} '
+                           f'({abs(difference):.0f}° requested)')
+                    continue
+                # Walk normally for about 0.5..1 second, not 0.12s micro-pulses.
+                # Taper near arrival to avoid walking past the point.
+                remaining = max(0.0, last_distance - arrival_radius)
+                step = max_step_seconds if speed is None else min(max_step_seconds,
+                                                        max(0.20, remaining / max(speed, 0.00001) * 0.8))
+                step = min(step, max_step_seconds)
+                dx, dy = act('forward', step)
+                total_moves += 1
+                moves_this_waypoint += 1
+                displacement = hypot(dx, dy)
+                if displacement < 0.000025:
+                    stuck_count += 1
+                    if stuck_count >= 2:
+                        raise LiveControlError('Character stuck: forward key produced no progress')
+                else:
+                    stuck_count = 0
+                    bearing = degrees(atan2(dy, dx))
+                    speed = displacement / step
+                distance = hypot(destination.x-current.player.map_x,
+                                 destination.y-current.player.map_y)
+                if distance > last_distance + 0.00012:
+                    stall_at_waypoint += 1
+                else:
+                    stall_at_waypoint = 0
+                if stall_at_waypoint >= 3:
+                    raise LiveControlError('Moving away from waypoint repeatedly')
+                last_distance = distance
+            reached += 1
+            bearing = None  # refresh on next leg; corners may change direction
+            notify(f'  Reached waypoint {index} ({last_distance:.5f} map units remaining)')
+    except LiveControlError as exc:
+        reason = str(exc)
+        notify(f'Stopped: {reason}')
+    return TravelReport(character=p0.name, zone=p0.zone_name,
+                        waypoints_requested=len(route.waypoints)-1,
+                        waypoints_reached=reached, stopped_reason=reason,
+                        start_map_x=p0.map_x, start_map_y=p0.map_y,
+                        end_map_x=current.player.map_x, end_map_y=current.player.map_y,
+                        forward_seconds=round(forward_seconds, 2),
+                        turn_seconds=round(turn_seconds, 2), moves=total_moves,
+                        turns=total_turns, last_waypoint_distance=last_distance)

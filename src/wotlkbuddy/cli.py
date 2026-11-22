@@ -229,6 +229,7 @@ def _live_burst(args: argparse.Namespace) -> None:
           file=sys.stderr)
 
 
+
 def _live_heading(args: argparse.Namespace) -> None:
     """Human-armed, three-pulse bearing calibration; no path steering."""
     from wotlkbuddy.live.capture import capture_monitor
@@ -257,6 +258,108 @@ def _live_heading(args: argparse.Namespace) -> None:
     if not report.direction_matches_key:
         print('NOTE: Observed bearing did not match requested turn direction; '
               'check key bindings, map projection or telemetry noise.', file=sys.stderr)
+
+def _live_waypoint(args: argparse.Namespace) -> None:
+    """Human-approved relative waypoint test, never a QuestBot runner action."""
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import WindowsKeyboard
+    from wotlkbuddy.live.waypoint import guarded_waypoint
+    if not args.enable_input:
+        raise ValueError('Refusing input: explicitly pass --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    print('EXPERIMENTAL short-range waypoint steering. No collision or terrain sensing. '
+          'Use ONLY on clear, flat, safe ground, with room in every direction. '
+          'Escape or switching windows aborts held keys.', file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g} seconds.',
+          file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    keyboard = WindowsKeyboard()
+    report = guarded_waypoint(
+        offset_x=args.offset_x, offset_y=args.offset_y,
+        capture=lambda: capture_monitor(args.monitor), keyboard=keyboard,
+        forward_duration=args.forward_duration, tolerance=args.tolerance,
+        turn_rate_deg_s=args.turn_rate,
+        stop_requested=keyboard.emergency_stop_requested,
+    )
+    print(json.dumps(report.to_dict(), ensure_ascii=False))
+    print(f'Waypoint experiment stopped: {report.stopped_reason}; '
+          f'forward={report.forward_pulses}, turns={report.turn_pulses}.',
+          file=sys.stderr)
+
+
+def _live_route(args: argparse.Namespace) -> None:
+    """Explicitly approved, at-most-two-leg route test (not terrain aware)."""
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import WindowsKeyboard
+    from wotlkbuddy.live.route import guarded_route, validate_legs
+    legs = validate_legs(args.leg or [])
+    if not args.enable_input:
+        raise ValueError('Refusing input: explicitly pass --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20 seconds')
+    print('EXPERIMENTAL two-leg route. No collision or terrain sensing. '
+          'Choose only clear, flat, safe ground; Escape / focus loss aborts.',
+          file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g} seconds.',
+          file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    keyboard = WindowsKeyboard()
+    report = guarded_route(
+        legs=legs, capture=lambda: capture_monitor(args.monitor),
+        keyboard=keyboard, forward_duration=args.forward_duration,
+        tolerance=args.tolerance, turn_rate_deg_s=args.turn_rate,
+        stop_requested=keyboard.emergency_stop_requested,
+    )
+    print(json.dumps(report.to_dict(), ensure_ascii=False))
+    print(f'Route stopped: {report.stopped_reason}; '
+          f'{report.legs_completed}/{report.legs_requested} legs complete.',
+          file=sys.stderr)
+
+
+def _make_map_route(args: argparse.Namespace) -> None:
+    """Convert a manually walked telemetry trail to a replayable map path."""
+    from wotlkbuddy.live.travel import route_from_trail
+    from pathlib import Path
+    route = route_from_trail(args.input, spacing=args.spacing)
+    destination = Path(args.output)
+    with destination.open('x', encoding='utf-8') as file:
+        json.dump(route.to_dict(), file, indent=2, ensure_ascii=False)
+        file.write('\n')
+    print(f'Created {destination} with {len(route.waypoints)} map points in {route.zone}.')
+    print('Review the path and walk it on safe, unobstructed ground before live-follow.')
+
+
+def _follow_map_route(args: argparse.Namespace) -> None:
+    """Attend a route replay with periodic steering and status checks."""
+    from wotlkbuddy.live.travel import load_route, MapRoute, follow_route
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import WindowsKeyboard
+    route = load_route(args.route)
+    if args.reverse:
+        route = MapRoute(route.zone, route.continent, route.map_zone,
+                         tuple(reversed(route.waypoints)), route.character)
+    if not args.enable_input:
+        raise ValueError('Refusing movement without explicit --enable-input')
+    if not 2 <= args.countdown <= 20:
+        raise ValueError('--countdown must be 2..20')
+    print('ROUTE FOLLOW: no terrain/obstacle sensing. Only use a route you have '
+          'already walked and verified safe. Escape or switching windows stops. '
+          'No quest interactions will be executed.', file=sys.stderr)
+    print(f'Switch to WoW now; starting in {args.countdown:g} seconds.',
+          file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    kb = WindowsKeyboard()
+    report = follow_route(
+        route, keyboard=kb, capture=lambda: capture_monitor(args.monitor),
+        stop_requested=kb.emergency_stop_requested,
+        arrival_radius=args.arrival_radius, turn_rate=args.turn_rate,
+        max_step_seconds=args.step_seconds, max_seconds=args.max_seconds,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+    )
+    print(json.dumps(report.to_dict(), ensure_ascii=False))
+    print(f'Route: {report.waypoints_reached}/{report.waypoints_requested} reached; '
+          f'{report.stopped_reason}', file=sys.stderr)
 
 
 def _live_record(args: argparse.Namespace) -> None:
@@ -362,6 +465,34 @@ def main(argv: list[str] | None = None) -> int:
     heading.add_argument('--countdown', type=float, default=5)
     heading.add_argument('--monitor', type=int, default=0)
     heading.set_defaults(func=_live_heading)
+    waypoint = sub.add_parser('live-waypoint',
+                              help='EXPERIMENTAL short-range relative-map waypoint test')
+    waypoint.add_argument('--enable-input', action='store_true',
+                          help='Required approval for this one short movement test')
+    waypoint.add_argument('--offset-x', type=float, required=True,
+                          help='Target offset from current normalized map X coordinate')
+    waypoint.add_argument('--offset-y', type=float, required=True,
+                          help='Target offset from current normalized map Y coordinate')
+    waypoint.add_argument('--forward-duration', type=float, default=0.12)
+    waypoint.add_argument('--tolerance', type=float, default=0.00013)
+    waypoint.add_argument('--turn-rate', type=float, default=180.0,
+                          help='Initial apparent degrees per second; live feedback corrects it')
+    waypoint.add_argument('--countdown', type=float, default=5)
+    waypoint.add_argument('--monitor', type=int, default=0)
+    waypoint.set_defaults(func=_live_waypoint)
+    route = sub.add_parser('live-route',
+                           help='EXPERIMENTAL at-most-two short relative waypoint legs')
+    route.add_argument('--enable-input', action='store_true',
+                       help='Explicit approval for this one short route run')
+    route.add_argument('--leg', nargs=2, type=float, action='append',
+                       metavar=('DX', 'DY'), required=True,
+                       help='Relative zone-map X Y offset for this leg (repeat at most twice)')
+    route.add_argument('--forward-duration', type=float, default=0.12)
+    route.add_argument('--tolerance', type=float, default=0.00013)
+    route.add_argument('--turn-rate', type=float, default=180.4)
+    route.add_argument('--countdown', type=float, default=5)
+    route.add_argument('--monitor', type=int, default=0)
+    route.set_defaults(func=_live_route)
     trail = sub.add_parser('live-record', help='Record manually walked route and quest events')
     trail.add_argument('--seconds', type=float, default=90)
     trail.add_argument('--interval', type=float, default=0.7)
@@ -370,6 +501,26 @@ def main(argv: list[str] | None = None) -> int:
     trail.add_argument('--output', default='route.jsonl',
                        help='New JSONL output file (will not overwrite existing)')
     trail.set_defaults(func=_live_record)
+    trailroute = sub.add_parser('route-from-trail',
+                                help='Convert existing live-record JSONL into a waypoint route')
+    trailroute.add_argument('--input', required=True, help='Previously recorded JSONL trail')
+    trailroute.add_argument('--output', required=True, help='New JSON waypoint route')
+    trailroute.add_argument('--spacing', type=float, default=0.003,
+                            help='Distance between saved waypoints in zone-map coordinates')
+    trailroute.set_defaults(func=_make_map_route)
+    follow = sub.add_parser('live-follow',
+                            help='Follow a prerecorded zone-map route with simple steering')
+    follow.add_argument('--route', required=True, help='JSON waypoint route')
+    follow.add_argument('--enable-input', action='store_true',
+                        help='Explicit opt-in to send movement keys')
+    follow.add_argument('--reverse', action='store_true', help='Follow recorded route backwards')
+    follow.add_argument('--arrival-radius', type=float, default=0.00045)
+    follow.add_argument('--turn-rate', type=float, default=180.4)
+    follow.add_argument('--step-seconds', type=float, default=0.8)
+    follow.add_argument('--max-seconds', type=float, default=120)
+    follow.add_argument('--countdown', type=float, default=5)
+    follow.add_argument('--monitor', type=int, default=0)
+    follow.set_defaults(func=_follow_map_route)
     args = parser.parse_args(argv)
     if getattr(args, "ticks", 0) < 0:
         parser.error("--ticks must be nonnegative")
