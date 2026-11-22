@@ -64,7 +64,10 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, AttributeError) as exc:
         print(f"Navigation initialization error: {exc}", file=sys.stderr)
         return 1
-    serve(nav)
+    try:
+        serve(nav)
+    finally:
+        nav.close()
     return 0
 
 

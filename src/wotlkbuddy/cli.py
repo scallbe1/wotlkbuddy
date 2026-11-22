@@ -219,16 +219,15 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
         raise ValueError('Requires --enable-input')
     if not 2 <= args.countdown <= 20:
         raise ValueError('countdown must be 2..20 seconds')
-    if args.recorded_route and args.experimental_direct_travel:
-        raise ValueError('Choose only one of --recorded-route and --experimental-direct-travel')
+    if args.experimental_direct_travel:
+        raise ValueError('--experimental-direct-travel is disabled: it uses a guessed 2D '
+                         'destination and cannot account for terrain or aggro. '
+                         'Use horde-nav-plan to inspect real world XYZ and navmesh requirements; '
+                         'only --recorded-route is enabled for live walking.')
     print('RUDE AWAKENING #363: current Undead Mage -> Shadow Priest Sarvis. '
           'Quest delivery has no combat objective. Escape/focus loss aborts.',
           file=sys.stderr)
-    if args.experimental_direct_travel:
-        print('WARNING: EXPERIMENTAL DIRECT STEERING; target may use a relative Mordo->Sarvis '
-              'map offset if your client map does not match published Tirisfal percentages. '
-              'No obstacle avoidance. Watch the character and press Escape if obstructed.', file=sys.stderr)
-    elif not args.recorded_route:
+    if not args.recorded_route:
         print('No navigation requested: the character must already be in interaction range '
               'of Shadow Priest Sarvis.', file=sys.stderr)
     print(f'Switch to WoW now; starting in {args.countdown:g}s.', file=sys.stderr)
@@ -258,15 +257,6 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
             from wotlkbuddy.live.travel import MapRoute
             route = MapRoute(route.zone, route.continent, route.map_zone,
                              route.waypoints, p.name)
-        else:
-            # Use *observed* coordinates. Published 2D Tirisfal percentages
-            # are not a reliable absolute start-location check on every client.
-            # The fallback is a bounded relative displacement from the point
-            # where the active Mage just picked up the quest, not a terrain-safe path.
-            plan = plan_deathknell_delivery(initial)
-            route = plan.route
-            print('Observed player: ' + plan.observation, file=sys.stderr, flush=True)
-            print('Direct travel: ' + plan.description, file=sys.stderr, flush=True)
         kb = WindowsKeyboard()
         report = follow_route(route, capture=cap, keyboard=kb,
                               stop_requested=kb.emergency_stop_requested,
@@ -288,6 +278,64 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
         raise LiveControlError('Turn-in not confirmed: ' + result.status +
                                ': ' + result.explanation)
 
+
+
+def _horde_nav_plan(args: argparse.Namespace) -> None:
+    """Read-only NPC world-data audit, optionally query the real Recast mesh.
+
+    This command NEVER assumes the character is at the giver NPC coordinate;
+    the corridor is only a reference route from one known NPC to another.
+    """
+    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.worlddata import (CreatureSpawnDatabase, distance_world,
+                                            prepare_quest_corridor)
+    from wotlkbuddy.navigation.proxy import NavigationProxy
+    from wotlkbuddy.navigation.detour import DetourNavigator
+    from pathlib import Path
+    import sys as _sys
+    if bool(args.nav_dll) != bool(args.python32):
+        raise ValueError('Supply BOTH --nav-dll and --python32 for the 32-bit nav helper')
+    chosen = select_profile_from_loader(args.profiles_root,
+                                        level=args.level, race=args.race)
+    profile = load_horde_profile(chosen)
+    with CreatureSpawnDatabase(args.spawns_db) as db:
+        corridor = prepare_quest_corridor(profile, db, args.quest_id, args.map_id)
+    output = corridor.to_dict()
+    output['source_profile'] = str(chosen)
+    output['route_kind'] = 'NPC_WORLD_XYZ_REFERENCE_ONLY_NOT_PLAYER_NAVIGATION'
+    output['straight_world_distance_yards'] = round(distance_world(
+        corridor.giver_xyz, corridor.turnin_xyz), 2)
+    output['ready_to_walk'] = False
+    output['reason'] = ('Real player world XYZ, navmesh waypoint follower and '
+                        'combat/aggro handling not yet integrated')
+    if args.nav_dll:
+        dll = Path(args.nav_dll).expanduser().resolve()
+        # 32-bit subprocess protects the main 64-bit Python process from
+        # DLL bitness mismatch. Native calls still require matching WotLK meshes.
+        with NavigationProxy(args.python32, dll) as nav:
+            if not nav.ping():
+                raise RuntimeError('Navigation worker did not respond')
+            points = nav.find_path(args.map_id, corridor.giver_xyz,
+                                   corridor.turnin_xyz)
+        if len(points) < 2:
+            output['path_status'] = 'NO_NAVMESH_PATH'
+            output['path_points'] = []
+        else:
+            # Guard against a partial path presented as success.
+            if distance_world(points[0], corridor.giver_xyz) > 10 or \
+                    distance_world(points[-1], corridor.turnin_xyz) > 10:
+                output['path_status'] = 'PARTIAL_OR_UNMATCHED_PATH'
+            else:
+                output['path_status'] = 'REFERENCE_PATH_GENERATED'
+            output['path_points'] = [[v.x, v.y, v.z] for v in points]
+            output['path_distance_yards'] = round(sum(
+                distance_world(a, b) for a, b in zip(points, points[1:])), 2)
+    else:
+        output['path_status'] = 'NAVMESH_NOT_QUERIED'
+        output['path_points'] = []
+    print(json.dumps(output, indent=2, ensure_ascii=False))
+    print('No movement, combat or quest interaction was attempted. '
+          'Spawn locations are not a traversable path.', file=_sys.stderr)
 
 def _list_wow(_args: argparse.Namespace) -> None:
     from wotlkbuddy.game.win32 import list_processes
@@ -643,12 +691,25 @@ def main(argv: list[str] | None = None) -> int:
     deliver.add_argument('--profiles-root', required=True)
     deliver.add_argument('--recorded-route', help='An explicitly verified Deathknell trail, usable by any active Undead Mage')
     deliver.add_argument('--experimental-direct-travel', action='store_true',
-                         help='Opt-in to straight map-coordinate travel; NO obstacle sensing')
+                         help='DISABLED: guessed straight-line travel is not safe/reliable')
     deliver.add_argument('--interact-key', choices=['f','g'], default='f')
     deliver.add_argument('--enable-input', action='store_true')
     deliver.add_argument('--countdown', type=float, default=5)
     deliver.add_argument('--monitor', type=int, default=0)
     deliver.set_defaults(func=_horde_quest_363)
+    np = sub.add_parser('horde-nav-plan',
+                        help='Read-only NPC world XYZ/spawn audit and optional Detour reference path')
+    np.add_argument('--profiles-root', required=True)
+    np.add_argument('--spawns-db', required=True,
+                    help='CopilotBuddy/datadb/CreatureSpawns.db (read-only)')
+    np.add_argument('--race', choices=['Undead', 'Orc', 'Troll', 'BloodElf'], default='Undead')
+    np.add_argument('--level', type=int, default=1)
+    np.add_argument('--quest-id', type=int, default=363)
+    np.add_argument('--map-id', type=int, default=0,
+                    help='Real world map id (Eastern Kingdoms = 0), NOT map_zone telemetry')
+    np.add_argument('--nav-dll', help='x86 Navigation.dll with mmaps folder beside it')
+    np.add_argument('--python32', help='Full path to Python x86, with wotlkbuddy installed')
+    np.set_defaults(func=_horde_nav_plan)
     procs = sub.add_parser("processes", help="List local Wow.exe processes (Windows)")
     procs.set_defaults(func=_list_wow)
     profile = sub.add_parser("profile", help="Read and inspect a profile")
