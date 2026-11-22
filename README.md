@@ -280,3 +280,11 @@ resource extension adds mana, free bag slots, lowest equipped durability,
 unspent talents, and class/race. No world-XYZ navigation, combat, NPC, loot,
 vendor, talent, or trainer execution is available yet. See
 [`docs/HORDE_MAGE_V011.md`](docs/HORDE_MAGE_V011.md) for usage and next steps.
+
+## v0.12 — Aarr's first guarded quest pickup
+
+Adds `horde-quest-pickup`: read actual quest-dialog state, target a quest giver,
+interact with an already configured F/G key, and only accept **Rude Awakening
+(363)** from **Undertaker Mordo** when the displayed quest ID is verified.
+This is deliberately a single-quest, attended integration test, **not** an
+unattended quest bot. See [Aarr's first quest](docs/FIRST_QUEST_V012.md).

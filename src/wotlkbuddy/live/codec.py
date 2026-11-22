@@ -110,12 +110,20 @@ class PlayerResources:
 
 
 @dataclass(frozen=True)
+class QuestDialog:
+    """Optional read-only state from the currently open NPC quest window."""
+    kind: str  # none, gossip, detail, progress, reward
+    quest_id: int  # 0 when not available
+
+
+@dataclass(frozen=True)
 class ClientTelemetry:
     sequence: int
     player: PlayerRecord
     quests: tuple[QuestRecord, ...]
     truncated: bool = False
     resources: PlayerResources | None = None
+    dialog: QuestDialog | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -125,6 +133,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     obj: dict[int, list[QuestObjective]] = {}
     truncated = False
     resources = None
+    dialog = None
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -180,6 +189,17 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                     not -1 <= durability <= 100 or not -1 <= talents <= 100 or money < 0):
                 raise TelemetryError('Invalid resource values')
             resources = PlayerResources(*values, *(parts[8:] if len(parts) == 10 else ()))
+        elif parts[0] == 'I':
+            if len(parts) != 3 or dialog is not None or parts[1] not in (
+                    'none', 'gossip', 'detail', 'progress', 'reward'):
+                raise TelemetryError('Invalid or repeated quest dialog record')
+            try:
+                quest_id = int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Malformed quest dialog ID') from exc
+            if not 0 <= quest_id <= 999999 or (parts[1] in ('none', 'gossip') and quest_id != 0):
+                raise TelemetryError('Invalid quest dialog ID for UI state')
+            dialog = QuestDialog(parts[1], quest_id)
         elif parts[0] == 'E':
             if len(parts) < 2:
                 raise TelemetryError('Malformed error marker')
@@ -197,4 +217,4 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     entries = tuple(QuestRecord(q.quest_id, q.level, q.complete, q.title,
                                 tuple(obj[q.quest_id])) for q in quests.values())
     return ClientTelemetry(sequence, player, entries, truncated=truncated,
-                           resources=resources)
+                           resources=resources, dialog=dialog)

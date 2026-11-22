@@ -1,3 +1,3 @@
 """Python-first World of Warcraft 3.3.5a automation framework."""
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"

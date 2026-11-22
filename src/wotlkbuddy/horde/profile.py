@@ -62,6 +62,7 @@ class OrderStep:
     conditions: tuple[str, ...] = ()
     supported: bool = True
     detail: str = ''
+    npc_name: str = ''  # source GiverName/TurnInName; never infer from NPC ID
 
 
 @dataclass(frozen=True)
@@ -208,7 +209,9 @@ def load_horde_profile(path: str | Path) -> HordeProfile:
                      if tag == 'objective' else 0)
             steps.append(OrderStep(tag, qid, a.get('questname', a.get('name', '')),
                                    entry, a.get('type', ''), count,
-                                   _xyz(a), conditions, True))
+                                   _xyz(a), conditions, True,
+                                   npc_name=a.get('givername' if tag == 'pickup'
+                                                  else 'turninname', '')))
             return
         # UserSettings and Message are passive metadata / display hints. No
         # side effects are applied merely by loading the profile.
