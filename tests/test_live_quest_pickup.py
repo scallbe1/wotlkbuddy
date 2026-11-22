@@ -33,6 +33,8 @@ class MockGame:
         self.block_interaction = False
         self.prevent_acceptance = False
         self.wrong_dialog = False
+        self.dialog_quest_id = 363
+        self.dialog_title = 'Rude Awakening'
         self.old_addon = False
         self.commands = []
 
@@ -53,7 +55,8 @@ class MockGame:
     def interact(self):
         self.commands.append('F')
         if not self.block_interaction:
-            self.ui = QuestDialog('detail', 364 if self.wrong_dialog else 363)
+            self.ui = QuestDialog('detail', 364 if self.wrong_dialog else self.dialog_quest_id,
+                                  self.dialog_title)
 
     def sleep(self, dt):
         self.time += dt
@@ -106,6 +109,50 @@ class QuestPickupTests(unittest.TestCase):
         g.wrong_dialog = True
         self.assertEqual(run(g).status, 'dialog_unverified')
         self.assertEqual(g.commands, ['/targetexact Undertaker Mordo', 'F'])
+
+    def test_zero_quest_id_with_exact_title_from_same_npc_accepts(self):
+        # Real Aarr log: DETAIL / GetQuestID() == 0.
+        g = MockGame()
+        g.dialog_quest_id = 0
+        report = run(g)
+        self.assertEqual(report.status, 'accepted', report)
+        self.assertTrue(report.dialog_confirmed and report.journal_confirmed)
+        self.assertEqual(g.commands[-1], '/run AcceptQuest()')
+
+    def test_zero_quest_id_without_title_is_not_accepted(self):
+        g = MockGame()
+        g.dialog_quest_id = 0
+        g.dialog_title = ''
+        self.assertEqual(run(g).status, 'dialog_unverified')
+        self.assertNotIn('/run AcceptQuest()', g.commands)
+
+    def test_zero_quest_id_wrong_title_is_not_accepted(self):
+        g = MockGame()
+        g.dialog_quest_id = 0
+        g.dialog_title = 'The Mindless Ones'
+        self.assertEqual(run(g).status, 'dialog_unverified')
+        self.assertNotIn('/run AcceptQuest()', g.commands)
+
+    def test_wrong_nonzero_id_is_not_overridden_by_matching_title(self):
+        g = MockGame()
+        g.dialog_quest_id = 364
+        g.dialog_title = 'Rude Awakening'
+        self.assertEqual(run(g).status, 'dialog_unverified')
+        self.assertNotIn('/run AcceptQuest()', g.commands)
+
+    def test_unstable_dialog_on_second_frame_does_not_accept(self):
+        g = MockGame()
+        original = g.capture
+        def capture():
+            data = original()
+            if g.ui.kind == 'detail' and g.time >= .42:
+                g.ui = QuestDialog('none', 0)
+                data = replace(data, dialog=g.ui)
+            return data
+        result = pickup_planned_quest(PROFILE, capture=capture, driver=g,
+                                      sleep=g.sleep, now=lambda: g.time, timeout=1)
+        self.assertEqual(result.status, 'dialog_unverified')
+        self.assertNotIn('/run AcceptQuest()', g.commands)
 
     def test_acceptance_without_journal_confirmation_is_not_success(self):
         g = MockGame()
@@ -195,10 +242,18 @@ class DialogTelemetryTests(unittest.TestCase):
         self.assertEqual(parse_payload(self.P + b'I\tgossip\t0\n', 1).dialog.kind,
                          'gossip')
 
+    def test_quest_title_telemetry_and_legacy_id_only(self):
+        v = parse_payload(self.P + b'I\tdetail\t0\tRude Awakening\n', 1).dialog
+        self.assertEqual(v, QuestDialog('detail', 0, 'Rude Awakening'))
+        self.assertEqual(parse_payload(self.P + b'I\tdetail\t363\n', 1).dialog,
+                         QuestDialog('detail', 363, ''))
+
     def test_invalid_dialogs_rejected(self):
         for row in (b'I\tdetail\tx\n', b'I\tgoofy\t363\n',
                     b'I\tnone\t363\n', b'I\tdetail\t-5\n',
-                    b'I\tdetail\t363\nI\treward\t363\n'):
+                    b'I\tdetail\t363\nI\treward\t363\n',
+                    b'I\tgossip\t0\tRude Awakening\n',
+                    b'I\tdetail\t0\t' + b'a' * 101 + b'\n'):
             with self.subTest(row=row), self.assertRaises(TelemetryError):
                 parse_payload(self.P + row, 2)
 

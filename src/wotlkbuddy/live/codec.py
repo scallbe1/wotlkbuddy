@@ -114,6 +114,7 @@ class QuestDialog:
     """Optional read-only state from the currently open NPC quest window."""
     kind: str  # none, gossip, detail, progress, reward
     quest_id: int  # 0 when not available
+    title: str = ''  # exact displayed title; blank for older addon versions
 
 
 @dataclass(frozen=True)
@@ -190,16 +191,18 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise TelemetryError('Invalid resource values')
             resources = PlayerResources(*values, *(parts[8:] if len(parts) == 10 else ()))
         elif parts[0] == 'I':
-            if len(parts) != 3 or dialog is not None or parts[1] not in (
+            if len(parts) not in (3, 4) or dialog is not None or parts[1] not in (
                     'none', 'gossip', 'detail', 'progress', 'reward'):
                 raise TelemetryError('Invalid or repeated quest dialog record')
             try:
                 quest_id = int(parts[2])
             except ValueError as exc:
                 raise TelemetryError('Malformed quest dialog ID') from exc
-            if not 0 <= quest_id <= 999999 or (parts[1] in ('none', 'gossip') and quest_id != 0):
-                raise TelemetryError('Invalid quest dialog ID for UI state')
-            dialog = QuestDialog(parts[1], quest_id)
+            title = parts[3] if len(parts) == 4 else ''
+            if (not 0 <= quest_id <= 999999 or len(title) > 100 or
+                    (parts[1] in ('none', 'gossip') and (quest_id != 0 or title))):
+                raise TelemetryError('Invalid quest dialog ID/title for UI state')
+            dialog = QuestDialog(parts[1], quest_id, title)
         elif parts[0] == 'E':
             if len(parts) < 2:
                 raise TelemetryError('Malformed error marker')
