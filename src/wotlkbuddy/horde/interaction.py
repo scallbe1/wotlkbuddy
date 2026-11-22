@@ -122,6 +122,17 @@ class KeyboardQuestInput:
             self._tap(code, shifted=shifted)
         self._tap(_ENTER)
 
+    def cast_fireball(self, snapshot: ClientTelemetry) -> None:
+        """Use a fast bound bar key only when live addon verified Fireball there.
+
+        Casting still goes through ordinary Win32 key input and WoW's normal
+        GCD, castbar and spell-queue rules. No spell IDs or hotkeys are guessed.
+        """
+        if snapshot.fireball_key in _DIGITS:
+            self._tap(_DIGITS[snapshot.fireball_key])
+        else:
+            self.chat('/cast Fireball')
+
     def interact(self) -> None:
         self._tap(_INTERACT_KEYS[self.interact_key])
 
