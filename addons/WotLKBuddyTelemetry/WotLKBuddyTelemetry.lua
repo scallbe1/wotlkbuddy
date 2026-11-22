@@ -1,5 +1,5 @@
 -- WotLKBuddy v0.3 read-only client telemetry; compatible with WoW 3.3.5a Lua 5.1.
--- Exports a checksum-validated, versioned byte stream as RGB pixels at the bottom-left.
+-- Exports a checksum-validated, versioned byte stream as RGB pixels above center-right.
 -- Does not execute movement, combat, chat, quests, or privileged APIs.
 
 local SIDE = 4
@@ -11,7 +11,10 @@ local canvas = CreateFrame('Frame', 'WotLKBuddyTelemetryFrame', UIParent)
 canvas:SetWidth(COLS * SIDE)
 canvas:SetHeight(ROWS * SIDE)
 canvas:SetScale(1 / UIParent:GetEffectiveScale())
-canvas:SetPoint('BOTTOMLEFT', UIParent, 'BOTTOMLEFT', 12, 12)
+-- Position away from lower-left action bars/chat and upper-right minimap/tooltips.
+-- A fixed horizontal offset from screen centre keeps the grid within the viewport.
+canvas:ClearAllPoints()
+canvas:SetPoint('TOP', UIParent, 'TOP', 220, -20)
 canvas:SetFrameStrata('TOOLTIP')
 canvas:EnableMouse(false)
 
