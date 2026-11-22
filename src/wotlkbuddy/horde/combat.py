@@ -70,6 +70,43 @@ def next_kill_objective(profile: HordeProfile, snap: ClientTelemetry, quest_id: 
     raise LiveControlError('Objective flags all complete but quest not marked complete; refusing to guess')
 
 
+def next_collect_objective(profile: HordeProfile, snap: ClientTelemetry, quest_id: int):
+    """Return the first unfinished, profile-matched item objective.
+
+    XML objective and journal order, type, count and item inventory identity
+    are independent checks. Combat/loot is only authorized after the source
+    Mob entries have also been verified; an item ID is never a creature ID.
+    """
+    spec = next((q for q in profile.quests if q.quest_id == quest_id), None)
+    journal = next((q for q in snap.quests if q.quest_id == quest_id), None)
+    if spec is None or journal is None:
+        raise LiveControlError(
+            f'Quest {quest_id} lacks XML Quest specs or active journal entry')
+    if journal.complete:
+        return None
+    if not spec.objectives or len(spec.objectives) != len(journal.objectives):
+        raise LiveControlError('CollectItem XML/journal objective count mismatch')
+    for objective, observed in zip(spec.objectives, journal.objectives):
+        if observed.done:
+            continue
+        if objective.kind != 'CollectItem' or objective.entry <= 0:
+            raise LiveControlError(
+                'Next unfinished quest objective is not CollectItem')
+        if observed.kind.lower() != 'item':
+            raise LiveControlError(
+                f'Expected journal item objective, got {observed.kind!r}')
+        amounts = objective_progress(observed.description)
+        if (amounts is None or amounts[1] != objective.count or
+                not 0 <= amounts[0] < amounts[1] or
+                amounts[1] > 200):
+            raise LiveControlError(
+                'Live item collection count conflicts with source XML')
+        return objective, observed
+    raise LiveControlError(
+        'Collection objective flags complete but quest not complete; '
+        'refusing to guess next step')
+
+
 def objective_progress(description: str) -> tuple[int, int] | None:
     import re
     match = re.search(r'(\d+)\s*/\s*(\d+)\s*$', description)
