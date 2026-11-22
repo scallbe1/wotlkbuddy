@@ -591,19 +591,43 @@ def _horde_next(args: argparse.Namespace) -> None:
     def progress(line):
         print(line, file=sys.stderr, flush=True)
         hud.note(line)
+    # Show the source-of-truth mapping when planning a collection quest.
+    # The objective ItemId is never itself treated as an NPC template ID.
+    collection_sources = None
+    if step is not None and step.objective_type == 'CollectItem':
+        quest_def = next((q for q in profile.quests
+                          if q.quest_id == step.quest_id), None)
+        item_def = next((item for item in quest_def.objectives
+                         if item.kind == 'CollectItem' and
+                         item.entry == step.entry), None) if quest_def else None
+        mob_ids = list(dict.fromkeys(
+            src.entry for src in item_def.sources
+            if src.kind == 'mob' and src.entry > 0)) if item_def else []
+        collection_sources = {
+            'item_id': step.entry,
+            'required_count': step.count,
+            'mob_source_ids': mob_ids,
+            'source_profile': profile.source_path,
+            'ready_to_farm': bool(mob_ids and item_def is not None),
+            'explanation': ('XML supplies explicit mob source IDs'
+                            if mob_ids else
+                            'No Mob source IDs for this item in installed XML')}
     print(json.dumps({'profile': profile.name, 'character_guid': snap.player.guid,
                       'next_action': decision.to_dict(),
                       'npc': (step.npc_name if step else None),
-                      'quest_title': (step.name if step else None)},
+                      'quest_title': (step.name if step else None),
+                      **({'collection_sources': collection_sources}
+                         if collection_sources is not None else {})},
                      indent=2, ensure_ascii=False))
     if not args.enable_input:
         print('READ ONLY: add --enable-input to execute one supported action.',
               file=sys.stderr)
         return
     if decision.action == 'QUEST_OBJECTIVE' and step is not None and \
-            step.objective_type == 'KillMob':
+            step.objective_type in ('KillMob', 'CollectItem'):
         if not getattr(args, 'enable_combat', False):
-            print('Profile kill objective detected. Add --enable-combat, --nav-dll '
+            print('Profile combat/collection objective detected. '
+                  'Add --enable-combat, --nav-dll '
                   'and --python32 to run bounded Mage combat.', file=sys.stderr)
             return
         if not args.nav_dll or not args.python32:
@@ -618,6 +642,12 @@ def _horde_next(args: argparse.Namespace) -> None:
         if not dll.is_file() or not (dll.parent / 'mmaps').is_dir() or not python32.is_file():
             raise ValueError('Combat requires existing Navigation.dll, sibling mmaps, and x86 Python')
         driver = KeyboardQuestInput(interact_key=args.interact_key)
+        collecting = step.objective_type == 'CollectItem'
+        if collecting and (collection_sources is None or
+                           not collection_sources['mob_source_ids']):
+            raise LiveControlError(
+                f'CollectItem {step.entry} has no profile Mob source IDs; '
+                'cannot safely choose target creatures')
         with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
                 NavigationProxy(python32, dll) as nav:
             hud.set(goal=f'Complete quest: {goal_name}',
@@ -625,7 +655,10 @@ def _horde_next(args: argparse.Namespace) -> None:
             report = hunt_kill_objectives(
                 profile=profile, quest_id=decision.quest_id, pid=_pid,
                 capture=cap, driver=driver, nav=nav, spawns=db,
-                max_seconds=args.max_seconds, max_kills=args.max_kills,
+                max_seconds=args.max_seconds,
+                max_kills=(args.collect_max_kills if collecting
+                           else args.max_kills),
+                collect_items=collecting,
                 log=progress,
             )
             print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
@@ -1388,6 +1421,7 @@ def main(argv: list[str] | None = None) -> int:
     next_step.add_argument('--python32', help='x86 Python executable for Detour worker')
     next_step.add_argument('--spawns-db', help='Optional CreatureSpawns.db path')
     next_step.add_argument('--max-kills', type=int, default=18)
+    next_step.add_argument('--collect-max-kills', type=int, default=40)
     next_step.add_argument('--max-seconds', type=float, default=900)
     next_step.add_argument('--countdown', type=float, default=5)
     next_step.add_argument('--monitor', type=int, default=0)
