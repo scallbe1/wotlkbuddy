@@ -158,4 +158,23 @@ def train_available_mage_spells(
         bought.append((choice.name+' '+choice.rank).strip())
         log(f'Trainer purchase confirmed: {bought[-1]}')
         s=confirmed
+
+    # A completed trainer interaction is not finished until the trainer UI
+    # itself is dismissed. Quest and gossip close actions do not close this
+    # separately managed ClassTrainerFrame.
+    guard(s)
+    log(f'{npc_name}: closing class trainer window after training')
+    driver.chat('/click ClassTrainerFrameCloseButton')
+    deadline = now() + 6
+    previous = s
+    while now() < deadline:
+        after = fresh(previous, timeout=min(3, max(.4, deadline - now())))
+        if not after.trainer_open:
+            log(f'{npc_name}: trainer window closed and verified')
+            break
+        previous = after
+    else:
+        raise LiveControlError(
+            f'{npc_name}: trainer frame still open after close button; '
+            'cannot report clean NPC interaction completion')
     return tuple(bought)
