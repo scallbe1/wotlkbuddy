@@ -330,12 +330,17 @@ def hunt_kill_objectives(
         loot_attempts += 1
         driver.interact()
         s = fresh(s)
+        if s.loot_open is not True:
+            loot_skipped += 1
+            log('Loot skipped: interaction did not open the verified loot '
+                'frame (possibly out of reach, empty or already looted)')
+            return s
         if s.loot_count is None:
             loot_skipped += 1
-            log('Loot unconfirmed: loot-frame telemetry unavailable')
+            log('Loot unconfirmed: item-count telemetry unavailable')
             return s
         if s.loot_count == 0:
-            log('Loot window contained no items')
+            log('Loot window opened with no item slots')
             return s
         initial_slots = s.loot_count
         for index in range(min(16, initial_slots), 0, -1):
@@ -345,12 +350,13 @@ def hunt_kill_objectives(
             log(f'Taking loot slot {index}/{initial_slots}')
             driver.chat(f'/run LootSlot({index})')
             s = fresh(s)
-            if s.loot_count is not None and s.loot_count >= before_count:
+            if (s.loot_open is True and s.loot_count is not None
+                    and s.loot_count >= before_count):
                 loot_skipped += 1
                 log('Loot slot did not disappear; bag space/loot ownership '
                     'may be blocking collection')
                 return s
-        if s.loot_count in (None, 0):
+        if s.loot_count == 0 or s.loot_open is False:
             loot_confirmed += 1
             log(f'Loot verified: cleared {initial_slots} observed item slot(s)')
         else:
