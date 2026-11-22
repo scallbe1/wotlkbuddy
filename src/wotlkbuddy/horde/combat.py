@@ -199,6 +199,7 @@ def hunt_kill_objectives(
     loot_attempts = loot_confirmed = loot_skipped = 0
     active_tracked_item = 0
     collected_results: dict[int, tuple[int, int]] = {}
+    known_item_names: dict[int, str] = {}
 
     def guard(s: ClientTelemetry) -> None:
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()):
@@ -473,8 +474,10 @@ def hunt_kill_objectives(
         s = capture()
         guard(s)
         current_objective = (
-            next_collect_objective(profile, s, quest_id) if collect_items
-            else next_kill_objective(profile, s, quest_id))
+            next_collect_objective(profile, s, quest_id,
+                                   item_names=known_item_names)
+            if collect_items else
+            next_kill_objective(profile, s, quest_id))
         if current_objective is None:
             if collect_items and active_tracked_item:
                 result = collected_results.get(active_tracked_item)
@@ -513,9 +516,31 @@ def hunt_kill_objectives(
                 raise LiveControlError(
                     f'Cannot verify inventory count for item {spec.entry}; '
                     'reinstall updated WotLKBuddyTelemetry addon and /reload')
+            for _ in range(5):
+                if observed_tracker.tracked_item_name:
+                    break
+                observed_tracker = fresh(observed_tracker)
+            if not observed_tracker.tracked_item_name:
+                raise LiveControlError(
+                    f'Item {spec.entry} name not cached by 3.3.5a client; '
+                    'cannot bind item ID to quest journal safely')
+            known_item_names[spec.entry] = observed_tracker.tracked_item_name
             active_tracked_item = spec.entry
             s = observed_tracker
-            log(f'Collecting item {spec.entry} from profile Mob IDs '
+            # A previously collected item can be complete before this run;
+            # the next profile item then becomes the legitimate objective.
+            verified_objective = next_collect_objective(
+                profile, s, quest_id, item_names=known_item_names)
+            if verified_objective is None:
+                continue
+            verified_spec, verified_journal = verified_objective
+            if verified_spec.entry != spec.entry:
+                log(f'Item {spec.entry} already completed; '
+                    'switching to next source item')
+                continue
+            observed = verified_journal
+            log(f'Collecting item {spec.entry} '
+                f'({s.tracked_item_name}) from profile Mob IDs '
                 f'{allowed_sources}; inventory={s.tracked_item_count}, '
                 f'journal={observed.description}')
         if collect_items and (
