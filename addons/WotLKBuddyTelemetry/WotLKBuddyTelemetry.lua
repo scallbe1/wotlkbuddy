@@ -1,5 +1,5 @@
 -- WotLKBuddy v0.3 read-only client telemetry; compatible with WoW 3.3.5a Lua 5.1.
--- Exports a checksum-validated, versioned byte stream as RGB pixels at the bottom-left.
+-- Exports a checksum-validated, versioned byte stream as RGB pixels above center-right.
 -- Does not execute movement, combat, chat, quests, or privileged APIs.
 
 local SIDE = 4
@@ -11,7 +11,10 @@ local canvas = CreateFrame('Frame', 'WotLKBuddyTelemetryFrame', UIParent)
 canvas:SetWidth(COLS * SIDE)
 canvas:SetHeight(ROWS * SIDE)
 canvas:SetScale(1 / UIParent:GetEffectiveScale())
-canvas:SetPoint('BOTTOMLEFT', UIParent, 'BOTTOMLEFT', 12, 12)
+-- Position away from lower-left action bars/chat and upper-right minimap/tooltips.
+-- A fixed horizontal offset from screen centre keeps the grid within the viewport.
+canvas:ClearAllPoints()
+canvas:SetPoint('TOP', UIParent, 'TOP', 220, -20)
 canvas:SetFrameStrata('TOOLTIP')
 canvas:EnableMouse(false)
 
@@ -343,22 +346,9 @@ local function tickData()
             end
         end
     end
-    -- Keep the original quest-363 status for backward compatibility. The
-    -- completed-quest cache also exposes subsequent quest IDs without new
-    -- source-code constants when the server supplies them.
-    appendLine(table.concat({'C', '363', tostring(completed)}, '\t'))
-    if completionCache then
-        local ids = {}
-        for id, flagged in pairs(completionCache) do
-            if flagged and type(id) == 'number' and id > 0 and id ~= 363 then
-                table.insert(ids, id)
-            end
-        end
-        table.sort(ids)
-        for _, id in ipairs(ids) do
-            if not appendLine(table.concat({'C', tostring(id), '1'}, '\t')) then break end
-        end
-    end
+    -- Completion-state records have already been emitted once above from the
+    -- server-backed cache and recently observed quest IDs. Do not append
+    -- legacy quest-363 rows: their value was undefined and duplicated IDs.
     local entries = GetNumQuestLogEntries() or 0
     for i = 1, entries do
         local title, level, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)
