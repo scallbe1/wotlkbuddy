@@ -181,7 +181,8 @@ local function tickData()
     if LootFrame and LootFrame:IsShown() and GetNumLootItems then
         lootCount = math.min(GetNumLootItems() or 0, 16)
     end
-    appendLine(table.concat({'L', tostring(lootCount)}, '\t'))
+    appendLine(table.concat({'L', tostring(lootCount),
+        (LootFrame and LootFrame:IsShown()) and '1' or '0'}, '\t'))
     -- Read-only NPC dialogue state. GetQuestID() reads the open quest frame,
     -- not the quest log; 0 means the client did not expose a quest ID.
     local dialog = 'none'
