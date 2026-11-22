@@ -10,7 +10,8 @@ import unittest
 from wotlkbuddy.live.codec import ClientTelemetry, PlayerRecord
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.travel import (
-    MapRoute, MapWaypoint, follow_route, parse_route, route_from_trail,
+    MapRoute, MapWaypoint, closest_route_segment, plan_route_from_position,
+    follow_route, parse_route, route_from_trail,
 )
 
 
@@ -197,6 +198,67 @@ class LiveFollowTests(unittest.TestCase):
             follow(g, MapRoute('Darkshore', 1, 12,
                                (MapWaypoint(.30, .42), MapWaypoint(.31, .42))))
         self.assertEqual(g.events, [])
+
+    def test_nearest_point_on_segment_not_just_start(self):
+        route = mkroute((0.380, 0.420), (0.385, 0.420))
+        i, nearest, dist = closest_route_segment(route, 0.382, 0.421)
+        self.assertEqual(i, 1)  # second segment, from .380 to .385
+        self.assertAlmostEqual(nearest.x, 0.382)
+        self.assertAlmostEqual(nearest.y, 0.420)
+        self.assertAlmostEqual(dist, 0.001)
+
+    def test_replay_from_near_finish_automatically_returns_to_start(self):
+        g = FakeGame(heading=180)
+        g.x = 0.381
+        route = mkroute((0.378, 0.420), (0.381, 0.420))
+        result = follow(g, route, max_seconds=300)
+        self.assertEqual(result.stopped_reason, 'complete', result)
+        self.assertTrue(result.returned_to_start)
+        self.assertGreater(result.waypoints_reached, 2)
+        self.assertAlmostEqual(g.x, 0.381, delta=0.00045)
+        self.assertGreater(result.forward_seconds, 2)
+
+    def test_join_middle_and_return_to_start(self):
+        g = FakeGame(heading=180)
+        g.x = 0.379
+        route = mkroute((0.378, 0.420), (0.381, 0.420))
+        result = follow(g, route, max_seconds=300)
+        self.assertEqual(result.stopped_reason, 'complete', result)
+        self.assertTrue(result.returned_to_start)
+        self.assertGreaterEqual(result.join_segment, 2)
+        self.assertGreater(result.waypoints_reached, 2)
+
+    def test_resume_at_middle_skips_return_to_start(self):
+        g = FakeGame(heading=0)
+        g.x = 0.379
+        route = mkroute((0.378, 0.420), (0.381, 0.420))
+        result = follow(g, route, resume=True)
+        self.assertEqual(result.stopped_reason, 'complete', result)
+        self.assertFalse(result.returned_to_start)
+        self.assertEqual(result.waypoints_reached, 1)
+        self.assertLess(result.forward_seconds, 5)
+
+    def test_near_route_segment_but_far_start_allowed(self):
+        g = FakeGame(heading=0)
+        g.x = 0.385
+        route = mkroute((0.378, 0.420), (0.382, 0.420), (0.387, 0.420))
+        result = follow(g, route, resume=True, max_seconds=300)
+        self.assertEqual(result.stopped_reason, 'complete', result)
+        self.assertGreater(result.join_segment, 1)
+        self.assertFalse(result.returned_to_start)
+
+    def test_far_from_entire_route_has_helpful_error_and_no_input(self):
+        g = FakeGame()
+        with self.assertRaisesRegex(LiveControlError, 'closest map position'):
+            follow(g, MapRoute('Darkshore', 1, 12,
+                                   (MapWaypoint(.40, .42), MapWaypoint(.405, .42))))
+        self.assertEqual(g.events, [])
+
+    def test_off_path_join_limit_is_adjustable_and_bounded(self):
+        route = mkroute((0.378, 0.42), (0.381, 0.42))
+        with self.assertRaisesRegex(ValueError, 'max_join_distance'):
+            plan_route_from_position(route, .38, .43, arrival_radius=.00045,
+                                     max_join_distance=.02)
 
     def test_stall_stops_after_one_probe(self):
         g = FakeGame(speed=0)

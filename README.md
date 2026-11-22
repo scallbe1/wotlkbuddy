@@ -218,3 +218,21 @@ provide collision avoidance, long-distance quest travel, or unattended play.
 **v0.8.1:** Adaptive short forward steps near a waypoint, one extra bounded
 turn/step per leg, and a cap of 1.5 seconds of key-down per leg. A failed first
 leg still prevents the next leg. Live validation pending.
+
+## v0.9.1 — join a recorded route without remembering its start
+
+The follower locates the closest point along the **entire recorded path**, not
+just its first coordinate. From nearby it returns to the saved starting point
+by retracing recorded waypoints and then follows the route normally:
+
+```powershell
+py -3.12 -m wotlkbuddy live-follow --route darkshore-route.json --enable-input --countdown 5
+```
+
+For resuming a partially completed route instead of returning to the start, use
+`--resume`. The direct link from your current position to the nearest recorded
+segment is bounded by `--max-join-distance` (default 0.006 normalized map units,
+maximum 0.01). This is **not** navmesh navigation: if the nearest recorded trail
+is farther away, the follower stops and prints its position rather than crossing
+unmapped ground. Only run on safe, verified terrain; it still cannot detect
+cliffs, obstacles or a path through unknown terrain.

@@ -58,6 +58,9 @@ class TravelReport:
     moves: int
     turns: int
     last_waypoint_distance: float
+    join_segment: int = 0
+    join_distance: float = 0.0
+    returned_to_start: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -171,20 +174,77 @@ def route_from_trail(path: str | Path, *, spacing: float = 0.003) -> MapRoute:
     return parse_route(route)
 
 
+def closest_route_segment(route: MapRoute, x: float, y: float) -> tuple[int, MapWaypoint, float]:
+    """Nearest point on the recorded *polyline*, not just its first waypoint.
+
+    Returns (zero-based segment index, nearest point, map-coordinate distance).
+    This is geometric matching only; it makes no claim about connecting terrain.
+    """
+    best: tuple[int, MapWaypoint, float] | None = None
+    for index, (start, end) in enumerate(zip(route.waypoints, route.waypoints[1:])):
+        dx, dy = end.x - start.x, end.y - start.y
+        length_sq = dx * dx + dy * dy
+        t = min(1.0, max(0.0, ((x - start.x) * dx + (y - start.y) * dy)
+                              / length_sq)) if length_sq else 0.0
+        near = MapWaypoint(start.x + t * dx, start.y + t * dy, 'route join')
+        distance = hypot(x - near.x, y - near.y)
+        if best is None or distance < best[2] - 1e-12:
+            best = (index, near, distance)
+    assert best is not None  # parse_route requires at least two waypoints
+    return best
+
+
+def plan_route_from_position(
+    route: MapRoute, x: float, y: float, *, arrival_radius: float,
+    max_join_distance: float = 0.006, resume: bool = False,
+) -> tuple[tuple[MapWaypoint, ...], int, float, bool]:
+    """Build a route that doesn't require remembering the starting location.
+
+    Default: if near the recorded path, retrace its *known* waypoints to the
+    original start, then follow forward. --resume instead joins the nearest
+    segment and continues toward the end. Only the short link from a nearby
+    off-path position to the recorded polyline is not previously recorded.
+    """
+    if not 0.0005 <= max_join_distance <= 0.01 or not isfinite(max_join_distance):
+        raise ValueError('max_join_distance must be 0.0005..0.01 map units')
+    if not 0.0002 <= arrival_radius <= 0.002:
+        raise ValueError('Invalid arrival radius')
+    segment, join, distance = closest_route_segment(route, x, y)
+    if distance > max_join_distance:
+        raise LiveControlError(
+            f'Too far from recorded route: closest map position '
+            f'({join.x:.5f}, {join.y:.5f}) is {distance:.5f} map units away '
+            f'(limit {max_join_distance:.5f}). No pathfinding data for unrecorded terrain.'
+        )
+    start = route.waypoints[0]
+    if not resume and hypot(x - start.x, y - start.y) <= arrival_radius:
+        return route.waypoints[1:], segment, distance, False
+    # Attach near a recorded segment, instead of jumping directly to another
+    # waypoint that might cut across a corner in the recorded path.
+    link = (join,) if distance > arrival_radius else ()
+    if resume:
+        return link + route.waypoints[segment + 1:], segment, distance, False
+    backwards = tuple(reversed(route.waypoints[:segment + 1]))
+    return link + backwards + route.waypoints[1:], segment, distance, True
+
+
 def follow_route(
     route: MapRoute, *, capture: Callable[[], ClientTelemetry],
     keyboard: KeyboardDriver, stop_requested: Callable[[], bool] | None = None,
     arrival_radius: float = 0.00045, turn_rate: float = 180.4,
-    max_step_seconds: float = 0.8, max_seconds: float = 120,
+    max_step_seconds: float = 0.8, max_seconds: float = 300,
+    max_join_distance: float = 0.006, resume: bool = False,
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     progress: Callable[[str], None] | None = None,
 ) -> TravelReport:
     """Follow recorded map waypoints with ordinary walk/turn/check behaviour.
 
-    No 80-degree steering restriction. Can turn around fully. This is a
-    bounded, attended route replay over user-verified unobstructed ground,
-    *not* a terrain-aware or quest-interaction engine.
+    No 80-degree steering restriction. Can turn around fully. By default,
+    approach the nearest recorded trail segment, retrace recorded waypoints to
+    the original start, then follow the route forward. With resume=True, join
+    the nearest segment and continue forward instead. Neither mode supplies
+    a path across unrecorded terrain beyond the short, bounded join link.
     """
     if not 0.0002 <= arrival_radius <= 0.002:
         raise ValueError('arrival_radius must be 0.0002..0.002')
@@ -192,8 +252,8 @@ def follow_route(
         raise ValueError('turn_rate must be 100..300 degrees/sec')
     if not 0.4 <= max_step_seconds <= 1.0 or not isfinite(max_step_seconds):
         raise ValueError('max_step_seconds must be 0.4..1.0')
-    if not 15 <= max_seconds <= 300 or not isfinite(max_seconds):
-        raise ValueError('max_seconds must be 15..300')
+    if not 15 <= max_seconds <= 600 or not isfinite(max_seconds):
+        raise ValueError('max_seconds must be 15..600')
 
     stop = stop_requested or (lambda: False)
     notify = progress or (lambda message: None)
@@ -208,9 +268,17 @@ def follow_route(
         raise LiveControlError('Route zone/continent/map_zone does not match character')
     if route.character and route.character != p0.name:
         raise LiveControlError('Route was recorded by another character')
-    # Always start at the beginning of the recorded route (or reversed route).
-    if hypot(p0.map_x-route.waypoints[0].x, p0.map_y-route.waypoints[0].y) > 0.003:
-        raise LiveControlError('Too far from route start; move to recorded start location first')
+    targets, join_segment, join_distance, returned_to_start = plan_route_from_position(
+        route, p0.map_x, p0.map_y, arrival_radius=arrival_radius,
+        max_join_distance=max_join_distance, resume=resume,
+    )
+    if returned_to_start:
+        notify(f'Nearest route segment {join_segment+1}/{len(route.waypoints)-1}; '
+               f'join distance {join_distance:.5f}. Returning along recorded trail '
+               f'to route start, then replaying forward.')
+    else:
+        notify(f'Joining route at segment {join_segment+1}/{len(route.waypoints)-1} '
+               f'(distance {join_distance:.5f}); continuing to finish.')
 
     current = initial
     total_moves = total_turns = reached = 0
@@ -290,10 +358,10 @@ def follow_route(
         return dx, dy
 
     try:
-        for index, destination in enumerate(route.waypoints[1:], 1):
+        for index, destination in enumerate(targets, 1):
             last_distance = hypot(destination.x - current.player.map_x,
                                   destination.y - current.player.map_y)
-            notify(f'Waypoint {index}/{len(route.waypoints)-1}: {destination.label or "travel"} '
+            notify(f'Waypoint {index}/{len(targets)}: {destination.label or "travel"} '
                    f'(map distance {last_distance:.5f})')
             stall_at_waypoint = 0
             # Do not spend the entire session oscillating near a single point.
@@ -368,10 +436,12 @@ def follow_route(
         reason = str(exc)
         notify(f'Stopped: {reason}')
     return TravelReport(character=p0.name, zone=p0.zone_name,
-                        waypoints_requested=len(route.waypoints)-1,
+                        waypoints_requested=len(targets),
                         waypoints_reached=reached, stopped_reason=reason,
                         start_map_x=p0.map_x, start_map_y=p0.map_y,
                         end_map_x=current.player.map_x, end_map_y=current.player.map_y,
                         forward_seconds=round(forward_seconds, 2),
                         turn_seconds=round(turn_seconds, 2), moves=total_moves,
-                        turns=total_turns, last_waypoint_distance=last_distance)
+                        turns=total_turns, last_waypoint_distance=last_distance,
+                        join_segment=join_segment + 1, join_distance=join_distance,
+                        returned_to_start=returned_to_start and reached >= len(targets))
