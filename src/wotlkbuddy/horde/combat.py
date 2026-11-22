@@ -335,8 +335,28 @@ def hunt_kill_objectives(
             if s.resources.mana < 20:
                 raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
             previous_health = t.health
-            driver.chat('/cast Fireball')
-            s = fresh(s, 2.65)
+            verified_key = s.fireball_key
+            fast_cast = getattr(driver, 'cast_fireball', None)
+            if callable(fast_cast):
+                fast_cast(s)
+                if verified_key is not None:
+                    log(f'Casting Fireball using verified bound action key '
+                        f'{verified_key} (no chat command)')
+            else:
+                driver.chat('/cast Fireball')
+            # Observe the actual client cast timer. A low-rank Fireball can
+            # finish casting long before the old fixed 2.65 s delay, and its
+            # projectile may still be travelling. Resume on cast completion,
+            # not projectile impact; WoW itself handles spell queue/GCD.
+            during = fresh(s, .55)
+            if during.fireball_cast_remaining_ms is not None:
+                wait_cast = min(2.5, max(.28,
+                    during.fireball_cast_remaining_ms / 1000.0 + .18))
+            else:
+                # Old telemetry/client without cast timing: retain the
+                # conservative legacy wait, and no unverified queue input.
+                wait_cast = 2.1
+            s = fresh(during, wait_cast)
             new = s.combat_target
             if s.player.target_guid != target_guid or new.entry_id != expected:
                 if collect_items:
