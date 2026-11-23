@@ -412,6 +412,18 @@ def execute_gameobject_quest(
                 'choosing another profile-confirmed object')
             preferred_guid=None
         if not options:
+            # A hotspot that already contains a GUID we just exhausted is
+            # not a fresh search destination. Otherwise a failed click can
+            # cause a useless long detour BACK to that same box, matching
+            # the obstruction loop in Aarr's log. Distinct GOs in one
+            # hotspot remain eligible because they are selected above.
+            visible_now=observe_objects(state,goal.object_id)
+            for i,hotspot in enumerate(goal.hotspots):
+                if any((loaded.guid in visited_guids and
+                        loaded.entry==goal.object_id and
+                        loaded.position.distance_to(hotspot)<=12)
+                       for loaded in visible_now):
+                    visited_hotspots.add(i)
             unexplored=sorted(
                 ((i,h) for i,h in enumerate(goal.hotspots)
                  if i not in visited_hotspots and
