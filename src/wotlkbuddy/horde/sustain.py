@@ -18,6 +18,7 @@ def maintain_mage_supplies(
     log: Callable[[str], None] = lambda _: None,
     sleep: Callable[[float], None] = real_sleep,
     reserve: int = 4, max_conjures: int = 2,
+    post_combat: bool = False,
 ) -> ClientTelemetry:
     """Restock and drink/eat with bounded input, after live identity checks.
 
@@ -100,7 +101,13 @@ def maintain_mage_supplies(
             log(f'Conjured {kind}: {previous}->{newer}')
             casts += 1
 
-    for kind, low_mark in (('water', .45), ('food', .70)):
+    # Outside combat, CopilotBuddy-style recovery: eat whenever below full
+    # health and drink when mana is below 65%. Complete the food session
+    # before drinking, since starting another consumable can interrupt a meal.
+    # Existing callers retain the legacy 45% mana / 70% health behavior.
+    restoration = (('food', 1.0), ('water', .65)) if post_combat else (
+        ('water', .45), ('food', .70))
+    for kind, low_mark in restoration:
         state = capture()
         guard(state)
         ratio = ((state.resources.mana/max(1,state.resources.max_mana))
@@ -129,13 +136,25 @@ def maintain_mage_supplies(
             raise LiveControlError('Conjured consumable did not leave verified bag; '
                                    'refusing additional /use commands')
         previous = ratio
-        for _ in range(16):
+        full_recovery = post_combat
+        target = 1.0 if full_recovery else .85
+        for tick in range(21 if full_recovery else 16):
             now_ratio = ((after.resources.mana/max(1,after.resources.max_mana))
                          if kind == 'water' else
                          after.player.health/max(1,after.player.max_health))
-            if now_ratio >= .85 or now_ratio >= previous + .20:
+            if now_ratio >= target or (
+                    not full_recovery and now_ratio >= previous + .20):
                 break
-            after = fresh(after, 1.6)
-        log(f'Finished {kind} regeneration observation')
+            if tick < (20 if full_recovery else 15):
+                after = fresh(after, 1.6)
+        final_ratio = ((after.resources.mana/max(1,after.resources.max_mana))
+                       if kind == 'water' else
+                       after.player.health/max(1,after.player.max_health))
+        if full_recovery and final_ratio < 1.0:
+            raise LiveControlError(
+                f'Post-combat {kind} did not restore to full within '
+                'bounded observation; not starting another fight')
+        log(f'Finished {kind} regeneration observation '
+            f'({final_ratio:.0%})')
         state = after
     return state
