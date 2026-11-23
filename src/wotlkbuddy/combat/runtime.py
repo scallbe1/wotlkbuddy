@@ -97,18 +97,43 @@ def provision_rotation_hotbar(
         # The addon resolves an exact named spell to its real highest-rank
         # book index; Python never guesses a spellbook position or action.
         driver.chat('/wbtability '+rule.spell_name)
-        sleep(.65)
-        probe=capture()
-        if (probe.truncated or probe.player.guid!=guid or probe.player.dead or
-                probe.player.in_combat or
-                probe.empty_action_slot!=state.empty_action_slot or
-                any(a.slot==state.empty_action_slot for a in probe.action_spells)):
-            raise LiveControlError('Hotbar changed during spellbook probe')
-        book=probe.spellbook_probe
-        if book is None or book.name!=rule.spell_name:
-            log(f'Spellbook has no verified learned {rule.spell_name}; '
-                'cannot bind a guessed spell.')
-            continue  # Spell not learned or absent on this server.
+        probe = None
+        book = None
+        diagnostic = None
+        # A single .65s delay can sample a frame published *before* the
+        # typed slash command takes effect. Wait for an acknowledgement
+        # that names exactly the spell we requested.
+        for _ in range(6):
+            sleep(.55)
+            candidate = capture()
+            if (candidate.truncated or candidate.player.guid != guid or
+                    candidate.player.dead or candidate.player.in_combat or
+                    candidate.empty_action_slot != state.empty_action_slot or
+                    any(a.slot == state.empty_action_slot
+                        for a in candidate.action_spells)):
+                raise LiveControlError('Hotbar changed during spellbook probe')
+            observed_book = candidate.spellbook_probe
+            observed_status = candidate.spellbook_diagnostic
+            if (observed_book is not None and
+                    observed_book.name == rule.spell_name) or (
+                    observed_status is not None and
+                    observed_status.name == rule.spell_name):
+                probe = candidate
+                book = observed_book
+                diagnostic = observed_status
+                break
+        if probe is None:
+            raise LiveControlError(
+                f'Addon never acknowledged /wbtability {rule.spell_name}. '
+                'Reinstall the current WotLKBuddyTelemetry addon and /reload; '
+                'no combat action slot was changed.')
+        if book is None:
+            reason = (f'{diagnostic.status} '
+                      f'(matching spellbook names: {diagnostic.name_matches})'
+                      if diagnostic is not None else
+                      'spellbook SF response missing')
+            log(f'Spellbook probe for {rule.spell_name}: {reason}')
+            continue
         # Confirm a second advancing observation before modifying a slot.
         sleep(.6)
         confirm=capture()

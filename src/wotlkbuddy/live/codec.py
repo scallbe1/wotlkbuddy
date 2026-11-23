@@ -203,6 +203,14 @@ class SpellBookProbe:
 
 
 @dataclass(frozen=True)
+class SpellBookDiagnostic:
+    """Acknowledgement of one named spellbook probe, even when it fails."""
+    name: str
+    status: str  # OK, NO_MATCH, NO_ID, NO_NAME_API
+    name_matches: int
+
+
+@dataclass(frozen=True)
 class MageBuffState:
     knows_intellect: bool | None
     intellect_active: bool
@@ -308,6 +316,7 @@ class ClientTelemetry:
     action_spells: tuple[ActionSpell, ...] = ()
     empty_action_slot: int | None = None
     spellbook_probe: SpellBookProbe | None = None
+    spellbook_diagnostic: SpellBookDiagnostic | None = None
     talent_probe: TalentProbe | None = None
     fireball_key: str | None = None
     fireball_cast_remaining_ms: int | None = None
@@ -355,6 +364,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     action_spells: dict[int, ActionSpell] = {}
     empty_action_slot = None
     spellbook_probe = None
+    spellbook_diagnostic = None
     talent_probe = None
     fireball_record_seen = False
     fireball_key = None
@@ -549,6 +559,22 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             if not 1 <= slot <= 10:
                 raise TelemetryError('Empty action slot out of range')
             empty_action_slot = slot
+        elif parts[0] == 'SD':
+            if (len(parts) != 4 or spellbook_diagnostic is not None or
+                    not parts[1] or len(parts[1]) > 48 or
+                    parts[2] not in ('OK', 'NO_MATCH', 'NO_ID',
+                                     'NO_NAME_API')):
+                raise TelemetryError('Invalid or duplicate spellbook diagnostic')
+            try:
+                matches = int(parts[3])
+            except ValueError as exc:
+                raise TelemetryError('Invalid spellbook match count') from exc
+            if (not 0 <= matches <= 500 or
+                    (parts[2] == 'NO_MATCH' and matches != 0) or
+                    (parts[2] in ('OK','NO_ID') and matches < 1)):
+                raise TelemetryError('Inconsistent spellbook diagnostic')
+            spellbook_diagnostic = SpellBookDiagnostic(
+                parts[1], parts[2], matches)
         elif parts[0] == 'SF':
             if len(parts) != 4 or spellbook_probe is not None:
                 raise TelemetryError('Invalid or duplicate spellbook probe')
@@ -796,6 +822,12 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             raise TelemetryError('Unexpected record type: ' + parts[0])
     if player is None:
         raise TelemetryError('Missing player record')
+    if spellbook_diagnostic is not None and (
+            (spellbook_diagnostic.status == 'OK') !=
+            (spellbook_probe is not None) or
+            (spellbook_probe is not None and
+             spellbook_diagnostic.name != spellbook_probe.name)):
+        raise TelemetryError('Spellbook diagnostic disagrees with spellbook probe')
     if empty_action_slot in action_spells:
         raise TelemetryError('Action slot both empty and occupied')
     if trainer_seen and len(trainer_services) != trainer_count:
@@ -860,6 +892,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                                for i in sorted(action_spells)),
                            empty_action_slot=empty_action_slot,
                            spellbook_probe=spellbook_probe,
+                           spellbook_diagnostic=spellbook_diagnostic,
                            talent_probe=talent_probe,
                            fireball_key=fireball_key,
                            fireball_cast_remaining_ms=fireball_cast_remaining_ms,

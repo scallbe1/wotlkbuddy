@@ -27,3 +27,5 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y lua5.1
       - name: Parse WoW 3.3.5a addon with Lua 5.1
         run: luac5.1 -p addons/WotLKBuddyTelemetry/WotLKBuddyTelemetry.lua
+      - name: Exercise legacy 3.3.5a spellbook ID resolution
+        run: lua5.1 tests/lua_spellbook_v053.lua
