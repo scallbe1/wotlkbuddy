@@ -199,6 +199,58 @@ local function resolveSpellbook(name)
 end
 -- END SPELLBOOK PROBE HELPER
 
+-- BEGIN ACTION SPELL IDENTITY AUDIT
+-- Read-only: an action's numeric GetActionInfo value is NOT treated as
+-- an authoritative spell ID on legacy/modified 3.3.5a clients. Compare
+-- both a database spell ID and an exact player spellbook slot separately.
+-- The icon checks are diagnostic only and never authorize key presses.
+local function auditActionIdentity(actionSlot, rawId)
+    local function query(func, ...)
+        if type(func) ~= 'function' then return nil, nil, nil end
+        local ok, a, b, c = pcall(func, ...)
+        if not ok then return nil, nil, nil end
+        return a, b, c
+    end
+    local bookType = BOOKTYPE_SPELL or 'spell'
+    local rawName, _, rawIcon = query(GetSpellInfo, rawId)
+    local bookName, _, bookIcon = query(GetSpellInfo, rawId, bookType)
+    if not bookName then
+        bookName = query(GetSpellName, rawId, bookType)
+    end
+    local link, linkedId = query(GetSpellLink, rawId, bookType)
+    if type(linkedId) ~= 'number' and type(link) == 'string' then
+        linkedId = tonumber(string.match(link, '|Hspell:(%d+)'))
+    end
+    local itemKind, itemId = query(GetSpellBookItemInfo, rawId, bookType)
+    local resolved = 0
+    for pass = 1, 2 do
+        local candidate = pass == 1 and linkedId or itemId
+        if type(candidate) == 'number' and candidate > 0 and
+                candidate == math.floor(candidate) and
+                candidate < 2147483648 and bookName then
+            local candidateName = query(GetSpellInfo, candidate)
+            if candidateName == bookName and
+                    (candidate == linkedId or itemKind == 'SPELL' or
+                     itemKind == 'spell') then
+                resolved = candidate
+                break
+            end
+        end
+    end
+    local actionIcon = query(GetActionTexture, actionSlot)
+    local function matchIcon(expected)
+        if not actionIcon or not expected then return '-1' end
+        return tostring(actionIcon) == tostring(expected) and '1' or '0'
+    end
+    if not bookIcon and resolved > 0 then
+        local _, _, resolvedIcon = query(GetSpellInfo, resolved)
+        bookIcon = resolvedIcon
+    end
+    return rawName or '', bookName or '', resolved,
+        matchIcon(rawIcon), matchIcon(bookIcon)
+end
+-- END ACTION SPELL IDENTITY AUDIT
+
 local function tickData()
     local lines = {}
     local isTruncated = false
@@ -332,6 +384,25 @@ local function tickData()
         end
     end
     -- END RAW ACTIONBAR AUDIT
+    -- BEGIN ACTION IDENTITY TELEMETRY
+    -- AX is purely diagnostic. Keep AS / legacy F unchanged until the
+    -- user confirms which interpretation actually matches visible spells.
+    if GetActionInfo then
+        for button = 1, 10 do
+            local index = page > 1 and (page-1)*12+button or button
+            local kind, rawId = GetActionInfo(index)
+            if kind == 'spell' and type(rawId) == 'number' and
+                    rawId > 0 and rawId < 2147483648 then
+                local dbName, bookName, bookId, dbIconOK, bookIconOK =
+                    auditActionIdentity(index, rawId)
+                appendLine(table.concat({'AX', tostring(button),
+                    tostring(index), tostring(rawId),
+                    safe(dbName,44), safe(bookName,44),
+                    tostring(bookId), dbIconOK, bookIconOK}, '\t'))
+            end
+        end
+    end
+    -- END ACTION IDENTITY TELEMETRY
     -- END ACTIONBAR OBSERVATIONS
     -- Inventory tracking is read only. Match ItemId exactly against source
     -- Horde XML and report current inventory count in each fresh frame.

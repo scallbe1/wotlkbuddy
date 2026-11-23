@@ -33,3 +33,5 @@ jobs:
         run: lua5.1 tests/lua_actionbar_v054.lua
       - name: Audit raw actionbar page 2 without touching WoW client state
         run: lua5.1 tests/lua_actionbar_pages_v055.lua
+      - name: Audit action spell ID vs spellbook index with actual legacy Lua APIs
+        run: lua5.1 tests/lua_action_identity_v056.lua

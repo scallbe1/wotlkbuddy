@@ -206,6 +206,19 @@ class ActionBarRawSlot:
 
 
 @dataclass(frozen=True)
+class ActionSpellIdentityAudit:
+    """Read-only candidate names for ambiguous legacy action identifiers."""
+    button: int
+    action_index: int
+    raw_id: int
+    database_name: str
+    spellbook_name: str
+    spellbook_id: int
+    database_icon_match: bool | None
+    spellbook_icon_match: bool | None
+
+
+@dataclass(frozen=True)
 class TalentProbe:
     tree: int
     index: int
@@ -339,6 +352,7 @@ class ClientTelemetry:
     actionbar_inspected: bool = False
     actionbar_page: int | None = None
     raw_action_slots: tuple[ActionBarRawSlot, ...] = ()
+    action_identity_audits: tuple[ActionSpellIdentityAudit, ...] = ()
     empty_action_slot: int | None = None
     spellbook_probe: SpellBookProbe | None = None
     spellbook_diagnostic: SpellBookDiagnostic | None = None
@@ -393,6 +407,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     actionbar_page = None
     actionbar_page_seen = False
     raw_action_slots: dict[tuple[str,int], ActionBarRawSlot] = {}
+    action_identity_audits: dict[int, ActionSpellIdentityAudit] = {}
     empty_action_slot = None
     spellbook_probe = None
     spellbook_diagnostic = None
@@ -615,6 +630,34 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise TelemetryError('Invalid or duplicate raw actionbar slot')
             raw_action_slots[key] = ActionBarRawSlot(
                 view,button,action_index,kind,action_id,name,bound == '1')
+        elif parts[0] == 'AX':
+            if len(parts) != 9 or not actionbar_page_seen or not actionbar_inspected:
+                raise TelemetryError('Action identity audit requires inspected page')
+            try:
+                button, index, raw_id, book_id = (
+                    int(parts[1]),int(parts[2]),int(parts[3]),int(parts[6]))
+            except ValueError as exc:
+                raise TelemetryError('Invalid action identity audit integers') from exc
+            def icon_check(value: str) -> bool | None:
+                if value not in ('-1','0','1'):
+                    raise TelemetryError('Invalid action icon comparison')
+                return None if value == '-1' else value == '1'
+            if (not 1 <= button <= 10 or button in action_identity_audits or
+                    not 1 <= index <= 72 or not 1 <= raw_id < 2**31 or
+                    not 0 <= book_id < 2**31 or len(parts[4]) > 44 or
+                    len(parts[5]) > 44 or (book_id > 0 and not parts[5]) or
+                    (parts[7] == '1' and not parts[4]) or
+                    (parts[8] == '1' and not parts[5])):
+                raise TelemetryError('Malformed action identity audit')
+            expected_index = (
+                (actionbar_page-1)*12+button
+                if actionbar_page is not None and actionbar_page > 1
+                else button)
+            if index != expected_index:
+                raise TelemetryError('Action identity audit index disagrees with page')
+            action_identity_audits[button] = ActionSpellIdentityAudit(
+                button,index,raw_id,parts[4],parts[5],book_id,
+                icon_check(parts[7]),icon_check(parts[8]))
         elif parts[0] == 'AS':
             if len(parts) != 7:
                 raise TelemetryError('Malformed action spell record')
@@ -914,6 +957,18 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
         raise TelemetryError('Spellbook diagnostic disagrees with spellbook probe')
     if raw_action_slots and not actionbar_inspected:
         raise TelemetryError('Raw actionbar rows require inspected actionbar header')
+    if action_identity_audits:
+        visible = {
+            item.button:item for item in raw_action_slots.values()
+            if item.view == ('visible' if actionbar_page and
+                             actionbar_page > 1 else 'base')
+        }
+        for audit in action_identity_audits.values():
+            raw = visible.get(audit.button)
+            if (raw is None or raw.kind != 'spell' or
+                    raw.action_index != audit.action_index or
+                    raw.action_id != audit.raw_id):
+                raise TelemetryError('Action identity disagrees with raw action slot')
     if actionbar_page_seen and actionbar_inspected:
         # Missing raw rows must not be treated as proof that the slots
         # are empty. A complete 10-button base inventory is required.
@@ -1003,6 +1058,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            actionbar_page=actionbar_page,
                            raw_action_slots=tuple(
                                raw_action_slots[k] for k in sorted(raw_action_slots)),
+                           action_identity_audits=tuple(
+                               action_identity_audits[k] for k in sorted(action_identity_audits)),
                            empty_action_slot=empty_action_slot,
                            spellbook_probe=spellbook_probe,
                            spellbook_diagnostic=spellbook_diagnostic,

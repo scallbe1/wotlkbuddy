@@ -3,7 +3,7 @@ local file = assert(io.open('addons/WotLKBuddyTelemetry/WotLKBuddyTelemetry.lua'
 local addon = file:read('*a')
 file:close()
 local helper = assert(addon:match('%-%- BEGIN ACTIONBAR BINDING HELPER\n(.-)\n%-%- END ACTIONBAR BINDING HELPER'))
-local scan = assert(addon:match('%-%- BEGIN ACTIONBAR OBSERVATIONS\n(.-)\n    %-%- END ACTIONBAR OBSERVATIONS'))
+local scan = assert(addon:match('%-%- BEGIN ACTIONBAR OBSERVATIONS\n(.-)\n    %-%- BEGIN ACTION IDENTITY TELEMETRY'))
 local load = assert(loadstring(helper .. '\nlocal rows={}\nlocal function appendLine(row) table.insert(rows,row) end\n' ..
                          scan .. '\nreturn rows'))
 
