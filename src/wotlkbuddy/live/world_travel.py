@@ -47,7 +47,7 @@ def validate_nav_path(raw: Sequence[Vec3], start: Vec3, destination: Vec3,
     """
     if not _finite(start) or not _finite(destination):
         raise LiveControlError('Invalid live start or destination world XYZ')
-    if not 2 <= len(raw) <= 512 or not 5 <= max_step <= 12:
+    if not 2 <= len(raw) <= 512 or not 5 <= max_step <= 22:
         raise LiveControlError('Navmesh returned no usable bounded waypoint path')
     if any(not _finite(p) for p in raw):
         raise LiveControlError('Navmesh returned invalid world coordinates')
@@ -111,6 +111,8 @@ def follow_world_path(
     max_aggro_fights: int = 3,
     on_threat: Callable[[ClientTelemetry, WorldPosition, Sequence[Vec3]], ClientTelemetry] | None = None,
     threat_check_yards: float = 7.,
+    waypoint_spacing: float = 9.0,
+    continuous_forward: bool = False,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -121,7 +123,9 @@ def follow_world_path(
     """
     if (not 15 <= max_seconds <= 600 or not 1 <= arrival_yards <= 2.5
             or not 0 <= max_recoveries <= 3 or not 0 <= max_aggro_fights <= 5
-            or not 3 <= threat_check_yards <= 20):
+            or not 3 <= threat_check_yards <= 20
+            or not 5 <= waypoint_spacing <= 22):
+
         raise ValueError('Invalid bounded travel parameters')
     notify = progress or (lambda _: None)
     first, world0 = sample()
@@ -140,7 +144,8 @@ def follow_world_path(
         raise LiveControlError('Combat or death present; navigation is not a combat routine')
     if len(path) < 2:
         raise LiveControlError('No world navmesh waypoints supplied')
-    waypoints = validate_nav_path(path, world0.position, path[-1])
+    waypoints = validate_nav_path(
+        path, world0.position, path[-1], max_step=waypoint_spacing)
     if stop_requested() or not keyboard.wow_is_foreground():
         raise LiveControlError('Escape or WoW foreground focus required before movement')
     start_time = now()
@@ -195,7 +200,7 @@ def follow_world_path(
         if on_threat is not None and not snap.player.in_combat and (
                 force_scan or
                 _distance_xy(pos.position,last_threat_scan_xyz) >= threat_check_yards or
-                now()-last_threat_scan_time >= 5.):
+                now()-last_threat_scan_time >= (8. if continuous_forward else 5.)):
             # Movement keys are already released before checked() runs.
             # Scan only the next Detour legs, not arbitrary creatures off-path.
             guard()
@@ -224,16 +229,39 @@ def follow_world_path(
         return snap, pos
 
     def pulse(key: str, duration: float) -> None:
+        """Hold W continuously between steering corrections.
+
+        While running in continuous mode, inspect live combat every ~0.36 s
+        with W still held, and release W immediately on combat/death/target
+        threat. In all cases, release the key even after a telemetry failure.
+        Do not invoke chat-based threat selection with W held.
+        """
         guard()
         scan = _MOVEMENT_SCANCODES[key]
         keyboard.key_down(scan)
         try:
             remaining = duration
+            since_observed = 0.
             while remaining > 0:
                 guard()
                 step = min(0.04, remaining)
                 sleep(step)
                 remaining -= step
+                since_observed += step
+                if (continuous_forward and key == 'forward' and
+                        since_observed >= .36):
+                    since_observed = 0.
+                    observed, measured = sample()
+                    if (observed.truncated or observed.player.guid != guid or
+                            observed.player.dead or measured.map_id != expected_map_id or
+                            measured.player_guid.lower() != guid.lower()):
+                        raise LiveControlError(
+                            'Character/map changed during continuous forward hold')
+                    if observed.player.in_combat or (
+                            observed.combat_target is not None and
+                            observed.player.target_guid and
+                            observed.combat_target.attacks_player is True):
+                        break
         finally:
             keyboard.key_up(scan)
         guard()
@@ -417,13 +445,13 @@ def follow_world_path(
                     # 8 yards/s and stop with a safety margin; this does NOT
                     # assume the player will move exactly that far.
                     forward_duration = min(
-                        0.45, max(0.18,
-                                  0.75*(dxy-arrival_yards)/8.0))
+                        1.20 if continuous_forward else 0.45,
+                        max(0.18, 0.75*(dxy-arrival_yards)/8.0))
                     pulse('forward', forward_duration)
                     moves += 1
                     current, world = checked()
                     displacement = _distance_xy(before.position, world.position)
-                    if displacement > 4:
+                    if displacement > (12 if continuous_forward else 4):
                         raise LiveControlError('Implausible world jump during forward movement')
                     stalls = stalls + 1 if displacement < 0.15 else 0
                     if stalls >= 4:

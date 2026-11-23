@@ -312,6 +312,10 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     progress_dps_talents(capture=cap, driver=driver, log=log, max_points=1)
     provision_rotation_hotbar(capture=cap, driver=driver, log=log)
     first = cap()
+    if args.only in ('all', 'objectives', 'collect', 'continuous'):
+        from wotlkbuddy.combat.runtime import require_verified_combat_key
+        require_verified_combat_key(first)
+        log('Combat ready: verified action-bar key; no typed /cast fallback')
     pid, world = verified_live_position(first, pid=args.pid)
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles

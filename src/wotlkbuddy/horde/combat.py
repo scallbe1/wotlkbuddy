@@ -323,8 +323,9 @@ def hunt_kill_objectives(
                         'different heights/floors; refusing to claim arrival')
                 return s
             path = nav.find_path(world.map_id, world.position, dest)
-            legs = validate_nav_path(path, world.position, dest)
-            log(f'Detour approaching target location via {len(legs)-1} short legs'
+            legs = validate_nav_path(
+                path, world.position, dest, max_step=18.0)
+            log(f'Detour approaching target location via {len(legs)-1} longer legs'
                 + (f' (height replan {height_replans}/1)'
                    if height_replans else ''))
             kb = getattr(driver, 'keyboard', driver)
@@ -339,7 +340,10 @@ def hunt_kill_objectives(
                             expected_map_id=world.map_id,
                             max_seconds=min(450, max(15, max_seconds-(now()-started))),
                             can_traverse=lambda a,b: nav.segment_clear(world.map_id,a,b),
-                            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
+                            progress=log, on_aggro=getattr(driver, 'on_aggro', None),
+                            on_threat=getattr(driver, 'scan_hostiles', None),
+                            waypoint_spacing=18.0, continuous_forward=True,
+                            threat_check_yards=14.0)
             out = fresh(s)
             if report.stopped_reason == 'complete':
                 return out

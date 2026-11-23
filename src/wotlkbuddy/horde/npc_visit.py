@@ -74,7 +74,7 @@ def visit_npc(
     if hypot(world.x-dest.x, world.y-dest.y) > 3:
         path = validate_nav_path(
             nav.find_path(world.map_id, world.position, dest),
-            world.position, dest)
+            world.position, dest, max_step=18.0)
         log(f'Visiting {npc_name} ({npc_id}) via {len(path)-1} Detour legs')
         def sample():
             state = capture()
@@ -90,7 +90,10 @@ def visit_npc(
             expected_quest_id=None, expected_map_id=world.map_id,
             max_seconds=450,
             can_traverse=lambda a,b: nav.segment_clear(world.map_id,a,b),
-            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
+            progress=log, on_aggro=getattr(driver, 'on_aggro', None),
+            on_threat=getattr(driver, 'scan_hostiles', None),
+            waypoint_spacing=18.0, continuous_forward=True,
+            threat_check_yards=14.0)
         if result.stopped_reason != 'complete':
             raise LiveControlError(
                 f'NPC visit to {npc_name} stopped: {result.stopped_reason}')

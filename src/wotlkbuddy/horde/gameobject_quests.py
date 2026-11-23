@@ -213,7 +213,8 @@ def execute_gameobject_quest(
         if hypot(world.x-destination.x,world.y-destination.y)<=2.8:
             return s
         route=nav.find_path(world.map_id,world.position,destination)
-        waypoints=validate_nav_path(route,world.position,destination)
+        waypoints=validate_nav_path(
+            route,world.position,destination,max_step=18.0)
         log(f'GameObject Detour: {len(waypoints)-1} verified legs')
         kb=getattr(driver,'keyboard',driver)
 
@@ -235,7 +236,10 @@ def execute_gameobject_quest(
             expected_quest_id=goal.quest_id,expected_map_id=world.map_id,
             max_seconds=min(600,max(15,max_seconds-(now()-started))),
             can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
-            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
+            progress=log, on_aggro=getattr(driver, 'on_aggro', None),
+            on_threat=getattr(driver, 'scan_hostiles', None),
+            waypoint_spacing=18.0, continuous_forward=True,
+            threat_check_yards=14.0)
         if report.stopped_reason!='complete':
             raise LiveControlError('GameObject navigation stopped: '+report.stopped_reason)
         return fresh(s)
