@@ -11,6 +11,7 @@ GetSpellInfo=function(id, bookType)
         return 'Fireball','Rank 1','Icon_Fireball'
     elseif bookType=='spell' and id==10 then
         return 'Frost Armor','Rank 1','Icon_Frost_Armor'
+    elseif bookType=='spell' then return nil
     elseif id==133 then return 'Fireball','Rank 1','Icon_Fireball'
     elseif id==168 then return 'Frost Armor','Rank 1','Icon_Frost_Armor'
     elseif id==10 then return 'Blizzard','Rank 1','Icon_Blizzard'
