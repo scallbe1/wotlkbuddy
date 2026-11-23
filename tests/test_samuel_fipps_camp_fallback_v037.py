@@ -54,9 +54,10 @@ class StaticNav:
 
 
 class CampGame(FakeGame):
-    def __init__(self):
+    def __init__(self, *, start=(0.,0.,0.), camp=(40.,0.,0.)):
         super().__init__()
-        self.x=0.
+        self.x,self.y,self.z=start
+        self.camp=Vec3(*camp)
         self.at_camp=False
         self.routes=[]
         self.notes=[]
@@ -77,17 +78,25 @@ class CampGame(FakeGame):
         return replace(base,quests=(quest,))
     def position(self,s):
         return (77, WorldPosition(
-            s.player.guid,0,self.x,0.,0.,0.,1))
+            s.player.guid,0,self.x,self.y,self.z,0.,1))
     def target_pos(self,s):
-        return Vec3(self.x+1.5,0.,0.) if self.dead else Vec3(40.,0.,0.)
+        return (Vec3(self.x+1.5,self.y,self.z)
+                if self.dead else self.camp)
     def travel(self,legs,**kwargs):
         self.routes.append(legs[-1].x)
         self.x=legs[-1].x
+        self.y=legs[-1].y
+        self.z=legs[-1].z
         self.at_camp=True
         return SimpleNamespace(stopped_reason='complete')
     def run(self,db,*,reference=()):
+        quest=PROFILE.quests[0]
+        spec=quest.objectives[0]
+        profile=replace(PROFILE,quests=(
+            replace(quest,objectives=(
+                replace(spec,hotspots=(self.camp,)),)),))
         return hunt_kill_objectives(
-            profile=PROFILE,quest_id=QID,pid=77,
+            profile=profile,quest_id=QID,pid=77,
             capture=self.capture,driver=self,nav=StaticNav(),spawns=db,
             target_xyz=self.target_pos,world_position=self.position,
             travel=self.travel,sleep=self.sleep,now=lambda:self.t,
@@ -111,6 +120,48 @@ class SourcedCampFallbackTests(unittest.TestCase):
             'not verified NPC spawn' in note for note in game.notes))
         self.assertTrue(any('looking for live NPC by exact entry/GUID'
                             in note for note in game.notes))
+
+    def test_aarr_spider_cave_start_about_450_yards_from_samuel_camp(self):
+        # Actual observed last live location from the Night Web's Hollow
+        # run and the externally sourced Classic Samuel Fipps camp.
+        # The former <=360y gate rejected this route before Detour.
+        start=(2045.03,1820.54,106.95)
+        camp=(1982.90,1376.01,63.05)
+        distance=Vec3(*start).distance_to(Vec3(*camp))
+        self.assertGreater(distance,360.)
+        self.assertLess(distance,600.)
+        game=CampGame(start=start,camp=camp)
+        db=EmptySpawnDb()
+        try:
+            result=game.run(
+                db,reference=(Spawn(ENTRY,0,*camp),))
+        finally:
+            db.close()
+        self.assertTrue(result.objectives_complete)
+        self.assertEqual(result.targets_defeated,1)
+        self.assertEqual(len(game.routes),1)
+        self.assertLess(abs(game.x-camp[0]),11.)
+        self.assertLess(abs(game.y-camp[1]),11.)
+        self.assertEqual(game.commands.count('/cast Fireball'),1)
+        self.assertTrue(any(
+            'externally sourced search area only' in note
+            for note in game.notes))
+        self.assertTrue(any(
+            f'{distance:.1f}y' in note for note in game.notes))
+
+    def test_more_than_600_yards_from_sourced_camp_still_rejected(self):
+        game=CampGame(camp=(650.,0.,0.))
+        db=EmptySpawnDb()
+        try:
+            with self.assertRaisesRegex(
+                    LiveControlError,'No validated local spawn'):
+                game.run(db,reference=(Spawn(ENTRY,0,650.,0.,0.),))
+        finally:
+            db.close()
+        self.assertEqual(game.routes,[])
+        self.assertNotIn('/cast Fireball',game.commands)
+        self.assertTrue(any(
+            '650.0y' in note for note in game.notes))
 
     def test_no_db_and_no_reference_does_not_move_or_attack(self):
         game=CampGame()
