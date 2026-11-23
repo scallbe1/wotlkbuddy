@@ -14,6 +14,8 @@ class RecoveryGame(FakeSupplies):
         self.mana=mana
         self.food=5 if supplies else 0
         self.water=5 if supplies else 0
+        if not supplies:
+            self.known_food=False
 
     def chat(self, command):
         self.commands.append(command)
