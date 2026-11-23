@@ -109,6 +109,8 @@ def follow_world_path(
     max_recoveries: int = 2,
     on_aggro: Callable[[ClientTelemetry], ClientTelemetry] | None = None,
     max_aggro_fights: int = 3,
+    on_threat: Callable[[ClientTelemetry, WorldPosition, Sequence[Vec3]], ClientTelemetry] | None = None,
+    threat_check_yards: float = 7.,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -118,7 +120,8 @@ def follow_world_path(
     snapshot or path preflight fails.
     """
     if (not 15 <= max_seconds <= 600 or not 1 <= arrival_yards <= 2.5
-            or not 0 <= max_recoveries <= 3 or not 0 <= max_aggro_fights <= 5):
+            or not 0 <= max_recoveries <= 3 or not 0 <= max_aggro_fights <= 5
+            or not 3 <= threat_check_yards <= 20):
         raise ValueError('Invalid bounded travel parameters')
     notify = progress or (lambda _: None)
     first, world0 = sample()
@@ -145,6 +148,9 @@ def follow_world_path(
     turns = moves = reached = recoveries = strafes = 0
     recovery_locations: list[Vec3] = []
     aggro_fights = 0
+    next_waypoint_index = 1
+    last_threat_scan_xyz = world0.position
+    last_threat_scan_time = now()
 
     def guard() -> None:
         if stop_requested() or not keyboard.wow_is_foreground():
@@ -152,8 +158,8 @@ def follow_world_path(
         if now() - start_time > max_seconds:
             raise LiveControlError('World navigation time limit reached')
 
-    def checked() -> tuple[ClientTelemetry, WorldPosition]:
-        nonlocal aggro_fights
+    def checked(*, force_scan: bool = False) -> tuple[ClientTelemetry, WorldPosition]:
+        nonlocal aggro_fights, last_threat_scan_xyz, last_threat_scan_time
         snap, pos = sample()
         if (snap.truncated or snap.player.guid != guid or
                 pos.player_guid.lower() != guid.lower() or
@@ -186,6 +192,32 @@ def follow_world_path(
                     'Defensive combat displaced Mage away from original '
                     'navmesh path; fresh Detour route required')
             notify('Verified combat ended; resuming existing Detour waypoints')
+        if on_threat is not None and not snap.player.in_combat and (
+                force_scan or
+                _distance_xy(pos.position,last_threat_scan_xyz) >= threat_check_yards or
+                now()-last_threat_scan_time >= 5.):
+            # Movement keys are already released before checked() runs.
+            # Scan only the next Detour legs, not arbitrary creatures off-path.
+            guard()
+            origin=pos
+            upcoming=tuple(waypoints[next_waypoint_index:
+                                    min(len(waypoints),next_waypoint_index+6)])
+            notify('Scanning next path legs for red hostile creatures '
+                   'within 27 yards before advancing')
+            on_threat(snap,pos,upcoming)
+            snap,pos=sample()
+            if (snap.truncated or snap.player.guid != guid or
+                    pos.player_guid.lower()!=guid.lower() or
+                    pos.map_id!=expected_map_id or snap.player.dead or
+                    snap.player.in_combat):
+                raise LiveControlError('Proactive threat scan failed to restore '
+                                       'safe live player/map state')
+            if (_distance_xy(pos.position,origin.position)>2.0 or
+                    abs(pos.z-origin.z)>2.):
+                raise LiveControlError('Threat scan changed player position; '
+                                       'fresh Detour replan is required')
+            last_threat_scan_xyz=pos.position
+            last_threat_scan_time=now()
         if expected_quest_id is not None and not any(
                 q.quest_id == expected_quest_id for q in snap.quests):
             raise LiveControlError('Quest journal changed while walking; stopping')
@@ -343,7 +375,10 @@ def follow_world_path(
         return False
 
     try:
+        if on_threat is not None:
+            current, world = checked(force_scan=True)
         for index, waypoint in enumerate(waypoints[1:], 1):
+            next_waypoint_index = index
             count = 0
             stalls = 0
             prev_distance = _distance_xy(world.position, waypoint)
