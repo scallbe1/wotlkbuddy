@@ -30,7 +30,9 @@ _DIGITS = dict(zip('1234567890', [0x02, 0x03, 0x04, 0x05, 0x06,
                                    0x07, 0x08, 0x09, 0x0a, 0x0b]))
 _SPECIAL = {' ': (0x39, False), '/': (0x35, False), ',': (0x33, False),
             '(': (0x0a, True), ')': (0x0b, True),
-            "'": (0x28, False), '-': (0x0c, False)}
+            "'": (0x28, False), ';': (0x27, False),
+            ':': (0x27, True), '_': (0x0c, True),
+            '-': (0x0c, False)}
 _INTERACT_KEYS = {'f': 0x21, 'g': 0x22}
 _ENTER = 0x1c
 _SHIFT = 0x2a
@@ -108,6 +110,16 @@ class KeyboardQuestInput:
                 not re.fullmatch(r'/run Select(?:GossipActiveQuest|ActiveQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and
                 not re.fullmatch(r'/click (?:GossipTitleButton|QuestTitleButton)([1-9]|[12][0-9]|3[0-2])', command) and
                 not re.fullmatch(r'/run Select(?:GossipAvailableQuest|AvailableQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and
+                not (command.startswith('/wbttalent ') and
+                     re.fullmatch(r'[A-Za-z :]{1,48}',
+                                  command[len('/wbttalent '):])) and
+                not re.fullmatch(r'/run LearnTalent\(([1-3]),([1-9]|[1-3][0-9]|4[0-5])\)', command) and
+                not (command.startswith('/wbtability ') and
+                     re.fullmatch(r'[A-Za-z :]{1,48}',
+                                  command[len('/wbtability '):])) and
+                not re.fullmatch(
+                    r'/run PickupSpell\(([1-9][0-9]{0,2}),BOOKTYPE_SPELL\);PlaceAction\((10|[1-9])\);ClearCursor\(\)',
+                    command) and
                 not (command.startswith('/targetexact ') and
                      _NPC_NAME.fullmatch(command[len('/targetexact '):]))):
             raise ValueError('Only verified quest-targeting and fixed quest API commands are allowed')
@@ -124,6 +136,34 @@ class KeyboardQuestInput:
                 code, shifted = _SPECIAL[letter]
             self._tap(code, shifted=shifted)
         self._tap(_ENTER)
+
+    def learn_verified_talent(self, tree: int, index: int) -> None:
+        """Spend exactly one previously verified class-specific talent point."""
+        if not (type(tree) is int and 1 <= tree <= 3 and
+                type(index) is int and 1 <= index <= 45):
+            raise ValueError('Invalid talent tree or index')
+        self.chat(f'/run LearnTalent({tree},{index})')
+
+    def cast_action_spell(self, snapshot: ClientTelemetry, spell_id: int) -> None:
+        """One verified normal keypress for an observed, ready spell action."""
+        matching = [a for a in snapshot.action_spells
+                    if a.spell_id == spell_id and a.usable and
+                    a.cooldown_ms == 0 and a.in_range is True]
+        if len(matching) != 1:
+            raise LiveControlError('Spell not uniquely verified and ready on the hotbar')
+        self._tap(_DIGITS[matching[0].key])
+
+    def place_book_spell(self, book_index: int, slot: int) -> None:
+        """Move one verified spellbook action into a verified empty digit slot.
+
+        The calling controller checks live slot and spellbook identity both
+        before and after this one-shot keyboard action.
+        """
+        if not (type(book_index) is int and 1 <= book_index <= 500 and
+                type(slot) is int and 1 <= slot <= 10):
+            raise ValueError('Invalid spellbook/empty action slot identity')
+        self.chat(f'/run PickupSpell({book_index},BOOKTYPE_SPELL);'
+                  f'PlaceAction({slot});ClearCursor()')
 
     def cast_fireball(self, snapshot: ClientTelemetry) -> None:
         """Use a fast bound bar key only when live addon verified Fireball there.

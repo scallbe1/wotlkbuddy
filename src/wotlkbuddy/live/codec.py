@@ -170,6 +170,39 @@ class CombatTarget:
 
 
 @dataclass(frozen=True)
+class ActionSpell:
+    """One live spell on a confirmed digit-bound main action button."""
+    slot: int
+    spell_id: int
+    name: str
+    usable: bool
+    in_range: bool | None
+    cooldown_ms: int
+
+    @property
+    def key(self) -> str:
+        return '0' if self.slot == 10 else str(self.slot)
+
+
+@dataclass(frozen=True)
+class TalentProbe:
+    tree: int
+    index: int
+    rank: int
+    max_rank: int
+    learnable: bool | None
+    name: str
+
+
+@dataclass(frozen=True)
+class SpellBookProbe:
+    """One requested learned spell's verified book index and ID."""
+    book_index: int
+    spell_id: int
+    name: str
+
+
+@dataclass(frozen=True)
 class MageBuffState:
     knows_intellect: bool | None
     intellect_active: bool
@@ -268,6 +301,14 @@ class ClientTelemetry:
     merchant_open: bool = False
     merchant_scan_complete: bool = False
     merchant_items: tuple[MerchantItem, ...] = ()
+    current_cast_name: str | None = None
+    current_cast_remaining_ms: int | None = None
+    player_auras: tuple[str, ...] = ()
+    target_auras: tuple[str, ...] = ()
+    action_spells: tuple[ActionSpell, ...] = ()
+    empty_action_slot: int | None = None
+    spellbook_probe: SpellBookProbe | None = None
+    talent_probe: TalentProbe | None = None
     fireball_key: str | None = None
     fireball_cast_remaining_ms: int | None = None
     mouse_world_name: str | None = None
@@ -307,6 +348,14 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     merchant_scan_complete = False
     merchant_count = 0
     merchant_items: dict[tuple[int, int], MerchantItem] = {}
+    current_cast_name = None
+    current_cast_remaining_ms = None
+    player_auras: list[str] = []
+    target_auras: list[str] = []
+    action_spells: dict[int, ActionSpell] = {}
+    empty_action_slot = None
+    spellbook_probe = None
+    talent_probe = None
     fireball_record_seen = False
     fireball_key = None
     fireball_cast_remaining_ms = None
@@ -453,6 +502,79 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             fireball_record_seen = True
             fireball_key = parts[1] if parts[1] != '-' else None
             fireball_cast_remaining_ms = remaining if remaining >= 0 else None
+        elif parts[0] == 'CT':
+            if len(parts) != 3 or current_cast_name is not None or (
+                    not parts[1] or len(parts[1]) > 44):
+                raise TelemetryError('Invalid or duplicate current cast row')
+            try:
+                remaining = int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Invalid cast timer') from exc
+            if not 0 <= remaining <= 20000:
+                raise TelemetryError('Current cast timer out of range')
+            current_cast_name = parts[1]
+            current_cast_remaining_ms = remaining
+        elif parts[0] in ('AP', 'AT'):
+            if len(parts) != 2 or not parts[1] or len(parts[1]) > 44:
+                raise TelemetryError('Invalid aura observation')
+            target_list = player_auras if parts[0] == 'AP' else target_auras
+            if len(target_list) >= 12 or parts[1] in target_list:
+                raise TelemetryError('Duplicate or excessive aura observation')
+            target_list.append(parts[1])
+        elif parts[0] == 'AS':
+            if len(parts) != 7:
+                raise TelemetryError('Malformed action spell record')
+            try:
+                slot, spell_id = int(parts[1]), int(parts[2])
+                cooldown = int(parts[6])
+            except ValueError as exc:
+                raise TelemetryError('Invalid action spell numbers') from exc
+            if (not 1 <= slot <= 10 or slot in action_spells or
+                    not 1 <= spell_id < 2**31 or not parts[3] or
+                    len(parts[3]) > 44 or
+                    parts[4] not in ('0','1') or
+                    parts[5] not in ('-1','0','1') or
+                    not 0 <= cooldown <= 300000):
+                raise TelemetryError('Invalid or duplicate bound spell action')
+            action_spells[slot] = ActionSpell(
+                slot, spell_id, parts[3], parts[4] == '1',
+                None if parts[5] == '-1' else parts[5] == '1', cooldown)
+        elif parts[0] == 'ES':
+            if len(parts) != 2 or empty_action_slot is not None:
+                raise TelemetryError('Invalid or duplicate empty action slot')
+            try:
+                slot = int(parts[1])
+            except ValueError as exc:
+                raise TelemetryError('Invalid empty action slot') from exc
+            if not 1 <= slot <= 10:
+                raise TelemetryError('Empty action slot out of range')
+            empty_action_slot = slot
+        elif parts[0] == 'SF':
+            if len(parts) != 4 or spellbook_probe is not None:
+                raise TelemetryError('Invalid or duplicate spellbook probe')
+            try:
+                index, spell_id = int(parts[1]), int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Invalid spellbook probe numbers') from exc
+            if (not 1 <= index <= 500 or not 1 <= spell_id < 2**31 or
+                    not parts[3] or len(parts[3]) > 48):
+                raise TelemetryError('Invalid spellbook probe')
+            spellbook_probe = SpellBookProbe(index,spell_id,parts[3])
+        elif parts[0] == 'TL':
+            if len(parts) != 7 or talent_probe is not None or (
+                    parts[5] not in ('-1','0','1')):
+                raise TelemetryError('Invalid or duplicate talent probe')
+            try:
+                tree, index, rank, maximum = map(int,parts[1:5])
+            except ValueError as exc:
+                raise TelemetryError('Invalid talent probe numbers') from exc
+            if (not 1 <= tree <= 3 or not 1 <= index <= 45 or
+                    not 0 <= rank <= maximum <= 5 or
+                    not parts[6] or len(parts[6]) > 48):
+                raise TelemetryError('Invalid talent index/rank/name')
+            talent_probe = TalentProbe(
+                tree,index,rank,maximum,
+                None if parts[5] == '-1' else parts[5] == '1',parts[6])
         elif parts[0] == 'M':
             if (len(parts) != 3 or merchant_seen or
                     parts[1] not in ('0', '1')):
@@ -674,6 +796,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             raise TelemetryError('Unexpected record type: ' + parts[0])
     if player is None:
         raise TelemetryError('Missing player record')
+    if empty_action_slot in action_spells:
+        raise TelemetryError('Action slot both empty and occupied')
     if trainer_seen and len(trainer_services) != trainer_count:
         raise TelemetryError('Incomplete trainer service list')
     if merchant_seen and merchant_scan_complete and (
@@ -728,6 +852,15 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            merchant_scan_complete=merchant_scan_complete,
                            merchant_items=tuple(
                                merchant_items[k] for k in sorted(merchant_items)),
+                           current_cast_name=current_cast_name,
+                           current_cast_remaining_ms=current_cast_remaining_ms,
+                           player_auras=tuple(player_auras),
+                           target_auras=tuple(target_auras),
+                           action_spells=tuple(action_spells[i]
+                               for i in sorted(action_spells)),
+                           empty_action_slot=empty_action_slot,
+                           spellbook_probe=spellbook_probe,
+                           talent_probe=talent_probe,
                            fireball_key=fireball_key,
                            fireball_cast_remaining_ms=fireball_cast_remaining_ms,
                            mouse_world_name=mouse_world_name,

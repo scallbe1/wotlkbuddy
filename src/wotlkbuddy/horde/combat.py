@@ -527,23 +527,39 @@ def hunt_kill_objectives(
             if s.resources.mana < 20:
                 raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
             previous_health = t.health
-            verified_key = s.fireball_key
-            fast_cast = getattr(driver, 'cast_fireball', None)
-            if callable(fast_cast):
-                fast_cast(s)
-                if verified_key is not None:
-                    log(f'Casting Fireball using verified bound action key '
-                        f'{verified_key} (no chat command)')
+            # Class-aware action policy: select the strongest suitable
+            # learned/ready spell whose actual hotbar binding and range were
+            # observed. This does not hardcode a particular quest or rank.
+            from wotlkbuddy.combat.runtime import selected_action
+            action = selected_action(s)
+            cast_action = getattr(driver, 'cast_action_spell', None)
+            if action is not None and callable(cast_action):
+                cast_action(s, action.spell_id)
+                log(f'Casting {action.name} ({action.spell_id}) with verified '
+                    f'action key {action.key}; no chat command')
             else:
-                driver.chat('/cast Fireball')
+                verified_key = s.fireball_key
+                fast_cast = getattr(driver, 'cast_fireball', None)
+                if callable(fast_cast):
+                    fast_cast(s)
+                    if verified_key is not None:
+                        log(f'Casting Fireball using verified bound action key '
+                            f'{verified_key} (no chat command)')
+                else:
+                    driver.chat('/cast Fireball')
             # Observe the actual client cast timer. A low-rank Fireball can
             # finish casting long before the old fixed 2.65 s delay, and its
             # projectile may still be travelling. Resume on cast completion,
             # not projectile impact; WoW itself handles spell queue/GCD.
             during = fresh(s, .55)
-            if during.fireball_cast_remaining_ms is not None:
+            observed_cast_ms = (
+                during.current_cast_remaining_ms
+                if action is not None and
+                   during.current_cast_name == action.name
+                else during.fireball_cast_remaining_ms)
+            if observed_cast_ms is not None:
                 wait_cast = min(2.5, max(.28,
-                    during.fireball_cast_remaining_ms / 1000.0 + .18))
+                    observed_cast_ms / 1000.0 + .18))
             else:
                 # Old telemetry/client without cast timing: retain the
                 # conservative legacy wait, and no unverified queue input.
