@@ -71,7 +71,7 @@ class Game:
         self.seq=0
         self.time=0.
         self.clicks=0
-        self.used_item=False
+        self.targeting=False
         self.commands=[]
         self.nav=FakeNav()
         self.clicked=False
@@ -83,11 +83,6 @@ class Game:
         self.commands.append(cmd)
         if cmd.startswith('/wbttrack '):
             self.item_id=int(cmd.split()[1])
-        elif cmd=='/run UseItemByName(16333)':
-            assert self.grave and self.remains>0
-            self.used_item=True
-            self.count=1
-            self.remains=0
         elif cmd.startswith('/run LootSlot('):
             raise AssertionError('Autoloot case must not issue LootSlot')
         else:
@@ -96,14 +91,15 @@ class Game:
         self.hover=("Marla's Grave" if self.grave else "Equipment Boxes") if (
             abs(x-.5)<.001 and abs(y-.56)<.001) else ''
     def right_click(self):
-        assert self.hover and not self.grave
+        assert self.hover
         self.clicks+=1
         self.count+=1
+        if self.grave:
+            assert self.remains>0
+            self.remains=0
         self.hover=''
     def left_click(self):
-        assert self.hover and self.grave
-        self.clicks+=1
-        self.count+=1
+        raise AssertionError('No ground-target click requested in verified GO flow')
     def world_position(self,s):
         return 77,WorldPosition(s.player.guid,0,*(
             PLAYER.x,PLAYER.y,PLAYER.z),0.,30)
@@ -131,7 +127,7 @@ class Game:
                        tracked_item_name=(
                            "Samuel's Remains" if self.grave else
                            'Scavenged Goods') if self.item_id else None,
-                       mouse_world_name=self.hover,spell_targeting=False)
+                       mouse_world_name=self.hover,spell_targeting=self.targeting)
     def run(self):
         p=profile()
         goal=next_active_gameobject_quest(p,self.capture(),map_id=0)
@@ -185,8 +181,17 @@ class GameObjectQuestTests(unittest.TestCase):
         report=game.run()
         self.assertTrue(report.objectives_complete)
         self.assertEqual(report.interactions,1)
-        self.assertIn('/run UseItemByName(16333)',game.commands)
+        self.assertNotIn('/run UseItemByName(16333)',game.commands)
+        self.assertEqual(game.clicks,1)
+        self.assertEqual(game.remains,0)
+
+    def test_grave_rejects_unexpected_ground_target_cursor(self):
+        game=Game(grave=True)
+        game.targeting=True
+        with self.assertRaisesRegex(LiveControlError,'spell-targeting cursor'):
+            game.run()
         self.assertEqual(game.clicks,0)
+        self.assertNotIn('/run UseItemByName(16333)',game.commands)
 
     def test_grave_without_samuel_remains_is_blocked_without_click(self):
         game=Game(grave=True,remains=0)
