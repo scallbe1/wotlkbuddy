@@ -82,7 +82,9 @@ class CorpseLootProximityTests(unittest.TestCase):
         outcome,notes=run(game)
         self.assertTrue(outcome.objectives_complete)
         self.assertEqual(outcome.targets_defeated,2)
-        self.assertEqual(len(game.routes),2)
+        # First corpse needs a short approach; after that, the second
+        # pulled spider dies within loot range so it needs NO new route.
+        self.assertEqual(len(game.routes),1)
         for legs,options in game.routes:
             self.assertAlmostEqual(legs[-1].x,4.9,places=2)
             self.assertGreater(7.5-legs[-1].x,2.5)
