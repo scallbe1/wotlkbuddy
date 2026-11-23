@@ -295,117 +295,6 @@ local function tickData()
         end
     end
     appendLine(table.concat({'F', fireballKey, tostring(remaining)}, '\t'))
-    -- Generic spell action observations: verified key, ID, cooldown, range.
-    local freeAction = 0
-    if GetActionInfo and GetBindingKey then
-        for slot = 1, 10 do
-            local key = slot == 10 and '0' or tostring(slot)
-            if GetBindingKey('ACTIONBUTTON' .. tostring(slot)) == key then
-                local kind, id = GetActionInfo(slot)
-                if not kind and freeAction == 0 then
-                    freeAction = slot
-                elseif kind == 'spell' and type(id) == 'number' and GetSpellInfo then
-                    local name = GetSpellInfo(id)
-                    if type(name) == 'string' and name ~= '' then
-                        local usable = IsUsableAction and IsUsableAction(slot) and 1 or 0
-                        local inRange = IsActionInRange and IsActionInRange(slot)
-                        local range = inRange == nil and -1 or (inRange == 1 and 1 or 0)
-                        local cooldown = 0
-                        if GetActionCooldown then
-                            local start, duration, enabled = GetActionCooldown(slot)
-                            if enabled == 1 and type(start) == 'number' and
-                                    type(duration) == 'number' then
-                                cooldown = math.max(0, math.min(300000,
-                                    math.floor(1000*(start+duration-GetTime()))))
-                            end
-                        end
-                        local record = table.concat({'AS', tostring(slot),
-                            tostring(id), safe(name, 44), tostring(usable),
-                            tostring(range), tostring(cooldown)}, '\t')
-                        if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
-                            appendLine(record)
-                        end
-                    end
-                end
-            end
-        end
-    end
-    if freeAction > 0 then
-        local record = 'ES\t' .. tostring(freeAction)
-        if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
-            appendLine(record)
-        end
-    end
-    if observedAbilityName ~= '' and GetNumSpellTabs and GetSpellTabInfo and
-            GetSpellName and GetSpellBookItemInfo then
-        local bookIndex, spellId = 0, 0
-        for tab = 1, GetNumSpellTabs() do
-            local _, _, offset, count = GetSpellTabInfo(tab)
-            for i = (offset or 0)+1, (offset or 0)+(count or 0) do
-                local name = GetSpellName(i, BOOKTYPE_SPELL)
-                if name == observedAbilityName then
-                    local kind, id = GetSpellBookItemInfo(i, BOOKTYPE_SPELL)
-                    if kind == 'SPELL' and type(id) == 'number' then
-                        bookIndex, spellId = i, id
-                    end
-                end
-            end
-        end
-        if bookIndex > 0 then
-            local record = table.concat({'SF', tostring(bookIndex),
-                tostring(spellId), safe(observedAbilityName, 48)}, '\t')
-            if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
-                appendLine(record)
-            end
-        end
-    end
-    -- One controller-requested talent, resolved by *name* to the real
-    -- tree/index on this 3.3.5a client. The addon NEVER spends points.
-    if observedTalentName ~= '' and GetNumTalentTabs and
-            GetNumTalents and GetTalentInfo then
-        local found = false
-        for tree = 1, GetNumTalentTabs() do
-            for index = 1, GetNumTalents(tree) do
-                local name, _, _, _, rank, maximum, _, learnable =
-                    GetTalentInfo(tree,index)
-                if name == observedTalentName and type(rank) == 'number' and
-                        type(maximum) == 'number' and maximum > 0 then
-                    local can = learnable == nil and -1 or (learnable and 1 or 0)
-                    local row = table.concat({'TL',tostring(tree),
-                        tostring(index),tostring(rank),tostring(maximum),
-                        tostring(can),safe(name,48)}, '\t')
-                    if payloadBytes + string.len(row) + 1 <= CAPACITY - 20 then
-                        appendLine(row)
-                    end
-                    found = true
-                    break
-                end
-            end
-            if found then break end
-        end
-    end
-    -- Generic cast and aura state, shared by all combat classes. These
-    -- are observations only; the controller performs class-specific policy.
-    local castName, _, _, _, _, castEnd = UnitCastingInfo('player')
-    if type(castName) == 'string' and type(castEnd) == 'number' then
-        local ms = math.max(0, math.min(20000, math.floor(castEnd-GetTime()*1000)))
-        local record = table.concat({'CT', safe(castName,44),tostring(ms)}, '\t')
-        if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
-            appendLine(record)
-        end
-    end
-    for _, aura in ipairs({{'player','AP',UnitBuff}, {'target','AT',UnitDebuff}}) do
-        if aura[3] and UnitExists(aura[1]) then
-            for index = 1, 12 do
-                local name = aura[3](aura[1], index)
-                if not name then break end
-                local record = table.concat({aura[2],safe(name,44)}, '\t')
-                if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
-                    appendLine(record)
-                end
-            end
-        end
-    end
     local lootCount = 0
     if LootFrame and LootFrame:IsShown() and GetNumLootItems then
         lootCount = math.min(GetNumLootItems() or 0, 16)
@@ -820,6 +709,119 @@ local function tickData()
         if payloadBytes + needed <= CAPACITY - 20 then
             appendLine(table.concat({'N','1',tostring(#services)}, '\t'))
             for _, row in ipairs(services) do appendLine(row) end
+        end
+    end
+    -- Optional combat extensions are emitted last so quest progress,
+    -- trainer, loot and completion telemetry take precedence in full frames.
+    -- Generic spell action observations: verified key, ID, cooldown, range.
+    local freeAction = 0
+    if GetActionInfo and GetBindingKey then
+        for slot = 1, 10 do
+            local key = slot == 10 and '0' or tostring(slot)
+            if GetBindingKey('ACTIONBUTTON' .. tostring(slot)) == key then
+                local kind, id = GetActionInfo(slot)
+                if not kind and freeAction == 0 then
+                    freeAction = slot
+                elseif kind == 'spell' and type(id) == 'number' and GetSpellInfo then
+                    local name = GetSpellInfo(id)
+                    if type(name) == 'string' and name ~= '' then
+                        local usable = IsUsableAction and IsUsableAction(slot) and 1 or 0
+                        local inRange = IsActionInRange and IsActionInRange(slot)
+                        local range = inRange == nil and -1 or (inRange == 1 and 1 or 0)
+                        local cooldown = 0
+                        if GetActionCooldown then
+                            local start, duration, enabled = GetActionCooldown(slot)
+                            if enabled == 1 and type(start) == 'number' and
+                                    type(duration) == 'number' then
+                                cooldown = math.max(0, math.min(300000,
+                                    math.floor(1000*(start+duration-GetTime()))))
+                            end
+                        end
+                        local record = table.concat({'AS', tostring(slot),
+                            tostring(id), safe(name, 44), tostring(usable),
+                            tostring(range), tostring(cooldown)}, '\t')
+                        if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
+                            appendLine(record)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if freeAction > 0 then
+        local record = 'ES\t' .. tostring(freeAction)
+        if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
+            appendLine(record)
+        end
+    end
+    if observedAbilityName ~= '' and GetNumSpellTabs and GetSpellTabInfo and
+            GetSpellName and GetSpellBookItemInfo then
+        local bookIndex, spellId = 0, 0
+        for tab = 1, GetNumSpellTabs() do
+            local _, _, offset, count = GetSpellTabInfo(tab)
+            for i = (offset or 0)+1, (offset or 0)+(count or 0) do
+                local name = GetSpellName(i, BOOKTYPE_SPELL)
+                if name == observedAbilityName then
+                    local kind, id = GetSpellBookItemInfo(i, BOOKTYPE_SPELL)
+                    if kind == 'SPELL' and type(id) == 'number' then
+                        bookIndex, spellId = i, id
+                    end
+                end
+            end
+        end
+        if bookIndex > 0 then
+            local record = table.concat({'SF', tostring(bookIndex),
+                tostring(spellId), safe(observedAbilityName, 48)}, '\t')
+            if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
+                appendLine(record)
+            end
+        end
+    end
+    -- One controller-requested talent, resolved by *name* to the real
+    -- tree/index on this 3.3.5a client. The addon NEVER spends points.
+    if observedTalentName ~= '' and GetNumTalentTabs and
+            GetNumTalents and GetTalentInfo then
+        local found = false
+        for tree = 1, GetNumTalentTabs() do
+            for index = 1, GetNumTalents(tree) do
+                local name, _, _, _, rank, maximum, _, learnable =
+                    GetTalentInfo(tree,index)
+                if name == observedTalentName and type(rank) == 'number' and
+                        type(maximum) == 'number' and maximum > 0 then
+                    local can = learnable == nil and -1 or (learnable and 1 or 0)
+                    local row = table.concat({'TL',tostring(tree),
+                        tostring(index),tostring(rank),tostring(maximum),
+                        tostring(can),safe(name,48)}, '\t')
+                    if payloadBytes + string.len(row) + 1 <= CAPACITY - 20 then
+                        appendLine(row)
+                    end
+                    found = true
+                    break
+                end
+            end
+            if found then break end
+        end
+    end
+    -- Generic cast and aura state, shared by all combat classes. These
+    -- are observations only; the controller performs class-specific policy.
+    local castName, _, _, _, _, castEnd = UnitCastingInfo('player')
+    if type(castName) == 'string' and type(castEnd) == 'number' then
+        local ms = math.max(0, math.min(20000, math.floor(castEnd-GetTime()*1000)))
+        local record = table.concat({'CT', safe(castName,44),tostring(ms)}, '\t')
+        if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
+            appendLine(record)
+        end
+    end
+    for _, aura in ipairs({{'player','AP',UnitBuff}, {'target','AT',UnitDebuff}}) do
+        if aura[3] and UnitExists(aura[1]) then
+            for index = 1, 12 do
+                local name = aura[3](aura[1], index)
+                if not name then break end
+                local record = table.concat({aura[2],safe(name,44)}, '\t')
+                if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
+                    appendLine(record)
+                end
+            end
         end
     end
     if isTruncated then table.insert(lines, 'E\tTRUNCATED') end
