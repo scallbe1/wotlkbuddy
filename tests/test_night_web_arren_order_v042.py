@@ -67,6 +67,27 @@ class ArrenQuestOrderTests(unittest.TestCase):
             origin=ORIGIN,map_id=0)
         self.assertEqual(givers,())
 
+    def test_missing_journal_is_not_proof_prior_turnin_happened(self):
+        # Regression for incomplete addon journal telemetry: the physical
+        # NPC may still open a quest progress screen for active 380.
+        state=snap(quests=(),quest_completions=())
+        givers=nearby_profile_quest_givers(
+            profile=arrens_profile(),telemetry=state,
+            spawns=Db({1570:(Vec3(101,200,30),)}),
+            origin=ORIGIN,map_id=0)
+        # Initial quest 380 can legitimately be offered, but quest 381
+        # cannot be independently inferred from a missing journal row.
+        self.assertEqual(len(givers),1)
+        self.assertEqual(givers[0].entry,1570)
+        # A second profile without the initial pickup must NOT visit Arren
+        # just to ask for the later 381 before 380 is server-complete.
+        p=arrens_profile()
+        altered=replace(p,steps=p.steps[1:])
+        self.assertEqual(nearby_profile_quest_givers(
+            profile=altered,telemetry=state,
+            spawns=Db({1570:(Vec3(101,200,30),)}),
+            origin=ORIGIN,map_id=0),())
+
     def test_next_arren_offer_allowed_only_after_server_turnin(self):
         state=snap(quests=(),quest_completions=((380,True),))
         givers=nearby_profile_quest_givers(
