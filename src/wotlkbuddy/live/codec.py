@@ -165,6 +165,7 @@ class CombatTarget:
     dead: bool
     attackable: bool
     fireball_in_range: bool | None
+    attacks_player: bool | None = None  # verified target-of-target GUID, new addon only
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,22 @@ class MageBuffState:
     knows_frost_armor: bool | None
     armor_active: bool
     knows_fireball: bool | None
+
+
+
+@dataclass(frozen=True)
+class MageSupplies:
+    """Read-only conjured consumables, spell knowledge and exact bag locations."""
+    knows_conjure_food: bool | None
+    knows_conjure_water: bool | None
+    food_count: int
+    water_count: int
+    food_bag: int
+    food_slot: int
+    food_item_id: int
+    water_bag: int
+    water_slot: int
+    water_item_id: int
 
 
 @dataclass(frozen=True)
@@ -233,6 +250,7 @@ class ClientTelemetry:
     available_quest_menu: tuple[AvailableQuestOption, ...] = ()  # quest pickup options
     combat_target: CombatTarget | None = None
     mage_buffs: MageBuffState | None = None
+    mage_supplies: MageSupplies | None = None
     loot_count: int | None = None
     loot_open: bool | None = None
     tracked_item_id: int | None = None
@@ -268,6 +286,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     available: dict[tuple[str, int], AvailableQuestOption] = {}
     target = None
     buffs = None
+    supplies = None
     loot_count = None
     loot_open = None
     tracked_item_id = None
@@ -348,17 +367,21 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise TelemetryError('Invalid resource values')
             resources = PlayerResources(*values, *(parts[8:] if len(parts) == 10 else ()))
         elif parts[0] == 'T':
-            if len(parts) != 7 or target is not None:
+            if len(parts) not in (7, 8) or target is not None:
                 raise TelemetryError('Invalid or duplicate combat target')
             try:
                 entry, hp, maximum = map(int, parts[1:4])
                 if parts[4] not in ('0','1') or parts[5] not in ('0','1') or \
-                        parts[6] not in ('-1','0','1') or not 0 <= entry < 2**24 or \
+                        parts[6] not in ('-1','0','1') or \
+                        (len(parts) == 8 and parts[7] not in ('-1','0','1')) or \
+                        not 0 <= entry < 2**24 or \
                         not 0 <= hp <= maximum or maximum < 0:
                     raise ValueError('Invalid target record')
                 target = CombatTarget(entry, hp, maximum, parts[4] == '1',
                                       parts[5] == '1',
-                                      None if parts[6] == '-1' else parts[6] == '1')
+                                      None if parts[6] == '-1' else parts[6] == '1',
+                                      None if len(parts) == 7 or parts[7] == '-1'
+                                      else parts[7] == '1')
             except ValueError as exc:
                 raise TelemetryError('Malformed combat target') from exc
         elif parts[0] == 'B':
@@ -369,6 +392,29 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 return None if value == '-1' else value == '1'
             buffs = MageBuffState(known(parts[1]), parts[2] == '1',
                                   known(parts[3]), parts[4] == '1', known(parts[5]))
+        elif parts[0] == 'X':
+            if len(parts) != 11 or supplies is not None or any(
+                    flag not in ('-1','0','1') for flag in parts[1:3]):
+                raise TelemetryError('Invalid or duplicate Mage supplies record')
+            try:
+                counts = list(map(int, parts[3:]))
+            except ValueError as exc:
+                raise TelemetryError('Malformed Mage supplies record') from exc
+            food_count, water_count, fb, fs, fid, wb, ws, wid = counts
+            def valid_location(count, bag, slot, item_id):
+                if not 0 <= count <= 5000:
+                    return False
+                if count == 0:
+                    return bag == -1 and slot == 0 and item_id == 0
+                return (0 <= bag <= 4 and 1 <= slot <= 36
+                        and 1 <= item_id <= 999999)
+            if not (valid_location(food_count, fb, fs, fid) and
+                    valid_location(water_count, wb, ws, wid)):
+                raise TelemetryError('Invalid Mage consumable bag slot or count')
+            def flag(value):
+                return None if value == '-1' else value == '1'
+            supplies = MageSupplies(flag(parts[1]), flag(parts[2]),
+                                    *counts)
         elif parts[0] == 'J':
             if (len(parts) not in (3, 4) or tracked_item_id is not None
                     or not parts[1].isdigit() or not parts[2].isdigit()):
@@ -661,6 +707,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            quest_menu=tuple(menu.values()),
                            available_quest_menu=tuple(available.values()),
                            combat_target=target, mage_buffs=buffs,
+                           mage_supplies=supplies,
                            loot_count=loot_count, loot_open=loot_open,
                            tracked_item_id=tracked_item_id,
                            tracked_item_count=tracked_item_count,
