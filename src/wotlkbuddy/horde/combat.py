@@ -213,6 +213,7 @@ def hunt_kill_objectives(
     collected_results: dict[int, tuple[int, int]] = {}
     known_item_names: dict[int, str] = {}
     stalled_guids: set[str] = set()
+    stalled_positions: list[Vec3] = []
     stalled_targets = 0
 
     def guard(s: ClientTelemetry) -> None:
@@ -442,6 +443,7 @@ def hunt_kill_objectives(
         target_guid = s.player.target_guid
         log(f'Engaging verified creature entry {expected}, GUID {target_guid}')
         unchanged = 0
+        vantage_attempts = 0
         for _ in range(18):
             guard(s)
             t = s.combat_target
@@ -481,7 +483,7 @@ def hunt_kill_objectives(
                 wait_cast = 2.1
             s = fresh(during, wait_cast)
             new = s.combat_target
-            if s.player.target_guid != target_guid or new.entry_id != expected:
+            if s.player.target_guid != target_guid or new is None or new.entry_id != expected:
                 if collect_items:
                     # Loot-item credit comes only after opening the corpse,
                     # so kill credit cannot prove death for item collection.
@@ -522,11 +524,68 @@ def hunt_kill_objectives(
                     f'{s.player.target_guid or "<none>"}) without confirmed '
                     'quest kill credit; no further spells sent')
             if not new.dead and new.health >= previous_health:
-                unchanged += 1
+                # Fireball projectile flight is not its casting time. A cast
+                # can end with the same target HP for another 1-3 seconds
+                # before its damage arrives. Do not count a failed cast
+                # before sampling the SAME target over that interval.
+                for _wait in range(3):
+                    s=fresh(s,.80)
+                    new=s.combat_target
+                    if (s.player.target_guid!=target_guid or
+                            new is None or new.entry_id!=expected):
+                        # Only objective-credit increase proves a death after
+                        # an auto-cleared target. No kill is fabricated.
+                        for attempt in range(5):
+                            if quest_credit_advanced(s):
+                                kills+=1
+                                last_target=expected
+                                log('Delayed Fireball credited quest kill '
+                                    'after target disappeared')
+                                return s
+                            if attempt<4:
+                                s=fresh(s,.75)
+                        raise LiveControlError(
+                            'Lost verified target while waiting for Fireball '
+                            'impact; no objective credit')
+                    if new.dead or new.health < previous_health:
+                        break
+                if new.dead or new.health < previous_health:
+                    unchanged=0
+                    log(f'Delayed Fireball damage confirmed against '
+                        f'{target_guid} (HP {previous_health}->{new.health})')
+                    continue
+                unchanged+=1
+                log(f'Fireball did not change target HP '
+                    f'({previous_health}/{new.max_health}) after projectile '
+                    f'observation, {unchanged} no-damage attempt(s)')
+                if s.player.in_combat:
+                    # The existing navigation follower refuses movement
+                    # during combat. Never walk away from an actual aggro mob
+                    # simply to make the test pass.
+                    if unchanged>=2:
+                        raise LiveControlError(
+                            'Two Fireballs showed no verified HP progress '
+                            'during active combat; cannot safely navigate '
+                            'an attacking enemy')
+                    continue
+                if vantage_attempts < 2:
+                    moved_state,moved=adjust_fireball_vantage(
+                        s,target_guid=target_guid,expected=expected,
+                        candidate_index=vantage_attempts)
+                    vantage_attempts+=1
+                    s=moved_state
+                    if moved:
+                        # No damage credited yet. Recheck the exact GUID and
+                        # attempt one more spell at the new validated vantage.
+                        unchanged=0
+                        continue
+                raise UnresponsiveTargetError(
+                    target_guid,
+                    'No target HP progress after observed Fireball impact, '
+                    'and no further verified safe firing position; '
+                    'may be blocked by LOS/facing')
             else:
-                unchanged = 0
-            if unchanged >= 3:
-                raise LiveControlError('Three Fireballs without target HP progress; stop')
+                unchanged=0
         raise LiveControlError('Exceeded bounded Fireball casts on one target')
 
     def loot(s: ClientTelemetry, corpse: Vec3 | None,
