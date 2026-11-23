@@ -76,6 +76,16 @@ def test_keyboard_spell_placement_refuses_before_typing_or_touching_any_slot():
     assert sent==[]
 
 
+def test_raw_chat_placement_command_is_rejected_before_any_keypress():
+    driver=KeyboardQuestInput.__new__(KeyboardQuestInput)
+    events=[]
+    driver._tap=events.append
+    with pytest.raises(ValueError, match='Only verified quest-targeting'):
+        driver.chat('/run PickupSpell(3,BOOKTYPE_SPELL);'
+                    'PlaceAction(7);ClearCursor()')
+    assert events==[]
+
+
 def test_continuous_cli_does_not_call_hotbar_mutation():
     repo=Path(__file__).resolve().parents[1]
     source=(repo/'src/wotlkbuddy/cli.py').read_text(encoding='utf-8')
