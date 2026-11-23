@@ -1,0 +1,127 @@
+"""Live verified class-aware spell control, inspired by CopilotBuddy's
+separation of quest bot, combat routine and character management.
+
+No CopilotBuddy source or binaries are copied here. A routine selects one
+observed action at a time; the input driver performs only exact keypresses.
+"""
+from __future__ import annotations
+
+from time import sleep as real_sleep
+from typing import Callable
+
+from wotlkbuddy.combat.rotation import (
+    Ability, CombatContext, DEFAULT_ROTATIONS, choose_ability)
+from wotlkbuddy.live.codec import ClientTelemetry
+from wotlkbuddy.live.control import LiveControlError
+
+
+def selected_action(snapshot: ClientTelemetry) -> Ability | None:
+    """Select a ready, ranged, class-appropriate spell from live action slots."""
+    if (snapshot.truncated or snapshot.player.dead or
+            snapshot.resources is None or snapshot.combat_target is None):
+        return None
+    cls = snapshot.resources.class_token.upper()
+    rotation = DEFAULT_ROTATIONS.get(cls)
+    target = snapshot.combat_target
+    if rotation is None or target.max_health <= 0:
+        return None
+    observed = tuple(Ability(
+        spell_id=spell.spell_id, name=spell.name, key=spell.key,
+        cooldown_ms=spell.cooldown_ms, usable=spell.usable,
+        in_range=spell.in_range)
+        for spell in snapshot.action_spells)
+    ctx = CombatContext(
+        class_token=cls,
+        health_fraction=snapshot.player.health/max(1,snapshot.player.max_health),
+        mana=snapshot.resources.mana,
+        mana_fraction=snapshot.resources.mana/max(1,snapshot.resources.max_mana),
+        target_health_fraction=target.health/max(1,target.max_health),
+        target_is_hostile=target.attackable and
+            target.reaction is not None and 1 <= target.reaction <= 3,
+        target_alive=not target.dead and target.health>0,
+        player_alive=not snapshot.player.dead,
+        is_casting=(snapshot.current_cast_remaining_ms is not None and
+                    snapshot.current_cast_remaining_ms > 0),
+        buffs=frozenset(snapshot.player_auras),
+        target_debuffs=frozenset(snapshot.target_auras))
+    return choose_ability(rotation,observed,ctx)
+
+
+def provision_rotation_hotbar(
+    *, capture: Callable[[], ClientTelemetry], driver,
+    sleep: Callable[[float], None] = real_sleep,
+    log: Callable[[str], None] = lambda _: None,
+    max_actions: int = 4,
+) -> tuple[str,...]:
+    """Populate a few empty verified digit-bound slots from the real spellbook.
+
+    Never overwrite an existing slot. No in-combat changes. Every requested
+    spellbook index and resulting hotkey must be independently verified.
+    If the updated addon or spellbook API is unavailable, leave the bar alone.
+    """
+    if not 0 <= max_actions <= 10:
+        raise ValueError('Invalid hotbar provision limit')
+    first=capture()
+    if (first.truncated or not first.player.guid or first.player.dead or
+            first.player.in_combat or first.resources is None or
+            driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+        raise LiveControlError('Living out-of-combat player required for hotbar setup')
+    rotation=DEFAULT_ROTATIONS.get(first.resources.class_token.upper())
+    if rotation is None:
+        return ()
+    if not callable(getattr(driver,'place_book_spell',None)):
+        return ()
+    added=[]
+    guid=first.player.guid
+    for rule in sorted(rotation.rules, key=lambda r:r.priority):
+        if len(added)>=max_actions:
+            break
+        state=capture()
+        if (state.truncated or state.player.guid!=guid or state.player.dead or
+                state.player.in_combat or state.resources is None or
+                state.resources.class_token!=first.resources.class_token or
+                driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+            raise LiveControlError('Character changed during hotbar setup')
+        if any(a.name==rule.spell_name for a in state.action_spells):
+            continue
+        if state.empty_action_slot is None:
+            break
+        # The addon resolves an exact named spell to its real highest-rank
+        # book index; Python never guesses a spellbook position or action.
+        driver.chat('/wbtability '+rule.spell_name)
+        sleep(.65)
+        probe=capture()
+        if (probe.truncated or probe.player.guid!=guid or probe.player.dead or
+                probe.player.in_combat or
+                probe.empty_action_slot!=state.empty_action_slot or
+                any(a.slot==state.empty_action_slot for a in probe.action_spells)):
+            raise LiveControlError('Hotbar changed during spellbook probe')
+        book=probe.spellbook_probe
+        if book is None or book.name!=rule.spell_name:
+            continue  # Spell not learned or absent on this server.
+        # Confirm a second advancing observation before modifying a slot.
+        sleep(.6)
+        confirm=capture()
+        if (confirm.sequence==probe.sequence or confirm.player.guid!=guid or
+                confirm.spellbook_probe!=book or
+                confirm.empty_action_slot!=probe.empty_action_slot):
+            raise LiveControlError('Spellbook or empty slot changed during verification')
+        driver.place_book_spell(book.book_index,probe.empty_action_slot)
+        key='0' if probe.empty_action_slot==10 else str(probe.empty_action_slot)
+        verified=False
+        for _ in range(8):
+            sleep(.55)
+            after=capture()
+            if (after.truncated or after.player.guid!=guid or
+                    after.player.dead or after.player.in_combat):
+                raise LiveControlError('Player state changed after hotbar placement')
+            if any(a.name==book.name and a.spell_id==book.spell_id and
+                   a.key==key for a in after.action_spells):
+                verified=True
+                break
+        if not verified:
+            raise LiveControlError(
+                'Spell hotbar placement not confirmed by live action telemetry')
+        added.append(rule.spell_name)
+        log(f'Assigned verified {rule.spell_name} to hotbar key {key}')
+    return tuple(added)
