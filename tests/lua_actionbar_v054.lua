@@ -3,7 +3,7 @@ local file = assert(io.open('addons/WotLKBuddyTelemetry/WotLKBuddyTelemetry.lua'
 local addon = file:read('*a')
 file:close()
 local helper = assert(addon:match('%-%- BEGIN ACTIONBAR BINDING HELPER\n(.-)\n%-%- END ACTIONBAR BINDING HELPER'))
-local scan = assert(addon:match('%-%- BEGIN ACTIONBAR OBSERVATIONS\n(.-)\n    %-%- END ACTIONBAR OBSERVATIONS'))
+local scan = assert(addon:match('%-%- BEGIN ACTIONBAR OBSERVATIONS\n(.-)\n    %-%- BEGIN ACTION IDENTITY TELEMETRY'))
 local load = assert(loadstring(helper .. '\nlocal rows={}\nlocal function appendLine(row) table.insert(rows,row) end\n' ..
                          scan .. '\nreturn rows'))
 
@@ -28,7 +28,7 @@ function safe(value,limit)
     return string.sub(tostring(value),1,limit)
 end
 
--- This old regression isolates the actionbar inventory block; its new AX\n-- diagnostics belong to the separate v056 identity audit test.\nfunction auditActionIdentity() return '', '', 0, '-1', '-1' end\n\nlocal function has(rows,expected)
+local function has(rows,expected)
     for _,row in ipairs(rows) do
         if row == expected then return true end
     end
