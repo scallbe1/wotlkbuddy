@@ -66,10 +66,21 @@ def nearby_profile_quest_givers(
             names.setdefault(step.entry, set()).add(step.npc_name)
     results: list[NpcDestination] = []
     seen: set[int] = set()
-    for step in profile.steps:
+    for index, step in enumerate(profile.steps):
         if (step.kind != 'pickup' or not step.supported or step.entry <= 0
                 or step.quest_id in in_journal or step.quest_id in completed
                 or step.entry in seen):
+            continue
+        # QuestOrder is sequential when an NPC gives a follow-up quest.
+        # A subsequent pickup cannot be attempted at the same NPC while
+        # an earlier profile turn-in is still in the active journal.
+        # E.g. Executor Arren: Night Web's Hollow (380) must be handed in
+        # before The Scarlet Crusade (381) can be picked up. Previously we
+        # travelled to Arren, opened the unfinished progress panel and left.
+        if any(prior.kind == 'turnin' and prior.entry == step.entry
+               and prior.quest_id in in_journal
+               and prior.quest_id not in completed
+               for prior in profile.steps[:index]):
             continue
         checks = [condition_value(
             expr, level=telemetry.player.level, race='Undead',
