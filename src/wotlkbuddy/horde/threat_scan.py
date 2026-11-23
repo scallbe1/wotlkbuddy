@@ -91,10 +91,6 @@ def scan_and_clear_hostiles(
 
     state=initial
     guard(state)
-    if state.resources.mana < 20:
-        # Do not walk into an enemy corridor when there's no mana for defense.
-        raise LiveControlError('Mage lacks minimum mana to clear hostile travel path')
-
     # Enumerate a bounded set of targetable enemies. /targetenemy does NOT
     # determine whether a mob is near or hostile; exact GUID, reaction and
     # measured position must corroborate it. Keep no guessed NPC name list.
@@ -147,6 +143,9 @@ def scan_and_clear_hostiles(
             state=fresh(state)
         return state
 
+    if state.resources.mana < 20:
+        # Only require combat mana if there is a detected red mob ahead.
+        raise LiveControlError('Mage lacks minimum mana to clear hostile travel path')
     candidates.sort()
     distance, chosen_guid, chosen_entry=candidates[0]
     # Reacquire the exact GUID after cycling: never select by ambiguous name.
