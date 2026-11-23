@@ -17,7 +17,8 @@ from wotlkbuddy.horde.profile import HordeProfile, QuestSpec
 from wotlkbuddy.horde.worlddata import (CreatureSpawnDatabase, nearest_objective_spawns)
 from wotlkbuddy.live.codec import ClientTelemetry, QuestRecord
 from wotlkbuddy.live.control import LiveControlError
-from wotlkbuddy.live.world_position import verified_live_position, verified_target_position
+from wotlkbuddy.live.world_position import (
+    WorldPositionError, verified_live_position, verified_target_position)
 from wotlkbuddy.live.world_travel import validate_nav_path, follow_world_path
 
 
