@@ -236,7 +236,8 @@ def _execute_profile_return(*, profile, quest_id, pid, capture, driver,
     return result
 
 
-def _horde_progress(args: argparse.Namespace) -> None:
+def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
+                    _emit_report: bool = True) -> dict:
     """Attended profile-driven quest pickup, Mage training and vendor routing.
 
     All service identities and destinations originate from local Horde XML,
@@ -267,6 +268,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
     from wotlkbuddy.live.world_position import verified_live_position
     from wotlkbuddy.navigation.proxy import NavigationProxy
     from wotlkbuddy.live.control import LiveControlError
+    if args.only == 'continuous':
+        return _horde_continuous(args)
     if not args.enable_input:
         raise ValueError('Post-quest input requires explicit --enable-input')
     if not 2 <= args.countdown <= 20:
@@ -281,8 +284,9 @@ def _horde_progress(args: argparse.Namespace) -> None:
     def log(line):
         print(line, file=sys.stderr, flush=True)
         hud.note(line)
-    log(f'Switch to WoW now; post-quest progression begins in {args.countdown:g}s.')
-    time.sleep(args.countdown)
+    if not _skip_countdown:
+        log(f'Switch to WoW now; post-quest progression begins in {args.countdown:g}s.')
+        time.sleep(args.countdown)
     cap = lambda: capture_monitor(args.monitor)
     first = cap()
     if (first.truncated or first.player.dead or first.player.in_combat or
@@ -637,7 +641,101 @@ def _horde_progress(args: argparse.Namespace) -> None:
         0, final_state.player.level - first.player.level)
     set_native_status('idle')
     hud.set(action='Workflow complete')
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    if _emit_report:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    return report
+
+
+def _horde_continuous(args: argparse.Namespace) -> dict:
+    """Run bounded profile stages until there is no verified next action.
+
+    Each stage uses the existing attended one-shot executor. It rechecks the
+    live journal, server quest completion history, player GUID and profile
+    before deciding on another objective. No guessed quests or raw movement.
+    """
+    from wotlkbuddy.live.control import LiveControlError
+    if not args.enable_input or not 2 <= args.countdown <= 20:
+        raise ValueError('Continuous questing needs armed input and 2..20s countdown')
+    if not 1 <= args.max_cycles <= 250 or not 5 <= args.auto_minutes <= 720:
+        raise ValueError('Invalid continuous progression budgets')
+    print(f'Switch to WoW now; continuous quest progression starts in '
+          f'{args.countdown:g}s.', file=sys.stderr, flush=True)
+    time.sleep(args.countdown)
+    start = time.monotonic()
+    steps = []
+    quest_ids = []
+    accepted_ids = []
+    reason = 'cycle_limit'
+    train_level = -1
+
+    def phase(mode: str) -> dict:
+        child = argparse.Namespace(**vars(args))
+        child.only = mode
+        return _horde_progress(child, _skip_countdown=True, _emit_report=False)
+
+    for cycle in range(args.max_cycles):
+        if time.monotonic()-start >= args.auto_minutes*60:
+            reason = 'time_limit'
+            break
+        print(f'Continuous quest cycle {cycle+1}/{args.max_cycles}: '
+              'refreshing journal and objectives', file=sys.stderr, flush=True)
+        report = phase('objectives')
+        completion = report.get('quest_turnin', {})
+        if completion.get('status') in ('turned_in', 'already_turned_in'):
+            quest_id = completion.get('quest_id')
+            if not isinstance(quest_id, int) or quest_id <= 0:
+                raise LiveControlError('Turn-in result missing verified quest ID')
+            if quest_id in quest_ids:
+                raise LiveControlError('Continuous loop repeated the same quest turn-in')
+            quest_ids.append(quest_id)
+            steps.append({'cycle': cycle+1, 'action': 'turnin', 'quest_id': quest_id})
+            # Equipment upgrades are already handled by the one-shot phase.
+            # Train only when a level changed and a sourced Mage trainer can
+            # be visited. No training is attempted in the middle of combat.
+            level = report.get('character_level_after', 0)
+            if report.get('levels_gained_this_run', 0) and level != train_level:
+                train_level = level
+                print(f'Level {level}: checking verified Mage trainer',
+                      file=sys.stderr, flush=True)
+                try:
+                    training = phase('train')
+                    steps.append({'cycle': cycle+1, 'action': 'train',
+                                  'trained_spells': training.get('trained_spells', ())})
+                except LiveControlError as exc:
+                    # Training is an optional waypoint for quest progress;
+                    # a verified unavailable trainer is not a license to
+                    # guess a different NPC or abandon the active journal.
+                    print(f'Mage training unavailable this cycle: {exc}',
+                          file=sys.stderr, flush=True)
+            continue
+        objective = report.get('active_objective', {})
+        status = objective.get('status')
+        if status not in ('no_supported_objective', None):
+            # e.g. unsupported item source: stop rather than retry forever.
+            reason = 'unsupported_objective:' + str(status)
+            steps.append({'cycle': cycle+1, 'action': 'stop', 'status': status})
+            break
+        offers = phase('quests')
+        newly_accepted = sorted({
+            qid for ids in offers.get('accepted_quests', {}).values()
+            for qid in ids if isinstance(qid, int) and qid > 0
+        })
+        if not newly_accepted:
+            reason = 'no_supported_objectives_or_reachable_quest_offers'
+            break
+        if any(qid in accepted_ids for qid in newly_accepted):
+            raise LiveControlError('Quest pickup repeated an already accepted quest')
+        accepted_ids.extend(newly_accepted)
+        steps.append({'cycle': cycle+1, 'action': 'pickup',
+                      'quest_ids': newly_accepted})
+    result = {
+        'status': reason, 'cycles': len(steps),
+        'quest_ids_turned_in': quest_ids,
+        'quest_ids_accepted': accepted_ids,
+        'steps': steps,
+    }
+    print(json.dumps({'continuous': result}, indent=2, ensure_ascii=False))
+    return {'continuous': result}
 
 
 def _horde_next(args: argparse.Namespace) -> None:
@@ -1538,7 +1636,7 @@ def main(argv: list[str] | None = None) -> int:
     progression = sub.add_parser('horde-progress',
                        help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
     progression.add_argument('--only', choices=['all','gear','quests','train','vendor',
-                                                'objectives','collect','objects','turnin'],
+                                                'objectives','collect','objects','turnin','continuous'],
                              default='all')
     progression.add_argument('--profiles-root',
                              help='Horde quest profile root (defaults to ~/Questing-profiles)')
@@ -1556,6 +1654,10 @@ def main(argv: list[str] | None = None) -> int:
                              help='Bound kills while collecting quest item drops')
     progression.add_argument('--max-seconds', type=float, default=900,
                              help='Bound the objective hunt duration')
+    progression.add_argument('--max-cycles', type=int, default=80,
+                             help='Bound continuous quest/offer stages (1..250)')
+    progression.add_argument('--auto-minutes', type=int, default=180,
+                             help='Bound total continuous questing session (5..720)')
     progression.add_argument('--no-hud', action='store_true',
                              help='Disable click-through Goal/Action overlay')
     progression.set_defaults(func=_horde_progress)
