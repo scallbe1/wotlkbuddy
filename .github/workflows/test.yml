@@ -31,3 +31,5 @@ jobs:
         run: lua5.1 tests/lua_spellbook_v053.lua
       - name: Verify actual actionbar observation and duplicate slot preservation
         run: lua5.1 tests/lua_actionbar_v054.lua
+      - name: Audit raw actionbar page 2 without touching WoW client state
+        run: lua5.1 tests/lua_actionbar_pages_v055.lua

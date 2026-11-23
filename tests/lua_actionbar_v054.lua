@@ -54,6 +54,7 @@ assert(not has(rows,'AS\t6\t133\tFireball\t1\t1\t0'),
 GetActionInfo = nil
 rows = load()
 assert(has(rows,'AH\t0'),'Unavailable action API must be explicit')
-assert(#rows==1,'Unavailable action API must not report guessed slots')
+assert(has(rows,'APG\t0'),'Missing action API still reports unknown page')
+assert(#rows==2,'Unavailable action API must not report guessed slots')
 
 print('WoW 3.3.5a actionbar duplicate / physical slot observations passed')

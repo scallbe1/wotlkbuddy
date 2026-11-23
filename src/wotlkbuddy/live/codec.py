@@ -194,6 +194,18 @@ class ObservedBarSpell:
 
 
 @dataclass(frozen=True)
+class ActionBarRawSlot:
+    """Read-only raw GetActionInfo observation, independent of hotbar mapping."""
+    view: str            # base or visible
+    button: int          # 1..10
+    action_index: int    # 1..72, depends on the current main bar page
+    kind: str            # empty, spell, macro, item, etc.
+    action_id: int       # 0 if unavailable
+    name: str
+    digit_bound: bool
+
+
+@dataclass(frozen=True)
 class TalentProbe:
     tree: int
     index: int
@@ -325,6 +337,8 @@ class ClientTelemetry:
     action_spells: tuple[ActionSpell, ...] = ()
     observed_bar_spells: tuple[ObservedBarSpell, ...] = ()
     actionbar_inspected: bool = False
+    actionbar_page: int | None = None
+    raw_action_slots: tuple[ActionBarRawSlot, ...] = ()
     empty_action_slot: int | None = None
     spellbook_probe: SpellBookProbe | None = None
     spellbook_diagnostic: SpellBookDiagnostic | None = None
@@ -376,6 +390,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     observed_bar_spells: dict[int, ObservedBarSpell] = {}
     actionbar_inspected = False
     actionbar_header_seen = False
+    actionbar_page = None
+    actionbar_page_seen = False
+    raw_action_slots: dict[tuple[str,int], ActionBarRawSlot] = {}
     empty_action_slot = None
     spellbook_probe = None
     spellbook_diagnostic = None
@@ -564,6 +581,40 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise TelemetryError('Invalid or duplicate observed actionbar spell')
             observed_bar_spells[slot] = ObservedBarSpell(
                 slot, spell_id, parts[3], parts[4] == '1')
+        elif parts[0] == 'APG':
+            if len(parts) != 2 or actionbar_page_seen:
+                raise TelemetryError('Invalid or duplicate actionbar page')
+            try:
+                page = int(parts[1])
+            except ValueError as exc:
+                raise TelemetryError('Invalid actionbar page integer') from exc
+            if not 0 <= page <= 6:
+                raise TelemetryError('Actionbar page out of range')
+            actionbar_page_seen = True
+            actionbar_page = page if page > 0 else None
+        elif parts[0] == 'AR':
+            if len(parts) != 8 or not actionbar_page_seen:
+                raise TelemetryError('Raw actionbar slot missing page header')
+            try:
+                button, action_index, action_id = (
+                    int(parts[2]), int(parts[3]), int(parts[5]))
+            except ValueError as exc:
+                raise TelemetryError('Invalid raw actionbar slot integers') from exc
+            view, kind, name, bound = (parts[1], parts[4], parts[6], parts[7])
+            key = view, button
+            if (view not in ('base','visible') or not 1 <= button <= 10 or
+                    key in raw_action_slots or
+                    not 1 <= action_index <= 72 or
+                    (view == 'base' and action_index != button) or
+                    (view == 'visible' and (actionbar_page is None or
+                        actionbar_page <= 1 or
+                        action_index != (actionbar_page-1)*12+button)) or
+                    not kind or len(kind) > 24 or
+                    not 0 <= action_id < 2**31 or
+                    len(name) > 44 or bound not in ('0','1')):
+                raise TelemetryError('Invalid or duplicate raw actionbar slot')
+            raw_action_slots[key] = ActionBarRawSlot(
+                view,button,action_index,kind,action_id,name,bound == '1')
         elif parts[0] == 'AS':
             if len(parts) != 7:
                 raise TelemetryError('Malformed action spell record')
@@ -861,6 +912,16 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             (spellbook_probe is not None and
              spellbook_diagnostic.name != spellbook_probe.name)):
         raise TelemetryError('Spellbook diagnostic disagrees with spellbook probe')
+    if raw_action_slots and not actionbar_inspected:
+        raise TelemetryError('Raw actionbar rows require inspected actionbar header')
+    if actionbar_page_seen and actionbar_inspected:
+        # Missing raw rows must not be treated as proof that the slots
+        # are empty. A complete 10-button base inventory is required.
+        if any(('base', i) not in raw_action_slots for i in range(1,11)):
+            raise TelemetryError('Incomplete raw actionbar base slot inventory')
+        if actionbar_page and actionbar_page > 1 and any(
+                ('visible',i) not in raw_action_slots for i in range(1,11)):
+            raise TelemetryError('Incomplete visible actionbar slot inventory')
     if actionbar_header_seen and not actionbar_inspected and (
             action_spells or observed_bar_spells or empty_action_slot is not None):
         raise TelemetryError('Actionbar rows supplied despite unavailable API')
@@ -939,6 +1000,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            observed_bar_spells=tuple(observed_bar_spells[i]
                                for i in sorted(observed_bar_spells)),
                            actionbar_inspected=actionbar_inspected,
+                           actionbar_page=actionbar_page,
+                           raw_action_slots=tuple(
+                               raw_action_slots[k] for k in sorted(raw_action_slots)),
                            empty_action_slot=empty_action_slot,
                            spellbook_probe=spellbook_probe,
                            spellbook_diagnostic=spellbook_diagnostic,
