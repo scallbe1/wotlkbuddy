@@ -4,6 +4,7 @@ import unittest
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.interaction import KeyboardQuestInput
+from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.codec import parse_payload, TelemetryError
 from wotlkbuddy.live.world_travel import follow_world_path
 from test_postquest_v021 import snap
@@ -20,8 +21,9 @@ class FireballAndTravelTests(unittest.TestCase):
         driver.cast_fireball(snap(fireball_key='1'))
         self.assertEqual(codes,[0x02])
         self.assertEqual(typed,[])
-        driver.cast_fireball(snap(fireball_key=None))
-        self.assertEqual(typed,['/cast Fireball'])
+        with self.assertRaisesRegex(LiveControlError,'not verified'):
+            driver.cast_fireball(snap(fireball_key=None))
+        self.assertEqual(typed,[])
 
     def test_fireball_action_and_cast_timing_decode(self):
         payload = (
