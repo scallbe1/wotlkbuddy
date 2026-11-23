@@ -291,33 +291,71 @@ def hunt_kill_objectives(
         return s
 
     def navigate(s: ClientTelemetry, dest: Vec3) -> ClientTelemetry:
-        _pid, world = world_position(s)
-        if _pid != pid:
-            raise LiveControlError('Active WoW PID changed')
-        if hypot(world.x-dest.x, world.y-dest.y) < 4:
-            return s
-        path = nav.find_path(world.map_id, world.position, dest)
-        legs = validate_nav_path(path, world.position, dest)
-        log(f'Detour approaching target location via {len(legs)-1} short legs')
-        kb = getattr(driver, 'keyboard', driver)
-        def sample():
-            snap = capture()
-            guard(snap)
-            _, pos = world_position(snap)
-            return snap, pos
-        report = travel(legs, sample=sample, keyboard=kb,
-                        stop_requested=driver.emergency_stop_requested,
-                        expected_quest_id=quest_id, expected_map_id=world.map_id,
-                        max_seconds=min(450, max(15, max_seconds-(now()-started))),
-                        can_traverse=lambda a,b: nav.segment_clear(world.map_id,a,b),
-                        progress=log)
-        out = fresh(s)
-        if report.stopped_reason != 'complete':
+        """Follow Detour; retry a height mismatch once from measured live XYZ.
+
+        A route that reaches an XY waypoint on the wrong floor is invalid.
+        Never keep walking that route or relax its Z tolerance. A *new*
+        navmesh query from the verified current floor is allowed once, and
+        only if the failed route made meaningful progress toward the camp.
+        """
+        height_replans = 0
+        while True:
+            _pid, world = world_position(s)
+            if _pid != pid:
+                raise LiveControlError('Active WoW PID changed')
+            remaining_xy = hypot(world.x-dest.x, world.y-dest.y)
+            if remaining_xy < 4:
+                if abs(world.z-dest.z) > 5:
+                    raise LiveControlError(
+                        'Camp reached in XY but player and camp are on '
+                        'different heights/floors; refusing to claim arrival')
+                return s
+            path = nav.find_path(world.map_id, world.position, dest)
+            legs = validate_nav_path(path, world.position, dest)
+            log(f'Detour approaching target location via {len(legs)-1} short legs'
+                + (f' (height replan {height_replans}/1)'
+                   if height_replans else ''))
+            kb = getattr(driver, 'keyboard', driver)
+            def sample():
+                snap = capture()
+                guard(snap)
+                _, pos = world_position(snap)
+                return snap, pos
+            report = travel(legs, sample=sample, keyboard=kb,
+                            stop_requested=driver.emergency_stop_requested,
+                            expected_quest_id=quest_id,
+                            expected_map_id=world.map_id,
+                            max_seconds=min(450, max(15, max_seconds-(now()-started))),
+                            can_traverse=lambda a,b: nav.segment_clear(world.map_id,a,b),
+                            progress=log)
+            out = fresh(s)
+            if report.stopped_reason == 'complete':
+                return out
             if 'Aggro/combat detected' in report.stopped_reason and out.player.in_combat:
                 log('Interrupted by combat; checking creature identity before fighting')
                 return out
-            raise LiveControlError('Navigation stopped: '+report.stopped_reason)
-        return out
+            if (out.player.in_combat or
+                    'height/floor' not in report.stopped_reason or
+                    height_replans >= 1):
+                raise LiveControlError('Navigation stopped: '+report.stopped_reason)
+            observed_pid, measured = world_position(out)
+            if (observed_pid != pid or measured.map_id != world.map_id or
+                    measured.player_guid.lower() != guid.lower()):
+                raise LiveControlError(
+                    'Navigation stopped: map/GUID/PID changed before height replan')
+            new_remaining = hypot(measured.x-dest.x, measured.y-dest.y)
+            progress_xy = remaining_xy - new_remaining
+            if progress_xy < 5:
+                raise LiveControlError(
+                    'Navigation stopped: '+report.stopped_reason+
+                    f'; only {progress_xy:.1f}y closer to destination, '
+                    'refusing to retry without meaningful progress')
+            height_replans += 1
+            log(f'Detour height/floor disagreement after moving '
+                f'{progress_xy:.1f}y closer: player XYZ '
+                f'({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}); '
+                'recalculating once from the measured player floor')
+            s = out
 
     def approach_unhittable_target(
         s: ClientTelemetry, target_guid: str, entry: int,
