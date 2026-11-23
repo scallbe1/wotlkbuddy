@@ -8,13 +8,14 @@ any unexpected enemy, no progress, combat state or uncertain target aborts.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import hypot
+from math import hypot, isfinite
 from time import monotonic, sleep as real_sleep
 from typing import Callable
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.profile import HordeProfile, QuestSpec
-from wotlkbuddy.horde.worlddata import (CreatureSpawnDatabase, nearest_objective_spawns)
+from wotlkbuddy.horde.worlddata import (
+    CreatureSpawnDatabase, Spawn, nearest_objective_spawns)
 from wotlkbuddy.live.codec import ClientTelemetry, QuestRecord
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_position import (
@@ -176,6 +177,7 @@ def hunt_kill_objectives(
     world_position: Callable[[ClientTelemetry], tuple[int, object]] | None = None,
     travel: Callable[..., object] = follow_world_path,
     collect_items: bool = False,
+    reference_search_points: tuple[Spawn, ...] = (),
 ) -> HuntReport:
     """Execute a single profile's remaining kill objectives until done or bounded abort.
 
@@ -184,6 +186,17 @@ def hunt_kill_objectives(
     """
     if not 60 <= max_seconds <= 3600 or not 1 <= max_kills <= 100:
         raise ValueError('Invalid hunt limits')
+    # An explicitly sourced world location is *search-only*, never evidence
+    # of a live spawn. Bound it to at most 4 positive creature IDs. Normal
+    # objectives continue to require entries returned from CreatureSpawns.db.
+    if (len(reference_search_points) > 4 or
+            any(not isinstance(point, Spawn) or
+                not 0 < point.entry < 2**24 or
+                point.map_id != 0 or
+                any(not isfinite(value)
+                    for value in (point.x,point.y,point.z))
+                for point in reference_search_points)):
+        raise ValueError('Invalid bounded sourced reference search points')
     target_xyz = target_xyz or (lambda s: verified_target_position(s, pid=pid))
     world_position = world_position or (lambda s: verified_live_position(s, pid=pid))
     first = capture()
@@ -1029,11 +1042,36 @@ def hunt_kill_objectives(
             spawn for spawn in nearby
             if all(spawn.position.distance_to(blocked)>5.0
                    for blocked in unhittable_positions)]
+        reference_only = False
+        if not nearby and reference_search_points:
+            # The public Classic reference is a *camp search waypoint*,
+            # not a verified NPC spawn. Route there using Detour only when
+            # the local DB cannot find any eligible nearby NPC source.
+            # A target must STILL be live-identified by entry/GUID,
+            # hostile, in Fireball range and credited in the journal.
+            reference = [
+                point for point in reference_search_points
+                if (point.entry in allowed_sources and
+                    point.map_id == world.map_id and
+                    point.position.distance_to(world.position) <= 360 and
+                    (not spec.hotspots or
+                     min(point.position.distance_to(h)
+                         for h in spec.hotspots)<=100) and
+                    all(point.position.distance_to(blocked)>5.0
+                        for blocked in unhittable_positions))]
+            if reference:
+                nearby = reference
+                reference_only = True
+                log(f'No local creature spawn for {allowed_sources} '
+                    f'near player; navigating to an externally sourced '
+                    f'search area only (not verified NPC spawn). '
+                    'Live creature entry/GUID still required before combat')
         nearby.sort(key=lambda p: p.position.distance_to(world.position))
         if not nearby:
             raise LiveControlError(
-                f'No verified nearby creature spawns for XML sources '
-                f'{allowed_sources} of item {spec.entry}' if collect_items
+                f'No verified nearby creature spawns or bounded reference '
+                f'search locations for XML sources {allowed_sources} '
+                f'of item {spec.entry}' if collect_items
                 else f'No validated local spawn for objective mob {expected}')
         # Limit repeat failures at one spawn. Respawns are not immediate.
         places = [(p, (round(p.x),round(p.y),round(p.z))) for p in nearby]
@@ -1081,5 +1119,10 @@ def hunt_kill_objectives(
         if s.player.in_combat and (s.combat_target is None or
                 s.combat_target.entry_id not in allowed_sources):
             raise LiveControlError('Attacked by non-objective mob while traveling')
-        log(f'At candidate spawn for {goal.entry}; will recheck targets')
+        if reference_only:
+            log(f'At source-labeled search area for creature {goal.entry}; '
+                'looking for live NPC by exact entry/GUID, '
+                'not trusting location as spawn proof')
+        else:
+            log(f'At candidate spawn for {goal.entry}; will recheck targets')
     raise LiveControlError('Bounded spawn-search iteration limit reached')

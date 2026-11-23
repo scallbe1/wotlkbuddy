@@ -3,7 +3,8 @@ from dataclasses import replace
 import unittest
 
 from wotlkbuddy.horde.marla_prerequisite import (
-    collect_samuel_remains, REMAINS_ITEM_ID, SAMUEL_FIPPS_ENTRY)
+    collect_samuel_remains, REMAINS_ITEM_ID,
+    SAMUEL_FIPPS_ENTRY, SAMUEL_REFERENCE_POINT)
 from wotlkbuddy.horde.profile import (
     HordeProfile,QuestSpec,ObjectiveSpec,OrderStep)
 from wotlkbuddy.live.codec import QuestRecord,QuestObjective
@@ -46,9 +47,11 @@ class ItemGame:
             tracked_item_name=(
                 'Wrong Remains' if self.wrong_item else None))
     def hunt(self,*,profile,quest_id,pid,capture,driver,
-             nav,spawns,collect_items,max_kills,max_seconds,log):
+             nav,spawns,collect_items,max_kills,max_seconds,log,
+             reference_search_points=()):
         self.hunts+=1
         self.assertions(profile,quest_id,pid,collect_items,max_kills)
+        assert reference_search_points==(SAMUEL_REFERENCE_POINT,)
         initial=capture()
         synthetic=next(q for q in initial.quests if q.quest_id==Q)
         assert synthetic.objectives[0].kind=='item'
@@ -71,6 +74,7 @@ class ItemGame:
         o=q.objectives[0]
         assert o.kind=='CollectItem'
         assert (o.entry,o.count)==(REMAINS_ITEM_ID,1)
+        assert o.hotspots==(SAMUEL_REFERENCE_POINT.position,)
         assert [(x.kind,x.entry) for x in o.sources]==[
             ('mob',SAMUEL_FIPPS_ENTRY)]
 
