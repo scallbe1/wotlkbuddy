@@ -802,9 +802,15 @@ def hunt_kill_objectives(
         if not s.player.in_combat:
             visited: set[str] = set()
             for _ in range(7):
+                if s.player.target_guid in stalled_guids:
+                    log('Ignoring previously unresponsive exact target GUID '
+                        f'{s.player.target_guid}; trying another mob')
+                    driver.chat('/cleartarget')
+                    s=fresh(s)
                 if (s.combat_target and
                         s.combat_target.entry_id in allowed_sources and
-                        s.combat_target.attackable and not s.combat_target.dead):
+                        s.combat_target.attackable and not s.combat_target.dead
+                        and s.player.target_guid not in stalled_guids):
                     break
                 driver.chat('/targetenemy')
                 s = fresh(s)
@@ -813,7 +819,9 @@ def hunt_kill_objectives(
                 visited.add(s.player.target_guid)
 
         t = s.combat_target
-        if t and t.entry_id in allowed_sources and t.attackable and not t.dead:
+        if (t and t.entry_id in allowed_sources and t.attackable
+                and not t.dead and
+                s.player.target_guid not in stalled_guids):
             expected = t.entry_id
             corpse_xyz = None
             try:
@@ -846,8 +854,41 @@ def hunt_kill_objectives(
                 before = qlog(s)
                 before_text = tuple(o.description for o in before.objectives)
                 dead_guid = s.player.target_guid
-                s = attack(s, expected, observed.index,
-                           objective_progress(observed.description))
+                try:
+                    s = attack(s, expected, observed.index,
+                               objective_progress(observed.description))
+                except UnresponsiveTargetError as exc:
+                    # A failed Fireball is NOT a kill, and this exact mob
+                    # must not be selected repeatedly. Skip only when the
+                    # latest live game confirms that there is no aggro;
+                    # do not abandon an actively attacking hostile.
+                    latest = capture()
+                    guard(latest)
+                    if latest.player.in_combat:
+                        raise LiveControlError(
+                            'Unresponsive target entered combat; cannot '
+                            'safely abandon the fight') from exc
+                    if (latest.player.target_guid not in
+                            ('', exc.target_guid)):
+                        raise LiveControlError(
+                            'Target changed unexpectedly during no-damage '
+                            'recovery; cannot safely select another mob') from exc
+                    stalled_targets+=1
+                    stalled_guids.add(exc.target_guid)
+                    if corpse_xyz is not None:
+                        stalled_positions.append(corpse_xyz)
+                    log(f'Excluding no-damage creature {exc.target_guid}; '
+                        f'trying another verified profile mob '
+                        f'({stalled_targets}/3), without kill credit')
+                    if stalled_targets>=3:
+                        raise LiveControlError(
+                            'Three distinct objective mobs remained '
+                            'unresponsive to verified Fireball attacks; '
+                            'stop for line-of-sight/cast diagnosis') from exc
+                    if latest.player.target_guid == exc.target_guid:
+                        driver.chat('/cleartarget')
+                        latest=fresh(latest)
+                    continue
                 s = fresh(s, 1.0)
                 if s.player.in_combat:
                     # A second enemy might be nearby; cannot loot during active combat.
@@ -894,6 +935,10 @@ def hunt_kill_objectives(
             nearby.extend(nearest_objective_spawns(
                 spawns, entry=source_entry, map_id=world.map_id,
                 origin=world.position, hotspots=spec.hotspots))
+        nearby=[
+            candidate for candidate in nearby
+            if all(candidate.position.distance_to(bad)>5
+                   for bad in stalled_positions)]
         nearby.sort(key=lambda p: p.position.distance_to(world.position))
         if not nearby:
             raise LiveControlError(
