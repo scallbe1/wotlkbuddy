@@ -107,6 +107,8 @@ def follow_world_path(
     progress: Callable[[str], None] | None = None,
     can_traverse: Callable[[Vec3, Vec3], bool] | None = None,
     max_recoveries: int = 2,
+    on_aggro: Callable[[ClientTelemetry], ClientTelemetry] | None = None,
+    max_aggro_fights: int = 3,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -115,7 +117,8 @@ def follow_world_path(
     and locked by GUID, not hard-coded by name. No input occurs if the first
     snapshot or path preflight fails.
     """
-    if not 15 <= max_seconds <= 600 or not 1 <= arrival_yards <= 2.5 or not 0 <= max_recoveries <= 3:
+    if (not 15 <= max_seconds <= 600 or not 1 <= arrival_yards <= 2.5
+            or not 0 <= max_recoveries <= 3 or not 0 <= max_aggro_fights <= 5):
         raise ValueError('Invalid bounded travel parameters')
     notify = progress or (lambda _: None)
     first, world0 = sample()
@@ -141,6 +144,7 @@ def follow_world_path(
     current, world = first, world0
     turns = moves = reached = recoveries = strafes = 0
     recovery_locations: list[Vec3] = []
+    aggro_fights = 0
 
     def guard() -> None:
         if stop_requested() or not keyboard.wow_is_foreground():
@@ -149,13 +153,39 @@ def follow_world_path(
             raise LiveControlError('World navigation time limit reached')
 
     def checked() -> tuple[ClientTelemetry, WorldPosition]:
+        nonlocal aggro_fights
         snap, pos = sample()
         if (snap.truncated or snap.player.guid != guid or
                 pos.player_guid.lower() != guid.lower() or
                 pos.map_id != expected_map_id or snap.player.dead):
             raise LiveControlError('Character, map, telemetry, or alive state changed')
         if snap.player.in_combat:
-            raise LiveControlError('Aggro/combat detected; stopped movement; combat driver not implemented')
+            if on_aggro is None or aggro_fights >= max_aggro_fights:
+                raise LiveControlError(
+                    'Aggro/combat detected; defensive handler unavailable '
+                    'or route fight budget exhausted')
+            guard()
+            origin = pos
+            aggro_fights += 1
+            notify(f'Aggro during waypoint travel; stopping input for '
+                   f'verified attacker defense {aggro_fights}/{max_aggro_fights}')
+            after_defense = on_aggro(snap)
+            guard()
+            if after_defense.player.guid != guid:
+                raise LiveControlError('Character changed during defensive combat')
+            snap, pos = sample()
+            if (snap.truncated or snap.player.guid != guid or
+                    pos.player_guid.lower() != guid.lower() or
+                    pos.map_id != expected_map_id or snap.player.dead or
+                    snap.player.in_combat):
+                raise LiveControlError(
+                    'Defense failed to restore safe same-character navigation')
+            if (_distance_xy(pos.position, origin.position) > 6 or
+                    abs(pos.z-origin.z) > 3):
+                raise LiveControlError(
+                    'Defensive combat displaced Mage away from original '
+                    'navmesh path; fresh Detour route required')
+            notify('Verified combat ended; resuming existing Detour waypoints')
         if expected_quest_id is not None and not any(
                 q.quest_id == expected_quest_id for q in snap.quests):
             raise LiveControlError('Quest journal changed while walking; stopping')
