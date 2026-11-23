@@ -181,8 +181,10 @@ class KeyboardQuestInput:
         if not (type(book_index) is int and 1 <= book_index <= 500 and
                 type(slot) is int and 1 <= slot <= 10):
             raise ValueError('Invalid spellbook/empty action slot identity')
-        self.chat(f'/run PickupSpell({book_index},BOOKTYPE_SPELL);'
-                  f'PlaceAction({slot});ClearCursor()')
+        raise LiveControlError(
+            'Automatic hotbar placement is suspended: the addon has not '
+            'reliably reconciled visible bar slots with GetActionInfo. '
+            'No PickupSpell or PlaceAction input was sent.')
 
     def cast_fireball(self, snapshot: ClientTelemetry) -> None:
         """Use a fast bound bar key only when live addon verified Fireball there.
