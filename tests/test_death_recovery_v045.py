@@ -99,7 +99,7 @@ class DeathTests(unittest.TestCase):
         with patch('wotlkbuddy.cli._horde_progress',
                    side_effect=LiveControlError('Character died')) as execute, \
              patch('wotlkbuddy.live.capture.capture_monitor',
-                   side_effect=game.capture), \
+                   side_effect=lambda _monitor: game.capture()), \
              patch('wotlkbuddy.horde.interaction.KeyboardQuestInput',
                    return_value=game), \
              patch('wotlkbuddy.cli.time.sleep'), redirect_stdout(StringIO()):
