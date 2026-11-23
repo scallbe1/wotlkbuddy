@@ -147,7 +147,7 @@ def require_verified_combat_key(snapshot: ClientTelemetry) -> None:
     names = {r.spell_name for r in rotation.rules}
     if any(a.name in names for a in snapshot.action_spells):
         return
-    if cls == 'MAGE' and snapshot.fireball_key in '1234567890':
+    if cls == 'MAGE' and snapshot.fireball_key is not None and snapshot.fireball_key in '1234567890':
         return  # Legacy verified action binding is still a real digit key.
     raise LiveControlError(
         f'No verified {cls} damage spell on a 1-0 action button. '
