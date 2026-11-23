@@ -332,7 +332,7 @@ def hunt_kill_objectives(
                             expected_map_id=world.map_id,
                             max_seconds=min(450, max(15, max_seconds-(now()-started))),
                             can_traverse=lambda a,b: nav.segment_clear(world.map_id,a,b),
-                            progress=log, on_aggro=getattr(driver, 'on_aggro', None))
+                            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
             out = fresh(s)
             if report.stopped_reason == 'complete':
                 return out
@@ -453,7 +453,7 @@ def hunt_kill_objectives(
             arrival_yards=1.0,max_recoveries=0,
             can_traverse=lambda a,b:nav.segment_clear(
                 player_pos.map_id,a,b),
-            sleep=sleep,now=now,progress=log, on_aggro=getattr(driver, 'on_aggro', None))
+            sleep=sleep,now=now,progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
         after=fresh(s)
         if (after.player.target_guid!=target_guid or
                 after.combat_target is None or
@@ -742,7 +742,7 @@ def hunt_kill_objectives(
                     arrival_yards=1.0,max_recoveries=0,
                     can_traverse=lambda a,b:nav.segment_clear(
                         player_pos.map_id,a,b),
-                    progress=log, on_aggro=getattr(driver, 'on_aggro', None),sleep=sleep,now=now)
+                    progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None),sleep=sleep,now=now)
                 s=fresh(s)
                 if result.stopped_reason!='complete':
                     loot_skipped += 1
