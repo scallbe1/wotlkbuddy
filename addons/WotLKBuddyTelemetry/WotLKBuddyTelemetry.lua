@@ -359,6 +359,28 @@ local function tickData()
             end
         end
     end
+    -- Generic cast and aura state, shared by all combat classes. These
+    -- are observations only; the controller performs class-specific policy.
+    local castName, _, _, _, _, castEnd = UnitCastingInfo('player')
+    if type(castName) == 'string' and type(castEnd) == 'number' then
+        local ms = math.max(0, math.min(20000, math.floor(castEnd-GetTime()*1000)))
+        local record = table.concat({'CT', safe(castName,44),tostring(ms)}, '\t')
+        if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
+            appendLine(record)
+        end
+    end
+    for _, aura in ipairs({{'player','AP',UnitBuff}, {'target','AT',UnitDebuff}}) do
+        if aura[3] and UnitExists(aura[1]) then
+            for index = 1, 12 do
+                local name = aura[3](aura[1], index)
+                if not name then break end
+                local record = table.concat({aura[2],safe(name,44)}, '\t')
+                if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
+                    appendLine(record)
+                end
+            end
+        end
+    end
     local lootCount = 0
     if LootFrame and LootFrame:IsShown() and GetNumLootItems then
         lootCount = math.min(GetNumLootItems() or 0, 16)
