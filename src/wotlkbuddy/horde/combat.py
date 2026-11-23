@@ -262,7 +262,8 @@ def hunt_kill_objectives(
         # Older addon versions fall back to natural regeneration below.
         from wotlkbuddy.horde.sustain import maintain_mage_supplies
         s = maintain_mage_supplies(
-            capture=capture, driver=driver, sleep=sleep, log=log)
+            capture=capture, driver=driver, sleep=sleep, log=log,
+            post_combat=True)
         # Low-level Mage may not yet have Conjure Food trained.
         if s.resources is None:
             return s
