@@ -21,6 +21,18 @@ from wotlkbuddy.live.world_position import verified_live_position, verified_targ
 from wotlkbuddy.live.world_travel import validate_nav_path, follow_world_path
 
 
+class UnresponsiveTargetError(LiveControlError):
+    """No verified Fireball damage and no safe line-of-sight recovery.
+
+    Caller may exclude this specific GUID only while NOT in combat. It must
+    never count a kill, loot a corpse, or abandon a hostile aggressor.
+    """
+
+    def __init__(self, target_guid: str, reason: str):
+        self.target_guid = target_guid
+        super().__init__(reason)
+
+
 @dataclass(frozen=True)
 class HuntReport:
     quest_id: int
@@ -200,6 +212,8 @@ def hunt_kill_objectives(
     active_tracked_item = 0
     collected_results: dict[int, tuple[int, int]] = {}
     known_item_names: dict[int, str] = {}
+    stalled_guids: set[str] = set()
+    stalled_targets = 0
 
     def guard(s: ClientTelemetry) -> None:
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()):
@@ -293,6 +307,115 @@ def hunt_kill_objectives(
                 return out
             raise LiveControlError('Navigation stopped: '+report.stopped_reason)
         return out
+
+    def adjust_fireball_vantage(
+        s: ClientTelemetry, *, target_guid: str, expected: int,
+        candidate_index: int,
+    ) -> tuple[ClientTelemetry, bool]:
+        """Find a new, nearby Detour-confirmed firing position for SAME mob.
+
+        Fireball's IsSpellInRange() does not prove line of sight or facing.
+        A silent cast/unchanged target HP can mean a tree, slope or cave wall
+        lies between the Mage and an in-range spider. Do NOT chase through a
+        wall or walk during combat; use at most two bounded local attempts.
+        """
+        if s.player.in_combat:
+            log('No-damage recovery cannot navigate while already in combat')
+            return s, False
+        if s.player.target_guid != target_guid or (
+                not s.combat_target or s.combat_target.entry_id != expected
+                or s.combat_target.dead):
+            raise LiveControlError(
+                'Combat target changed before line-of-sight recovery')
+        try:
+            _pid, world = world_position(s)
+            monster = target_xyz(s)
+        except (OSError, ValueError, LiveControlError) as exc:
+            log(f'Cannot verify live target/world XYZ for cast recovery: {exc}')
+            return s, False
+        if _pid != pid:
+            raise LiveControlError('WoW PID changed before Mage cast recovery')
+        dx, dy = monster.x-world.x, monster.y-world.y
+        distance = hypot(dx, dy)
+        if not 2 <= distance <= 45 or abs(monster.z-world.z)>9:
+            log(f'No safe casting vantage: target XY={distance:.1f}y '
+                f'and Z={abs(monster.z-world.z):.1f}y')
+            return s, False
+        # Two short, mesh-checked vantage choices: first slightly closer
+        # (if still a ranged stance), then to the side. Neither move
+        # crosses the target, requires camera projection or uses a blind W.
+        ux,uy=dx/distance,dy/distance
+        if candidate_index == 0 and distance >= 10:
+            endpoints=(Vec3(world.x+ux*4.0,world.y+uy*4.0,world.z),
+                       Vec3(world.x-uy*3.5,world.y+ux*3.5,world.z))
+        else:
+            endpoints=(Vec3(world.x+uy*3.5,world.y-ux*3.5,world.z),
+                       Vec3(world.x-uy*3.5,world.y+ux*3.5,world.z))
+        for destination in endpoints:
+            try:
+                if not nav.segment_clear(
+                        world.map_id, world.position, destination):
+                    log('Detour blocks a proposed Mage vantage; skipping it')
+                    continue
+                path=nav.find_path(
+                    world.map_id,world.position,destination)
+                legs=validate_nav_path(
+                    path,world.position,destination,max_distance=14)
+                length=sum(a.distance_to(b)
+                           for a,b in zip(legs,legs[1:]))
+                if length>9.5:
+                    log('Mage recovery path goes too far around an obstacle')
+                    continue
+            except (RuntimeError,OSError,ValueError,TimeoutError,
+                    LiveControlError) as exc:
+                log(f'Mage vantage path not verified: {exc}')
+                continue
+            log(f'Fireball no-damage recovery: moving to an alternate '
+                f'Detour-verified firing position ({length:.1f}y route), '
+                f'same creature GUID {target_guid}')
+            kb=getattr(driver,'keyboard',driver)
+            def sample():
+                snap=capture()
+                guard(snap)
+                current_pid,pos=world_position(snap)
+                if current_pid!=pid:
+                    raise LiveControlError(
+                        'WoW process changed during cast recovery')
+                return snap,pos
+            report=travel(
+                legs,sample=sample,keyboard=kb,
+                stop_requested=driver.emergency_stop_requested,
+                expected_quest_id=quest_id,expected_map_id=world.map_id,
+                max_seconds=min(60,max(15,max_seconds-(now()-started))),
+                arrival_yards=1.0,max_recoveries=0,
+                can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
+                sleep=sleep,now=now,progress=log)
+            after=fresh(s)
+            if report.stopped_reason!='complete':
+                if after.player.in_combat:
+                    raise LiveControlError(
+                        'Combat began during LOS repositioning; stop instead '
+                        'of moving or abandoning hostile target')
+                log('Alternate firing position movement stopped: '
+                    +report.stopped_reason)
+                return after,False
+            after_pid,where=world_position(after)
+            if after_pid!=pid or where.map_id!=world.map_id:
+                raise LiveControlError('Map/PID changed after Mage movement')
+            moved=hypot(where.x-world.x,where.y-world.y)
+            if moved < .8 or moved>7 or abs(where.z-world.z)>3:
+                log(f'Mage cast recovery movement not verified: '
+                    f'{moved:.2f}y XY')
+                return after,False
+            if (after.player.target_guid!=target_guid or
+                    after.combat_target is None or
+                    after.combat_target.entry_id!=expected):
+                raise LiveControlError(
+                    'Target GUID changed during alternate Mage firing approach')
+            log(f'Recovered new firing position {moved:.1f}y away; '
+                'rechecking same target before Fireball')
+            return after,True
+        return s,False
 
     def attack(s: ClientTelemetry, expected: int, objective_index: int,
                previous_credit: tuple[int, int] | None) -> ClientTelemetry:
