@@ -301,6 +301,35 @@ local function tickData()
     if freeAction > 0 then
         appendLine('ES\t' .. tostring(freeAction))
     end
+    -- Read-only raw actionbar inspection. WoW 3.3.5a can page the
+    -- visible primary bar (12 buttons per page). GetActionInfo(7) may be
+    -- different from the visible button 7 when another page is selected.
+    -- These rows must NEVER authorize PlaceAction or a guessed key press.
+    local page = GetActionBarPage and GetActionBarPage() or 0
+    if type(page) ~= 'number' or page < 1 or page > 6 or
+            page ~= math.floor(page) then page = 0 end
+    appendLine('APG\t' .. tostring(page))
+    if GetActionInfo then
+        for button = 1, 10 do
+            for view = 1, (page > 1 and 2 or 1) do
+                local index = view == 1 and button or ((page-1)*12+button)
+                local kind, id = GetActionInfo(index)
+                local name = ''
+                if kind == 'spell' and type(id) == 'number' and GetSpellInfo then
+                    name = GetSpellInfo(id) or ''
+                elseif kind == 'macro' and GetActionText then
+                    name = GetActionText(index) or ''
+                end
+                -- Emit empty positions too: an unreported slot must be
+                -- distinguishable from a genuinely empty position.
+                local row = table.concat({'AR', view == 1 and 'base' or 'visible',
+                    tostring(button), tostring(index), safe(kind or 'empty',24),
+                    type(id) == 'number' and tostring(math.floor(id)) or '0',
+                    safe(name,44), slotHasDigitBinding(button) and '1' or '0'}, '\t')
+                appendLine(row)
+            end
+        end
+    end
     -- END ACTIONBAR OBSERVATIONS
     -- Inventory tracking is read only. Match ItemId exactly against source
     -- Horde XML and report current inventory count in each fresh frame.
