@@ -76,13 +76,16 @@ end)
 -- addon does not choose items or perform any actions; it only observes bags.
 -- Read-only requested class spellbook and talent probes (no game actions).
 local observedAbilityName = ''
+local observedAbilityUntil = 0
 SLASH_WOTLKBUDDYABILITY1 = '/wbtability'
 SlashCmdList['WOTLKBUDDYABILITY'] = function(message)
     local value = safe(message or '', 48)
     if value ~= '' and string.match(value, '^[%a :]+$') then
         observedAbilityName = value
+        observedAbilityUntil = GetTime() + 12
     else
         observedAbilityName = ''
+        observedAbilityUntil = 0
     end
 end
 
@@ -168,7 +171,7 @@ local function resolveSpellbook(name)
     end
     -- Some private 3.3.5a builds do not expose usable spell tabs. Search
     -- a bounded number of actual book slots instead (read-only).
-    if scanned == 0 then
+    if scanned == 0 or matches == 0 then
         for index = 1, 160 do inspect(index) end
     end
     if bestIndex > 0 then return bestIndex, bestId, 'OK', matches end
@@ -224,7 +227,7 @@ local function tickData()
     -- Prioritize explicitly requested spellbook probes ahead of optional
     -- quest detail, gear, and merchant records so a busy frame cannot
     -- silently drop the result. SD always acknowledges the request.
-    if observedAbilityName ~= '' then
+    if observedAbilityName ~= '' and GetTime() < observedAbilityUntil then
         local bookIndex, spellId, status, matches =
             resolveSpellbook(observedAbilityName)
         appendLine(table.concat({'SD', safe(observedAbilityName,48),
