@@ -289,13 +289,20 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         time.sleep(args.countdown)
     cap = lambda: capture_monitor(args.monitor)
     first = cap()
-    if (first.truncated or first.player.dead or first.player.in_combat or
+    if (first.truncated or first.player.dead or
             first.resources is None or
             first.resources.class_token.upper() != 'MAGE' or
             first.resources.race_token.lower() not in ('scourge', 'undead')):
-        raise LiveControlError('Only a verified living out-of-combat Undead Mage is supported')
-    pid, world = verified_live_position(first, pid=args.pid)
+        raise LiveControlError('Only a verified living Undead Mage is supported')
     driver = KeyboardQuestInput(interact_key=args.interact_key)
+    from wotlkbuddy.horde.defense import defend_against_aggro
+    driver.on_aggro = lambda snapshot: defend_against_aggro(
+        initial=snapshot, capture=cap, driver=driver, log=log)
+    if first.player.in_combat:
+        first = driver.on_aggro(first)
+    if first.player.in_combat:
+        raise LiveControlError('Aggro unresolved before starting quest phase')
+    pid, world = verified_live_position(first, pid=args.pid)
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
     maintain_mage_supplies(capture=cap, driver=driver, log=log)
 
