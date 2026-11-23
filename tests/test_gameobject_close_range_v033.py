@@ -23,12 +23,12 @@ QID=3902
 GO5=0xF1100283360014A3
 GO6=0xF1100283360014A0
 OBJECTS=(VisibleGameObject(GO5,GO,Vec3(105.,200.,30.)),
-         VisibleGameObject(GO6,GO,Vec3(110.,200.,30.)))
+         VisibleGameObject(GO6,GO,Vec3(115.,200.,30.)))
 GOAL=ActiveGameObjectQuest(
     quest_id=QID,title='Scavenging Deathknell',profile_step=33,
     objective_type='CollectItem',object_id=GO,object_name='Equipment Boxes',
     item_id=11127,required_count=6,
-    hotspots=(Vec3(105.,200.,30.),Vec3(110.,200.,30.)),
+    hotspots=(Vec3(105.,200.,30.),Vec3(115.,200.,30.)),
     objective_index=1)
 
 
