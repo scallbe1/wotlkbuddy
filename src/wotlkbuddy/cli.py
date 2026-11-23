@@ -704,13 +704,42 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
         child.only = mode
         return _horde_progress(child, _skip_countdown=True, _emit_report=False)
 
+    def recover_verified_death(original_error: LiveControlError) -> dict | None:
+        # An executor may die in a fight or midway through Detour travel.
+        # Re-sample the addon before deciding whether to retry or stop.
+        # Do not classify ordinary navigation/telemetry errors as death.
+        from wotlkbuddy.live.capture import capture_monitor
+        from wotlkbuddy.horde.interaction import KeyboardQuestInput
+        from wotlkbuddy.horde.death_recovery import release_spirit_if_dead
+        try:
+            observed = capture_monitor(args.monitor)
+        except Exception:
+            raise original_error
+        if observed.truncated or not observed.player.dead:
+            return None
+        driver = KeyboardQuestInput(interact_key=args.interact_key)
+        result = release_spirit_if_dead(
+            capture=lambda: capture_monitor(args.monitor),
+            driver=driver,
+            log=lambda line: print(line, file=sys.stderr, flush=True))
+        return result.to_dict()
+
     for cycle in range(args.max_cycles):
         if time.monotonic()-start >= args.auto_minutes*60:
             reason = 'time_limit'
             break
         print(f'Continuous quest cycle {cycle+1}/{args.max_cycles}: '
               'refreshing journal and objectives', file=sys.stderr, flush=True)
-        report = phase('objectives')
+        try:
+            report = phase('objectives')
+        except LiveControlError as exc:
+            recovery = recover_verified_death(exc)
+            if recovery is None:
+                raise
+            reason = recovery['status']
+            steps.append({'cycle': cycle+1, 'action': 'death_recovery',
+                          'recovery': recovery})
+            break
         completion = report.get('quest_turnin', {})
         if completion.get('status') in ('turned_in', 'already_turned_in'):
             quest_id = completion.get('quest_id')
@@ -753,7 +782,16 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
                 'unresolved_profile_objectives': objective.get(
                     'unresolved_profile_objectives', [])})
             break
-        offers = phase('quests')
+        try:
+            offers = phase('quests')
+        except LiveControlError as exc:
+            recovery = recover_verified_death(exc)
+            if recovery is None:
+                raise
+            reason = recovery['status']
+            steps.append({'cycle': cycle+1, 'action': 'death_recovery',
+                          'recovery': recovery})
+            break
         newly_accepted = sorted({
             qid for ids in offers.get('accepted_quests', {}).values()
             for qid in ids if isinstance(qid, int) and qid > 0
