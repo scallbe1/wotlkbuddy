@@ -296,6 +296,8 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         raise LiveControlError('Only a verified living out-of-combat Undead Mage is supported')
     pid, world = verified_live_position(first, pid=args.pid)
     driver = KeyboardQuestInput(interact_key=args.interact_key)
+    from wotlkbuddy.horde.sustain import maintain_mage_supplies
+    maintain_mage_supplies(capture=cap, driver=driver, log=log)
 
     def set_native_status(phase: str, quest_id: int = 0) -> None:
         if args.no_hud:
