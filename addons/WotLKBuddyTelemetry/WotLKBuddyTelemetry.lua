@@ -114,6 +114,24 @@ local function tickData()
         safe(UnitName('target'), 50),
     }, '\t')
     appendLine(playerLine)
+    -- Death-specific, read-only 3.3.5a data. A ghost remains "dead" in
+    -- the P record, so Python must distinguish spirit release from an
+    -- unreleased corpse. GetCorpseMapPosition reports normalized map XY,
+    -- NOT world coordinates; never feed these numbers directly to Detour.
+    local isGhost = UnitIsGhost('player') and 1 or 0
+    local releaseVisible = (StaticPopup_Visible and
+        StaticPopup_Visible('DEATH')) and 1 or 0
+    local corpseX, corpseY = 0, 0
+    if isGhost == 1 and GetCorpseMapPosition then
+        local cx, cy = GetCorpseMapPosition()
+        if type(cx) == 'number' and type(cy) == 'number'
+                and cx >= 0 and cx <= 1 and cy >= 0 and cy <= 1 then
+            corpseX, corpseY = cx, cy
+        end
+    end
+    appendLine(table.concat({'J', tostring(isGhost),
+        tostring(releaseVisible), string.format('%.5f', corpseX),
+        string.format('%.5f', corpseY)}, '\t'))
     -- Optional, read-only WorldFrame hover: a name is only exported if the
     -- cursor is over the 3-D world, not a bag/chat/tooltip/action bar region.
     -- Python correlates this with a double-observed GO template/GUID and
