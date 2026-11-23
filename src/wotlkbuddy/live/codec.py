@@ -969,6 +969,32 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                     raw.action_index != audit.action_index or
                     raw.action_id != audit.raw_id):
                 raise TelemetryError('Action identity disagrees with raw action slot')
+    # On 3.3.5a the raw action number can be a spellbook INDEX, not
+    # a spell database ID. A trusted AB/AS must agree with the separate
+    # icon-matched AX evidence when both records are present. Never
+    # silently trust a bogus spell like Blizzard for raw index 10.
+    for slot, action in observed_bar_spells.items():
+        audit = action_identity_audits.get(slot)
+        if audit is None:
+            continue  # Legacy frames without the optional AX extension.
+        db_match = (
+            audit.database_icon_match is True and
+            audit.raw_id == action.spell_id and
+            audit.database_name == action.name)
+        book_match = (
+            audit.spellbook_icon_match is True and
+            audit.spellbook_id == action.spell_id and
+            audit.spellbook_name == action.name)
+        if (not (db_match or book_match) or
+                (audit.database_icon_match is True and
+                 audit.spellbook_icon_match is True and
+                 audit.raw_id != audit.spellbook_id)):
+            raise TelemetryError('Resolved action contradicts icon-verified spell identity')
+    if actionbar_page_seen and actionbar_inspected and fireball_key is not None:
+        slot = 10 if fireball_key == '0' else int(fireball_key)
+        spell = action_spells.get(slot)
+        if spell is None or spell.spell_id != 133 or spell.name != 'Fireball':
+            raise TelemetryError('Fireball key not backed by verified Fireball action')
     if actionbar_page_seen and actionbar_inspected:
         # Missing raw rows must not be treated as proof that the slots
         # are empty. A complete 10-button base inventory is required.

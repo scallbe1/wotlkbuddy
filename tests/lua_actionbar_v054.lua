@@ -3,8 +3,11 @@ local file = assert(io.open('addons/WotLKBuddyTelemetry/WotLKBuddyTelemetry.lua'
 local addon = file:read('*a')
 file:close()
 local helper = assert(addon:match('%-%- BEGIN ACTIONBAR BINDING HELPER\n(.-)\n%-%- END ACTIONBAR BINDING HELPER'))
-local scan = assert(addon:match('%-%- BEGIN ACTIONBAR OBSERVATIONS\n(.-)\n    %-%- BEGIN ACTION IDENTITY TELEMETRY'))
-local load = assert(loadstring(helper .. '\nlocal rows={}\nlocal function appendLine(row) table.insert(rows,row) end\n' ..
+local scan = assert(addon:match('%-%- BEGIN ACTIONBAR OBSERVATIONS\n(.-)\n    %-%- BEGIN RAW ACTIONBAR AUDIT'))
+local audit = assert(addon:match('%-%- BEGIN ACTION SPELL IDENTITY AUDIT\n(.-)\n%-%- END ACTION SPELL IDENTITY AUDIT'))
+local resolver = assert(addon:match('%-%- BEGIN VERIFIED ACTION SPELL RESOLVER\n(.-)\n%-%- END VERIFIED ACTION SPELL RESOLVER'))
+local load = assert(loadstring(helper .. '\n' .. audit .. '\n' .. resolver ..
+                         '\nlocal rows={}\nlocal function appendLine(row) table.insert(rows,row) end\n' ..
                          scan .. '\nreturn rows'))
 
 GetActionInfo = function(slot)
@@ -12,7 +15,13 @@ GetActionInfo = function(slot)
     if slot == 4 then return 'macro',11 end
     return nil
 end
-GetSpellInfo = function(id) if id == 133 then return 'Fireball' end end
+GetSpellInfo = function(id)
+    if id == 133 then return 'Fireball', 'Rank 1', 'Icon_Fireball' end
+end
+GetActionBarPage = function() return 1 end
+GetActionTexture = function(slot)
+    if slot == 2 or slot == 6 then return 'Icon_Fireball' end
+end
 GetBindingAction = function(key)
     if key == '2' then return 'ACTIONBUTTON2' end
     if key == '9' then return 'ACTIONBUTTON9' end
@@ -54,7 +63,6 @@ assert(not has(rows,'AS\t6\t133\tFireball\t1\t1\t0'),
 GetActionInfo = nil
 rows = load()
 assert(has(rows,'AH\t0'),'Unavailable action API must be explicit')
-assert(has(rows,'APG\t0'),'Missing action API still reports unknown page')
-assert(#rows==2,'Unavailable action API must not report guessed slots')
+assert(#rows==1,'Unavailable action API must not report guessed slots')
 
 print('WoW 3.3.5a actionbar duplicate / physical slot observations passed')

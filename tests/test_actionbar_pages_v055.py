@@ -38,8 +38,8 @@ def test_base_page_and_visible_page_are_different_without_guessing():
         (2,14),(6,18),(7,19)]
     assert not snap.observed_bar_spells
     text=summarize_telemetry(replace(snap,resources=state().resources))
-    assert 'visible button 2 -> action 14: spell id=133 [Fireball]' in text
-    assert 'visible button 7 -> action 19: spell id=133 [Fireball]' in text
+    assert 'visible button 2 -> action 14: spell raw=133 [Fireball]' in text
+    assert 'visible button 7 -> action 19: spell raw=133 [Fireball]' in text
     assert 'Next bot run will NOT place or replace action-bar spells' in text
 
 

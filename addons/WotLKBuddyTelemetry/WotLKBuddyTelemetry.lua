@@ -249,6 +249,39 @@ local function auditActionIdentity(actionSlot, rawId)
     return rawName or '', bookName or '', resolved,
         matchIcon(rawIcon), matchIcon(bookIcon)
 end
+-- BEGIN VERIFIED ACTION SPELL RESOLVER
+-- On stock clients the raw GetActionInfo value can be a spell database ID.
+-- On this actual 3.3.5a client it is a spellBOOK slot, e.g. raw 9 -> 133.
+-- Both interpretations must agree with the *visible action icon* and an
+-- independently named spell. A conflict or absent icon is not a safe action.
+local function resolveActionSpell(actionIndex, rawId)
+    if type(rawId) ~= 'number' or rawId < 1 or
+            rawId >= 2147483648 or rawId ~= math.floor(rawId) then
+        return nil, nil
+    end
+    local dbName, bookName, bookId, dbIconMatch, bookIconMatch =
+        auditActionIdentity(actionIndex, rawId)
+    local dbId = dbIconMatch == '1' and dbName ~= '' and rawId or nil
+    local slotId = bookIconMatch == '1' and bookName ~= '' and
+        type(bookId) == 'number' and bookId > 0 and bookId or nil
+    -- Shared spell textures can obscure identity: never choose a winner
+    -- when two *different* valid spell IDs both match the icon.
+    if dbId and slotId and dbId ~= slotId then
+        return nil, nil
+    end
+    local spellId = slotId or dbId
+    local name = slotId and bookName or dbName
+    if not spellId or name == '' or not GetSpellInfo then
+        return nil, nil
+    end
+    local ok, authoritativeName = pcall(GetSpellInfo, spellId)
+    if not ok or authoritativeName ~= name then
+        return nil, nil
+    end
+    return spellId, name
+end
+-- END VERIFIED ACTION SPELL RESOLVER
+
 -- END ACTION SPELL IDENTITY AUDIT
 
 local function tickData()
@@ -313,19 +346,26 @@ local function tickData()
     -- before quest/gear/merchant rows prevents omitted AS/ES data from
     -- causing repeated placement. AB never authorizes an input: its last
     -- field says whether the slot's digit key was independently verified.
+    -- The 1-0 keys operate on the CURRENT visible main bar page.
+    -- The same physical keys can select a different set of underlying
+    -- action indexes after changing page; never trust base indices alone.
+    local page = GetActionBarPage and GetActionBarPage() or 0
+    if type(page) ~= 'number' or page < 1 or page > 6 or
+            page ~= math.floor(page) then page = 0 end
     local freeAction = 0
     appendLine('AH\t' .. (GetActionInfo and '1' or '0'))
     if GetActionInfo then
         for slot = 1, 10 do
-            local keyOK = slotHasDigitBinding(slot)
-            local kind, id = GetActionInfo(slot)
+            local actionIndex = page > 1 and ((page-1)*12+slot) or slot
+            local keyOK = page > 0 and slotHasDigitBinding(slot)
+            local kind, rawId = GetActionInfo(actionIndex)
             if not kind then
                 if keyOK and freeAction == 0 then
                     freeAction = slot
                 end
-            elseif kind == 'spell' and type(id) == 'number' and GetSpellInfo then
-                local name = GetSpellInfo(id)
-                if type(name) == 'string' and name ~= '' and id > 0 then
+            elseif kind == 'spell' then
+                local id, name = resolveActionSpell(actionIndex, rawId)
+                if id and name then
                     appendLine(table.concat({'AB', tostring(slot),
                         tostring(id), safe(name,44),
                         keyOK and '1' or '0'}, '\t'))
@@ -358,9 +398,6 @@ local function tickData()
     -- visible primary bar (12 buttons per page). GetActionInfo(7) may be
     -- different from the visible button 7 when another page is selected.
     -- These rows must NEVER authorize PlaceAction or a guessed key press.
-    local page = GetActionBarPage and GetActionBarPage() or 0
-    if type(page) ~= 'number' or page < 1 or page > 6 or
-            page ~= math.floor(page) then page = 0 end
     appendLine('APG\t' .. tostring(page))
     if GetActionInfo then
         for button = 1, 10 do
@@ -368,8 +405,9 @@ local function tickData()
                 local index = view == 1 and button or ((page-1)*12+button)
                 local kind, id = GetActionInfo(index)
                 local name = ''
-                if kind == 'spell' and type(id) == 'number' and GetSpellInfo then
-                    name = GetSpellInfo(id) or ''
+                if kind == 'spell' and type(id) == 'number' then
+                    local _, resolvedName = resolveActionSpell(index, id)
+                    name = resolvedName or ''
                 elseif kind == 'macro' and GetActionText then
                     name = GetActionText(index) or ''
                 end
@@ -546,15 +584,16 @@ local function tickData()
     -- measured from UnitCastingInfo, not projectile impact guesses.
     local fireballKey = '-'
     local fireballName = GetSpellInfo and GetSpellInfo(133)
-    if fireballName and GetActionInfo then
-        for index = 1, 10 do
-            local kind, id = GetActionInfo(index)
-            local expectedKey = index == 10 and '0' or tostring(index)
-            if kind == 'spell' and type(id) == 'number' and
-                    GetSpellInfo(id) == fireballName and
-                    slotHasDigitBinding(index) then
-                fireballKey = expectedKey
-                break
+    if fireballName and GetActionInfo and page > 0 then
+        for button = 1, 10 do
+            local actionIndex = page > 1 and ((page-1)*12+button) or button
+            local kind, rawId = GetActionInfo(actionIndex)
+            if kind == 'spell' and slotHasDigitBinding(button) then
+                local spellId, name = resolveActionSpell(actionIndex, rawId)
+                if spellId == 133 and name == fireballName then
+                    fireballKey = button == 10 and '0' or tostring(button)
+                    break
+                end
             end
         end
     end
