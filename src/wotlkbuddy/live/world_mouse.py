@@ -79,6 +79,13 @@ class WorldObjectMouse:
 
     def right_click(self) -> None:
         """Click at last probed position; caller already verified GO hover."""
+        self._click(left=False)
+
+    def left_click(self) -> None:
+        """Resolve a verified quest-item ground-target cursor at the same GO."""
+        self._click(left=True)
+
+    def _click(self, *, left: bool) -> None:
         box=self._client()
         p=_Point()
         if not self._user32.GetCursorPos(ctypes.byref(p)):
@@ -91,11 +98,11 @@ class WorldObjectMouse:
         # supports the standard user32 mouse_event right-button pair.
         # Never press when the previous world tooltip proof is missing.
         u=self._user32
-        u.mouse_event(0x0008,0,0,0,0)  # RIGHTDOWN
+        u.mouse_event(0x0002 if left else 0x0008,0,0,0,0)
         try:
             real_sleep(.07)
         finally:
-            u.mouse_event(0x0010,0,0,0,0)  # RIGHTUP
+            u.mouse_event(0x0004 if left else 0x0010,0,0,0,0)
 
 
 def world_mouse_probe_points():
