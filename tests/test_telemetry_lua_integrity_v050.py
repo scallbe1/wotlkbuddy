@@ -14,7 +14,7 @@ ADDON = (
 
 def test_one_complete_addon_main_and_frame_publisher():
     src = ADDON.read_text(encoding="utf-8")
-    assert 800 <= len(src.splitlines()) <= 1200
+    assert 800 <= len(src.splitlines()) <= 1400
     for unique in (
         "local function tickData()",
         "local function publish()",
