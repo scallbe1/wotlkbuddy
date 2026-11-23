@@ -522,18 +522,6 @@ def execute_gameobject_quest(
                 "Remains in bags (no Lua item-use macro)")
         mouse.right_click()
         interacted+=1
-                    log("Samuel's Remains item used at Marla's Grave; "
-                        'quest objective confirmed without a ground click')
-                    continue
-            if state.spell_targeting is True:
-                mouse.left_click()
-                log("Samuel's Remains has a live ground-target cursor; "
-                    "left-clicking the verified grave")
-            else:
-                mouse.right_click()
-        else:
-            mouse.right_click()
-        interacted+=1
         # Mark the GO visited only AFTER confirming objective credit or
         # exhausting its bounded local recovery. An attempted click can
         # silently fail because the object is visible but out of range.
