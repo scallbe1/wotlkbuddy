@@ -88,6 +88,20 @@ def summarize_telemetry(telemetry: ClientTelemetry) -> str:
                 f'  {item.view} button {item.button} -> action '
                 f'{item.action_index}: {item.kind} id={item.action_id}'
                 f'{spell_name} | digit-bound={item.digit_bound}')
+    if telemetry.action_identity_audits:
+        lines.append('  Action spell identity audit (read-only; not yet for casting):')
+        for a in telemetry.action_identity_audits:
+            def icon_text(value):
+                return 'MATCH' if value is True else (
+                    'MISMATCH' if value is False else 'UNKNOWN')
+            raw = a.database_name or '(no spell at that database ID)'
+            book = a.spellbook_name or '(no spell at that book index)'
+            lines.append(
+                f'    button {a.button}, raw={a.raw_id}: '
+                f'database-ID={raw} [icon={icon_text(a.database_icon_match)}] | '
+                f'book-index={book}, spell-ID={a.spellbook_id or "unknown"} '
+                f'[icon={icon_text(a.spellbook_icon_match)}]')
+        lines.append('  These comparisons do NOT authorize casting or hotbar changes.')
     occupied = ', '.join(f'{a.name}@{a.slot}'
                          for a in telemetry.observed_bar_spells)
     ready_keys = ', '.join(
