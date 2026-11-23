@@ -291,6 +291,10 @@ class ClientTelemetry:
     merchant_open: bool = False
     merchant_scan_complete: bool = False
     merchant_items: tuple[MerchantItem, ...] = ()
+    current_cast_name: str | None = None
+    current_cast_remaining_ms: int | None = None
+    player_auras: tuple[str, ...] = ()
+    target_auras: tuple[str, ...] = ()
     action_spells: tuple[ActionSpell, ...] = ()
     empty_action_slot: int | None = None
     spellbook_probe: SpellBookProbe | None = None
@@ -333,6 +337,10 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     merchant_scan_complete = False
     merchant_count = 0
     merchant_items: dict[tuple[int, int], MerchantItem] = {}
+    current_cast_name = None
+    current_cast_remaining_ms = None
+    player_auras: list[str] = []
+    target_auras: list[str] = []
     action_spells: dict[int, ActionSpell] = {}
     empty_action_slot = None
     spellbook_probe = None
@@ -482,6 +490,25 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             fireball_record_seen = True
             fireball_key = parts[1] if parts[1] != '-' else None
             fireball_cast_remaining_ms = remaining if remaining >= 0 else None
+        elif parts[0] == 'CT':
+            if len(parts) != 3 or current_cast_name is not None or (
+                    not parts[1] or len(parts[1]) > 44):
+                raise TelemetryError('Invalid or duplicate current cast row')
+            try:
+                remaining = int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Invalid cast timer') from exc
+            if not 0 <= remaining <= 20000:
+                raise TelemetryError('Current cast timer out of range')
+            current_cast_name = parts[1]
+            current_cast_remaining_ms = remaining
+        elif parts[0] in ('AP', 'AT'):
+            if len(parts) != 2 or not parts[1] or len(parts[1]) > 44:
+                raise TelemetryError('Invalid aura observation')
+            target_list = player_auras if parts[0] == 'AP' else target_auras
+            if len(target_list) >= 12 or parts[1] in target_list:
+                raise TelemetryError('Duplicate or excessive aura observation')
+            target_list.append(parts[1])
         elif parts[0] == 'AS':
             if len(parts) != 7:
                 raise TelemetryError('Malformed action spell record')
@@ -798,6 +825,10 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            merchant_scan_complete=merchant_scan_complete,
                            merchant_items=tuple(
                                merchant_items[k] for k in sorted(merchant_items)),
+                           current_cast_name=current_cast_name,
+                           current_cast_remaining_ms=current_cast_remaining_ms,
+                           player_auras=tuple(player_auras),
+                           target_auras=tuple(target_auras),
                            action_spells=tuple(action_spells[i]
                                for i in sorted(action_spells)),
                            empty_action_slot=empty_action_slot,
