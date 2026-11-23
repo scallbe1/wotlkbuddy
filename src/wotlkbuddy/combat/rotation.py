@@ -75,10 +75,8 @@ DEFAULT_ROTATIONS: dict[str, Rotation] = {
         RotationRule('Fireball', 20),
     )),
     'PRIEST': Rotation('PRIEST', (
-        RotationRule('Power Word: Shield', 0, max_health_fraction=.5,
-                     requires_range=False),
-        RotationRule('Renew', 5, max_health_fraction=.65,
-                     required_buff_absent='Renew', requires_range=False),
+        # Friendly-target heals and shields require an explicit self-target
+        # executor; an enemy-targeting damage executor MUST NOT cast them.
         RotationRule('Shadow Word: Pain', 10,
                      required_target_debuff_absent='Shadow Word: Pain'),
         RotationRule('Mind Blast', 20),
