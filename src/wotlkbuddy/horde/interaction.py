@@ -96,7 +96,7 @@ class KeyboardQuestInput:
             r'/wbttrack (0|[1-9][0-9]{0,5})', command) is not None
         if (not allowed_combat and not allowed_goal and
                 not allowed_item_track and
-                command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/click QuestFrameCloseButton', '/click ClassTrainerFrameCloseButton', '/click MerchantFrameCloseButton', '/run CloseGossip()') and
+                command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/run UseItemByName(16333)', '/click QuestFrameCloseButton', '/click ClassTrainerFrameCloseButton', '/click MerchantFrameCloseButton', '/run CloseGossip()') and
                 not re.fullmatch(r'/run GetQuestReward\((0|[1-9]|1[0-2])\)', command) and
                 not re.fullmatch(r'/run EquipItemByName\(([1-9][0-9]{0,7}),(1|3|5|6|7|8|9|10|15)\)', command) and
                 not re.fullmatch(r'/run BuyTrainerService\(([1-9]|[1-9][0-9]|1[01][0-9]|120)\)', command) and
