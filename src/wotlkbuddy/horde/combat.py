@@ -258,7 +258,12 @@ def hunt_kill_objectives(
     def rest(s: ClientTelemetry) -> ClientTelemetry:
         if s.player.in_combat:
             return s
-        # Noncombat mana/health regeneration; never invent food, water or spells.
+        # Conjure/use only verified supply IDs and exact observed bag slots.
+        # Older addon versions fall back to natural regeneration below.
+        from wotlkbuddy.horde.sustain import maintain_mage_supplies
+        s = maintain_mage_supplies(
+            capture=capture, driver=driver, sleep=sleep, log=log)
+        # Low-level Mage may not yet have Conjure Food trained.
         if s.resources is None:
             return s
         until = min(started+max_seconds, now()+40)
