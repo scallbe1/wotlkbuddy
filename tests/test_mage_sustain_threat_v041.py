@@ -48,7 +48,7 @@ class FakeSupplies:
     def __init__(self,food_learnt=True):
         self.seq=0
         self.hp=40
-        self.mana=65
+        self.mana=55
         self.food=0
         self.water=0
         self.known_food=food_learnt
