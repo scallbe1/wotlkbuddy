@@ -117,7 +117,7 @@ class SourcedCampFallbackTests(unittest.TestCase):
         db=EmptySpawnDb()
         try:
             with self.assertRaisesRegex(
-                    LiveControlError,'No verified nearby creature spawns'):
+                    LiveControlError,'No validated local spawn for objective mob'):
                 game.run(db)
         finally:
             db.close()
@@ -148,7 +148,7 @@ class SourcedCampFallbackTests(unittest.TestCase):
                 db=EmptySpawnDb()
                 try:
                     with self.assertRaisesRegex(
-                            LiveControlError,'No verified nearby creature spawns'):
+                            LiveControlError,'No validated local spawn for objective mob'):
                         game.run(db,reference=(reference,))
                 finally:
                     db.close()
