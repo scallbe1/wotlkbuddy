@@ -241,14 +241,22 @@ def execute_gameobject_quest(
         driver.chat(f'/wbttrack {goal.item_id}')
         state=fresh(state)
         if (state.tracked_item_id!=goal.item_id or
-                state.tracked_item_count is None or
-                not state.tracked_item_name):
+                state.tracked_item_count is None):
             raise LiveControlError('Cannot verify tracked source quest item; '
                                    'updated WoW addon /reload required')
-        if (state.tracked_item_name.casefold() not in
-                journal(state)[1].description.casefold()):
-            raise LiveControlError('GameObject item name does not match '
-                                   'the live journal objective')
+        # 3.3.5a GetItemInfo(itemId) may be uncached BEFORE the first
+        # object yields its quest item. Numeric inventory tracking still
+        # proves the item ID; accept an uncached name only if the real
+        # journal has exactly one objective with this XML count.
+        if state.tracked_item_name:
+            if (state.tracked_item_name.casefold() not in
+                    journal(state)[1].description.casefold()):
+                raise LiveControlError('GameObject item name does not match '
+                                       'the live journal objective')
+        elif len(journal(state)[0].objectives)!=1:
+            raise LiveControlError(
+                'Item name uncached and multiple journal objectives; '
+                'cannot safely bind item ID to quest credit')
     if state.mouse_world_name is None:
         raise LiveControlError('GameObject hover telemetry unavailable; '
                                'reinstall updated addon and /reload')
