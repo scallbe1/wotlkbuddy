@@ -235,7 +235,7 @@ def execute_gameobject_quest(
             expected_quest_id=goal.quest_id,expected_map_id=world.map_id,
             max_seconds=min(600,max(15,max_seconds-(now()-started))),
             can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
-            progress=log, on_aggro=getattr(driver, 'on_aggro', None))
+            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
         if report.stopped_reason!='complete':
             raise LiveControlError('GameObject navigation stopped: '+report.stopped_reason)
         return fresh(s)
@@ -331,7 +331,7 @@ def execute_gameobject_quest(
             max_seconds=min(45,max(15,max_seconds-(now()-started))),
             arrival_yards=1.0,max_recoveries=0,
             can_traverse=lambda a,b:nav.segment_clear(before.map_id,a,b),
-            progress=log, on_aggro=getattr(driver, 'on_aggro', None),sleep=sleep,now=now)
+            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None),sleep=sleep,now=now)
         if report.stopped_reason!='complete':
             log('Same-GO local approach stopped: '+report.stopped_reason)
             return s,False
