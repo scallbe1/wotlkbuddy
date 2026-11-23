@@ -14,6 +14,9 @@ class AroundCornerNav:
     def find_path(self,map_id,start,end):
         assert map_id==0
         return self.points
+    def segment_clear(self,map_id,start,end):
+        assert map_id==0
+        return True
 
 
 class LoSRouteTests(unittest.TestCase):
