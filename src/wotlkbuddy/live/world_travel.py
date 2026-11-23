@@ -110,7 +110,7 @@ def follow_world_path(
     on_aggro: Callable[[ClientTelemetry], ClientTelemetry] | None = None,
     max_aggro_fights: int = 3,
     on_threat: Callable[[ClientTelemetry, WorldPosition, Sequence[Vec3]], ClientTelemetry] | None = None,
-    threat_check_yards: float = 7.,
+    threat_check_yards: float = 4.,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -195,7 +195,7 @@ def follow_world_path(
         if on_threat is not None and not snap.player.in_combat and (
                 force_scan or
                 _distance_xy(pos.position,last_threat_scan_xyz) >= threat_check_yards or
-                now()-last_threat_scan_time >= 5.):
+                now()-last_threat_scan_time >= 2.5):
             # Movement keys are already released before checked() runs.
             # Scan only the next Detour legs, not arbitrary creatures off-path.
             guard()
@@ -223,20 +223,50 @@ def follow_world_path(
             raise LiveControlError('Quest journal changed while walking; stopping')
         return snap, pos
 
-    def pulse(key: str, duration: float) -> None:
+    def pulse(key: str, duration: float, *, watch_hostiles: bool = False) -> bool:
+        """Hold W continuously while observing threats; release before fight.
+
+        The old controller let go of W after every short segment, producing
+        visible stutter. Sampling live addon/memory while holding forward is
+        read-only; targeting, spell casts and route replans happen only after
+        W is released in finally. Retain 40 ms focus/Escape checks.
+        """
         guard()
         scan = _MOVEMENT_SCANCODES[key]
+        interrupted = False
         keyboard.key_down(scan)
         try:
             remaining = duration
+            observation_elapsed = 0.
             while remaining > 0:
                 guard()
                 step = min(0.04, remaining)
                 sleep(step)
                 remaining -= step
+                if watch_hostiles:
+                    observation_elapsed += step
+                    if observation_elapsed >= .12:
+                        observation_elapsed = 0.
+                        seen, observed_world = sample()
+                        if (seen.truncated or seen.player.guid != guid or
+                                observed_world.player_guid.lower() != guid.lower() or
+                                observed_world.map_id != expected_map_id or
+                                seen.player.dead):
+                            raise LiveControlError(
+                                'Death, map, player, or telemetry changed during movement')
+                        target = seen.combat_target
+                        red_target = bool(
+                            on_threat is not None and target is not None and
+                            seen.player.target_guid and target.attackable and
+                            not target.dead and target.reaction is not None and
+                            1 <= target.reaction <= 3)
+                        if seen.player.in_combat or red_target:
+                            interrupted = True
+                            break
         finally:
             keyboard.key_up(scan)
         guard()
+        return interrupted
 
     # Reusing measured calibration across nearby Detour legs avoids a
     # visible 0.12s D-key twitch before every corpse and vendor approach.
@@ -417,13 +447,15 @@ def follow_world_path(
                     # 8 yards/s and stop with a safety margin; this does NOT
                     # assume the player will move exactly that far.
                     forward_duration = min(
-                        0.45, max(0.18,
-                                  0.75*(dxy-arrival_yards)/8.0))
-                    pulse('forward', forward_duration)
+                        0.85, max(0.18,
+                                  0.80*(dxy-arrival_yards)/8.0))
+                    interrupted = pulse('forward', forward_duration,
+                                        watch_hostiles=True)
                     moves += 1
-                    current, world = checked()
+                    # Release movement before threat acquisition or combat.
+                    current, world = checked(force_scan=interrupted)
                     displacement = _distance_xy(before.position, world.position)
-                    if displacement > 4:
+                    if displacement > 9:
                         raise LiveControlError('Implausible world jump during forward movement')
                     stalls = stalls + 1 if displacement < 0.15 else 0
                     if stalls >= 4:
