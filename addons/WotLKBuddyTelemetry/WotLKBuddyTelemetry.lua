@@ -301,6 +301,7 @@ local function tickData()
     if freeAction > 0 then
         appendLine('ES\t' .. tostring(freeAction))
     end
+    -- BEGIN RAW ACTIONBAR AUDIT
     -- Read-only raw actionbar inspection. WoW 3.3.5a can page the
     -- visible primary bar (12 buttons per page). GetActionInfo(7) may be
     -- different from the visible button 7 when another page is selected.
@@ -330,6 +331,7 @@ local function tickData()
             end
         end
     end
+    -- END RAW ACTIONBAR AUDIT
     -- END ACTIONBAR OBSERVATIONS
     -- Inventory tracking is read only. Match ItemId exactly against source
     -- Horde XML and report current inventory count in each fresh frame.
