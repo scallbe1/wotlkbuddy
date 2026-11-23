@@ -258,6 +258,7 @@ local function tickData()
     -- causing repeated placement. AB never authorizes an input: its last
     -- field says whether the slot's digit key was independently verified.
     local freeAction = 0
+    appendLine('AH\t' .. (GetActionInfo and '1' or '0'))
     if GetActionInfo then
         for slot = 1, 10 do
             local keyOK = slotHasDigitBinding(slot)
