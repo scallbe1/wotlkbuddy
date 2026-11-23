@@ -57,6 +57,10 @@ def collect_samuel_remains(
     else:
         raise LiveControlError(
             'Samuel\'s Remains item tracker unavailable; updated addon required')
+    if (latest.tracked_item_name and
+            latest.tracked_item_name.casefold()!="samuel's remains"):
+        raise LiveControlError(
+            'Tracked item name conflicts with source-verified Samuel item')
     if latest.tracked_item_count>=1:
         log('Samuel\'s Remains already in bags; no extra combat required')
         return None
