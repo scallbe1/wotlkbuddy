@@ -222,7 +222,13 @@ def hunt_kill_objectives(
     active_tracked_item = 0
     collected_results: dict[int, tuple[int, int]] = {}
     known_item_names: dict[int, str] = {}
-    unhittable_guids: set[str] = set()
+    # Share exact GUID exclusions with the proactive path scanner.
+    # An unreachable quest target must not be immediately pulled again by
+    # a different combat path during the same attended phase.
+    unhittable_guids = getattr(driver, 'blocked_combat_guids', None)
+    if unhittable_guids is None:
+        unhittable_guids = set()
+        driver.blocked_combat_guids = unhittable_guids
     unhittable_positions: list[Vec3] = []
     unhittable_count = 0
     logged_live_kill_totals: set[int] = set()
@@ -367,124 +373,101 @@ def hunt_kill_objectives(
         s: ClientTelemetry, target_guid: str, entry: int,
         attempt: int,
     ) -> tuple[ClientTelemetry, bool]:
-        """Advance 2-3 yards toward SAME live mob using Detour, not blind W.
+        """Walk an observed Detour bend around a cave corner before re-casting.
 
-        A positive IsSpellInRange('Fireball') does not establish unobstructed
-        LOS. Only do this while out of combat, with locked target GUID,
-        measured player/target XYZ, a short clear Detour route and validated
-        world displacement. Attempt 0 goes 2.8y forward; attempt 1 goes
-        2.0y forward. Never run through the mob or sidestep into a wall.
+        Fireball range does not prove line-of-sight. This path remains
+        bounded, avoids the mob's melee radius, keeps its exact target GUID,
+        uses no proactive retargeting while repositioning, and verifies world
+        movement before another cast is permitted.
         """
         if s.player.in_combat:
-            log('Fireball target is attacking; do not navigate during combat')
+            log('LOS recovery cannot reposition while already in combat')
             return s, False
         if (s.player.target_guid != target_guid or
                 s.combat_target is None or
                 s.combat_target.entry_id != entry or
                 s.combat_target.dead):
-            raise LiveControlError(
-                'Fireball target changed before close-range recovery')
+            raise LiveControlError('Target changed before LOS recovery')
         try:
-            # The exact target can despawn without changing addon state;
-            # check its read-only memory record before a second process scan.
             mob_pos = target_xyz(s)
             observed_pid, player_pos = world_position(s)
         except (WorldPositionError, OSError, ValueError,
                 LiveControlError) as exc:
-            log(f'Cannot validate Fireball target/world position: {exc}')
+            log(f'Cannot validate target/player XYZ for LOS recovery: {exc}')
             return s, False
         if observed_pid != pid:
-            raise LiveControlError('WoW PID changed before Fireball reposition')
-        dx = mob_pos.x-player_pos.x
-        dy = mob_pos.y-player_pos.y
-        xy = hypot(dx,dy)
-        dz = abs(mob_pos.z-player_pos.z)
-        if not 5.5 <= xy <= 42 or dz > 6:
-            log(f'No safe forward Fireball approach: target {xy:.1f}y XY '
-                f'away with {dz:.1f}y elevation difference')
+            raise LiveControlError('WoW PID changed before LOS recovery')
+        from wotlkbuddy.horde.los_recovery import detour_firing_approach
+        legs = detour_firing_approach(
+            nav, map_id=player_pos.map_id, player=player_pos.position,
+            target=mob_pos, attempt=attempt)
+        if not legs:
+            log('No bounded Detour firing position around cave geometry; '
+                'not moving directly through an obstructing wall')
             return s, False
-        step = min(2.8 if attempt==0 else 2.0, xy-4.5)
-        if step<1.5:
-            return s, False
-        # Directly toward the exact observed mob, preserving a stand-off
-        # of at least 4.5y. No raw movement keyboard pulses.
-        destination = Vec3(
-            player_pos.x+dx/xy*step,
-            player_pos.y+dy/xy*step,
-            player_pos.z+(mob_pos.z-player_pos.z)*step/xy)
-        try:
-            if not nav.segment_clear(
-                    player_pos.map_id,player_pos.position,destination):
-                log('Detour blocks safe short forward Fireball approach')
-                return s, False
-            path = nav.find_path(
-                player_pos.map_id,player_pos.position,destination)
-            legs = validate_nav_path(
-                path,player_pos.position,destination,max_distance=10)
-            route_length=sum(a.distance_to(b) for a,b in zip(legs,legs[1:]))
-            if route_length>5.5:
-                log(f'Fireball recovery path is {route_length:.1f}y '
-                    'instead of a short forward approach; refusing detour')
-                return s, False
-        except (WorldPositionError, OSError, ValueError, RuntimeError,
-                TimeoutError, LiveControlError) as exc:
-            log(f'No verified short Fireball movement route: {exc}')
-            return s, False
-        log(f'Fireball range reports valid but no damage: moving '
-            f'{step:.1f}y toward the same creature {target_guid} '
-            f'({attempt+1}/2) to improve LOS/facing')
-        kb=getattr(driver,'keyboard',driver)
+        route_length = sum(a.distance_to(b)
+                           for a, b in zip(legs, legs[1:]))
+        old_distance = hypot(player_pos.x-mob_pos.x, player_pos.y-mob_pos.y)
+        log(f'No verified spell damage: Detour LOS recovery {attempt+1}/2 '
+            f'around cave geometry via {len(legs)-1} legs '
+            f'({route_length:.1f}y); target GUID {target_guid}')
+        kb = getattr(driver, 'keyboard', driver)
+
         def sample():
-            snapshot=capture()
+            snapshot = capture()
             guard(snapshot)
-            sample_pid, position=world_position(snapshot)
-            if sample_pid!=pid:
-                raise LiveControlError('WoW PID changed during Fireball movement')
-            if (snapshot.player.target_guid!=target_guid or
+            sample_pid, position = world_position(snapshot)
+            if sample_pid != pid:
+                raise LiveControlError('WoW PID changed during LOS recovery')
+            if (snapshot.player.target_guid != target_guid or
                     snapshot.combat_target is None or
-                    snapshot.combat_target.entry_id!=entry):
-                raise LiveControlError('Fireball target changed during forward step')
-            return snapshot,position
-        result=travel(
-            legs,sample=sample,keyboard=kb,
+                    snapshot.combat_target.entry_id != entry):
+                raise LiveControlError('Target changed during LOS recovery')
+            return snapshot, position
+
+        result = travel(
+            legs, sample=sample, keyboard=kb,
             stop_requested=driver.emergency_stop_requested,
-            expected_quest_id=quest_id,
-            expected_map_id=player_pos.map_id,
-            max_seconds=min(45,max(15,max_seconds-(now()-started))),
-            arrival_yards=1.0,max_recoveries=0,
-            can_traverse=lambda a,b:nav.segment_clear(
-                player_pos.map_id,a,b),
-            sleep=sleep,now=now,progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
-        after=fresh(s)
-        if (after.player.target_guid!=target_guid or
+            expected_quest_id=quest_id, expected_map_id=player_pos.map_id,
+            max_seconds=min(70, max(15, max_seconds-(now()-started))),
+            arrival_yards=1.0, max_recoveries=0,
+            can_traverse=lambda a,b: nav.segment_clear(player_pos.map_id,a,b),
+            sleep=sleep, now=now, progress=log,
+            on_aggro=getattr(driver, 'on_aggro', None),
+            # /targetenemy here can replace the exact mob being recovered
+            # and can re-pull the same LOS-blocked spider. While travelling
+            # toward its verified GUID, use reactive aggro defense only.
+            on_threat=None)
+        after = fresh(s)
+        if (after.player.target_guid != target_guid or
                 after.combat_target is None or
-                after.combat_target.entry_id!=entry):
-            raise LiveControlError('Fireball target lost during short approach')
-        after_pid,where=world_position(after)
-        if after_pid!=pid or where.map_id!=player_pos.map_id:
-            raise LiveControlError('WoW map/PID changed after forward approach')
-        travelled=hypot(where.x-player_pos.x,where.y-player_pos.y)
-        if travelled>4.0 or abs(where.z-player_pos.z)>2.5:
-            raise LiveControlError('Fireball recovery movement exceeded bound')
-        if result.stopped_reason!='complete':
-            log('Short forward Fireball movement stopped: '+result.stopped_reason)
+                after.combat_target.entry_id != entry):
+            raise LiveControlError('Target lost during Detour LOS recovery')
+        after_pid, where = world_position(after)
+        if after_pid != pid or where.map_id != player_pos.map_id:
+            raise LiveControlError('WoW map/PID changed after LOS recovery')
+        displacement = hypot(where.x-player_pos.x, where.y-player_pos.y)
+        if displacement > 46.0 or abs(where.z-player_pos.z) > 6.5:
+            raise LiveControlError('LOS recovery exceeded verified movement bounds')
+        if result.stopped_reason != 'complete':
+            log('Detour LOS recovery stopped: '+result.stopped_reason)
             if after.player.in_combat:
                 raise LiveControlError(
-                    'Aggro started during attempted forward approach; '
-                    'stopping navigation during combat')
+                    'Combat began during LOS recovery; unsafe to abandon the attacker')
             return after, False
-        if travelled<.5:
-            log('Forward movement produced insufficient measured translation')
-            return after,False
-        new_mob=target_xyz(after)
-        new_dist=hypot(new_mob.x-where.x,new_mob.y-where.y)
-        if xy-new_dist<.35:
-            log(f'Fireball approach did not reduce target distance '
-                f'({xy:.1f} -> {new_dist:.1f}y)')
+        if displacement < 0.5:
+            log('Detour LOS recovery did not move the player')
             return after, False
-        log(f'Fireball firing position improved: {xy:.1f} -> '
-            f'{new_dist:.1f}y from exact target; retrying cast')
-        return after,True
+        new_mob = target_xyz(after)
+        new_distance = hypot(new_mob.x-where.x, new_mob.y-where.y)
+        if old_distance-new_distance < 1.0:
+            log(f'Detour moved but target distance did not improve sufficiently '
+                f'({old_distance:.1f} -> {new_distance:.1f}y)')
+            return after, False
+        log(f'New navmesh firing position reached; target distance '
+            f'{old_distance:.1f} -> {new_distance:.1f}y; '
+            'retrying cast and verifying target HP/quest credit')
+        return after, True
 
     def attack(s: ClientTelemetry, expected: int, objective_index: int,
                previous_credit: tuple[int, int] | None) -> ClientTelemetry:
@@ -652,8 +635,8 @@ def hunt_kill_objectives(
                         continue
                 raise UnhittableMobError(
                     target_guid,
-                    'Fireball never changed target HP; bounded short forward '
-                    'Detour recovery could not establish a firing position')
+                    'Spell did not change target HP; bounded Detour LOS '
+                    'recovery could not establish a firing position')
             else:
                 unchanged=0
         raise LiveControlError('Exceeded bounded Fireball casts on one target')
@@ -1040,10 +1023,9 @@ def hunt_kill_objectives(
                     s = attack(s, expected, observed.index,
                                objective_progress(observed.description))
                 except UnhittableMobError as exc:
-                    # The Fireball cast neither damaged nor killed this
-                    # exact GUID, and we verified that navigation was
-                    # attempted only when safely out of combat. Search for
-                    # a different profile-authorized spider, not this one.
+                    # The cast did not damage/kill this exact GUID, and
+                    # bounded Detour LOS recovery failed. Exclude it from
+                    # both quest selection and proactive travel scanning.
                     latest=capture()
                     guard(latest)
                     if latest.player.in_combat:
@@ -1066,7 +1048,7 @@ def hunt_kill_objectives(
                     if unhittable_count>=3:
                         raise LiveControlError(
                             'Three verified spiders were unreachable '
-                            'by Fireball after short forward corrections; '
+                            'after bounded Detour LOS recovery; '
                             'stop for manual LOS diagnosis') from exc
                     if latest.player.target_guid == exc.target_guid:
                         driver.chat('/cleartarget')
