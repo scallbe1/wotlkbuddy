@@ -201,9 +201,16 @@ local function tickData()
     if UnitExists('target') and UnitExists('targettarget') then
         attackingPlayer = UnitGUID('targettarget') == guid and '1' or '0'
     end
+    -- Reaction 1..3 is an actively hostile (red) NPC faction; reaction 4
+    -- is neutral (yellow) and must not be preemptively attacked.
+    local reaction = UnitExists('target') and UnitReaction and
+        UnitReaction('target', 'player') or nil
+    if type(reaction) ~= 'number' or reaction < 1 or reaction > 8 then
+        reaction = 0
+    end
     appendLine(table.concat({'T', tostring(targetEntry), tostring(targetHealth),
         tostring(targetMax), tostring(targetDead), tostring(canAttack),
-        tostring(targetRange), attackingPlayer}, '\t'))
+        tostring(targetRange), attackingPlayer, tostring(reaction)}, '\t'))
     local function known(spellId)
         if not IsSpellKnown then return -1 end
         local ok, value = pcall(IsSpellKnown, spellId)
