@@ -31,7 +31,8 @@ _DIGITS = dict(zip('1234567890', [0x02, 0x03, 0x04, 0x05, 0x06,
 _SPECIAL = {' ': (0x39, False), '/': (0x35, False), ',': (0x33, False),
             '(': (0x0a, True), ')': (0x0b, True),
             "'": (0x28, False), ';': (0x27, False),
-            ':': (0x27, True), '-': (0x0c, False)}
+            ':': (0x27, True), '_': (0x0c, True),
+            '-': (0x0c, False)}
 _INTERACT_KEYS = {'f': 0x21, 'g': 0x22}
 _ENTER = 0x1c
 _SHIFT = 0x2a
