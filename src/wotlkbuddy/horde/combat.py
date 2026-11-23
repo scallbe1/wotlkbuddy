@@ -1053,7 +1053,12 @@ def hunt_kill_objectives(
                 point for point in reference_search_points
                 if (point.entry in allowed_sources and
                     point.map_id == world.map_id and
-                    point.position.distance_to(world.position) <= 360 and
+                    # 360y is the local *database* scan radius, not a
+                    # valid limit for travelling to a separately sourced
+                    # quest camp. Aarr's last verified spider-cave position
+                    # is ~450y from Samuel's camp. Keep this source-only
+                    # fallback bounded and still require a Detour route.
+                    point.position.distance_to(world.position) <= 600 and
                     (not spec.hotspots or
                      min(point.position.distance_to(h)
                          for h in spec.hotspots)<=100) and
@@ -1062,10 +1067,23 @@ def hunt_kill_objectives(
             if reference:
                 nearby = reference
                 reference_only = True
+                nearest_reference = min(
+                    point.position.distance_to(world.position)
+                    for point in reference)
                 log(f'No local creature spawn for {allowed_sources} '
-                    f'near player; navigating to an externally sourced '
-                    f'search area only (not verified NPC spawn). '
+                    f'near player; navigating {nearest_reference:.1f}y '
+                    f'toward an externally sourced search area only '
+                    '(not verified NPC spawn). '
                     'Live creature entry/GUID still required before combat')
+            else:
+                offsets = [
+                    f'{point.entry}: {point.position.distance_to(world.position):.1f}y'
+                    for point in reference_search_points
+                    if point.entry in allowed_sources
+                    and point.map_id == world.map_id]
+                log('No eligible reference search area on this map '
+                    '(max 600y from player, within 100y of XML hotspot); '
+                    + (', '.join(offsets) if offsets else 'no matching NPC entry'))
         nearby.sort(key=lambda p: p.position.distance_to(world.position))
         if not nearby:
             raise LiveControlError(
