@@ -96,6 +96,15 @@ class PlayerRecord:
 
 
 @dataclass(frozen=True)
+class DeathState:
+    """3.3.5a death status; corpse XY uses normalized UI map coordinates."""
+    ghost: bool
+    release_popup: bool
+    corpse_map_x: float
+    corpse_map_y: float
+
+
+@dataclass(frozen=True)
 class PlayerResources:
     """Optional v3-extension resource record (old addon frames lack this)."""
     mana: int
@@ -272,6 +281,7 @@ class ClientTelemetry:
     fireball_cast_remaining_ms: int | None = None
     mouse_world_name: str | None = None
     spell_targeting: bool | None = None
+    death_state: DeathState | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -280,6 +290,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     quests: dict[int, QuestRecord] = {}
     obj: dict[int, list[QuestObjective]] = {}
     truncated = False
+    death_state = None
     resources = None
     dialog = None
     completion_states: dict[int, bool] = {}
@@ -329,6 +340,20 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 )
             except ValueError as exc:
                 raise TelemetryError('Malformed player record') from exc
+        elif parts[0] == 'J':
+            if (len(parts) != 5 or death_state is not None or
+                    parts[1] not in ('0', '1') or parts[2] not in ('0', '1')):
+                raise TelemetryError('Malformed or duplicate death-state record')
+            try:
+                corpse_x, corpse_y = float(parts[3]), float(parts[4])
+            except ValueError as exc:
+                raise TelemetryError('Malformed corpse map position') from exc
+            from math import isfinite
+            if (not isfinite(corpse_x) or not isfinite(corpse_y) or
+                    not 0 <= corpse_x <= 1 or not 0 <= corpse_y <= 1):
+                raise TelemetryError('Invalid normalized corpse coordinates')
+            death_state = DeathState(parts[1] == '1', parts[2] == '1',
+                                     corpse_x, corpse_y)
         elif parts[0] == 'Q':
             if len(parts) != 5:
                 raise TelemetryError('Malformed quest record')
@@ -674,6 +699,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             raise TelemetryError('Unexpected record type: ' + parts[0])
     if player is None:
         raise TelemetryError('Missing player record')
+    if death_state is not None and not player.dead and death_state.ghost:
+        raise TelemetryError('Ghost flag contradicts alive player state')
     if trainer_seen and len(trainer_services) != trainer_count:
         raise TelemetryError('Incomplete trainer service list')
     if merchant_seen and merchant_scan_complete and (
@@ -731,4 +758,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            fireball_key=fireball_key,
                            fireball_cast_remaining_ms=fireball_cast_remaining_ms,
                            mouse_world_name=mouse_world_name,
-                           spell_targeting=spell_targeting)
+                           spell_targeting=spell_targeting,
+                           death_state=death_state)
