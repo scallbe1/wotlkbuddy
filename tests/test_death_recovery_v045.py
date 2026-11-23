@@ -84,13 +84,13 @@ class DeathTests(unittest.TestCase):
     def test_new_death_telemetry_parses_and_rejects_ghost_alive(self):
         prefix=(b'P\tAarr\t'+GUID.encode()+
                 b'\t4\t0\t60\t0\t1\t.2\t.3\t2\t12\tDeathknell\t\t\n')
-        parsed=parse_payload(prefix+b'J\t1\t0\t0.22000\t0.73000\n',1)
+        parsed=parse_payload(prefix+b'DS\t1\t0\t0.22000\t0.73000\n',1)
         self.assertTrue(parsed.player.dead)
         self.assertTrue(parsed.death_state.ghost)
         self.assertAlmostEqual(parsed.death_state.corpse_map_y,.73)
         alive=prefix.replace(b'\t0\t1\t.2',b'\t0\t0\t.2')
         with self.assertRaisesRegex(ValueError,'Ghost flag'):
-            parse_payload(alive+b'J\t1\t0\t.22\t.73\n',2)
+            parse_payload(alive+b'DS\t1\t0\t.22\t.73\n',2)
 
     def test_continuous_reports_released_ghost_not_generic_failure(self):
         args=Namespace(only='continuous',enable_input=True,countdown=2.,
