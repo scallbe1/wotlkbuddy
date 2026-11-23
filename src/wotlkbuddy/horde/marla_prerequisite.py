@@ -16,6 +16,8 @@ from typing import Callable
 from wotlkbuddy.horde.combat import hunt_kill_objectives
 from wotlkbuddy.horde.profile import (
     HordeProfile, ObjectiveSpec, OrderStep, QuestSpec, Source)
+from wotlkbuddy.horde.worlddata import Spawn
+from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.codec import QuestObjective, QuestRecord
 from wotlkbuddy.live.control import LiveControlError
 
@@ -24,6 +26,14 @@ MARLA_QUEST_ID = 6395
 REMAINS_ITEM_ID = 16333
 SAMUEL_FIPPS_ENTRY = 1919
 MARLA_GRAVE_ENTRY = 178090
+
+# An externally sourced CLASSIC map-0 search landmark at Samuel's camp,
+# NOT a confirmed creature spawn on the user's AzerothCore server.
+# Reference and XYZ: https://www.wowforeverfriends.org/npcs/1919/
+# WoW Classic world-location snapshot: (1982.90, 1376.01, 63.05), map 0.
+# Quest geography corroboration: https://warcraft.wiki.gg/wiki/Marla%27s_Last_Wish
+SAMUEL_REFERENCE_POINT = Spawn(
+    SAMUEL_FIPPS_ENTRY, 0, 1982.90, 1376.01, 63.05)
 
 
 def collect_samuel_remains(
@@ -68,7 +78,8 @@ def collect_samuel_remains(
     fake_spec=QuestSpec(
         MARLA_QUEST_ID,quest.title,
         (ObjectiveSpec('CollectItem',REMAINS_ITEM_ID,1,
-          (Source('mob',SAMUEL_FIPPS_ENTRY,'Samuel Fipps'),),()),))
+          (Source('mob',SAMUEL_FIPPS_ENTRY,'Samuel Fipps'),),
+          (SAMUEL_REFERENCE_POINT.position,)),))
     fake_steps=(OrderStep('objective',quest_id=MARLA_QUEST_ID,
                name=quest.title,entry=REMAINS_ITEM_ID,
                objective_type='CollectItem',count=1),)
@@ -108,12 +119,17 @@ def collect_samuel_remains(
             simulated if q.quest_id==MARLA_QUEST_ID else q
             for q in state.quests))
 
-    log('Samuel\'s Remains missing; collecting item 16333 from '
+    log("Samuel's Remains missing; collecting item 16333 from "
         'source-confirmed Samuel Fipps NPC 1919 before grave interaction')
+    log('Samuel Fipps search: using local CreatureSpawns.db first; '
+        'if entry 1919 is absent nearby, use the sourced Classic '
+        'camp coordinates as a navigation landmark, never as proof '
+        'of the live creature')
     result=hunt(
         profile=fake_profile,quest_id=MARLA_QUEST_ID,
         pid=pid,capture=capture_adapted,driver=driver,nav=nav,spawns=spawns,
-        collect_items=True,max_kills=3,max_seconds=650,log=log)
+        collect_items=True,max_kills=3,max_seconds=650,log=log,
+        reference_search_points=(SAMUEL_REFERENCE_POINT,))
     final=capture()
     if (not result.objectives_complete or
             final.tracked_item_id!=REMAINS_ITEM_ID or
