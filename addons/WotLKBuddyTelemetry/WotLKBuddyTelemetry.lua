@@ -129,7 +129,7 @@ local function tickData()
             corpseX, corpseY = cx, cy
         end
     end
-    appendLine(table.concat({'J', tostring(isGhost),
+    appendLine(table.concat({'DS', tostring(isGhost),
         tostring(releaseVisible), string.format('%.5f', corpseX),
         string.format('%.5f', corpseY)}, '\t'))
     -- Optional, read-only WorldFrame hover: a name is only exported if the
