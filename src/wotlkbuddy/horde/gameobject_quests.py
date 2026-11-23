@@ -272,26 +272,39 @@ def execute_gameobject_quest(
             return s,False
         # The endpoint is at least ~1.2 yards from the GO, and no more
         # than 2.0 yards from the measured player. No object crossing.
+        # If Detour blocks a 2-yard segment, check a shorter 1.7 or 1.4
+        # yard segment. The first 1 yard may be clear even when the full
+        # proposal crosses a wall, so avoid abandoning the GO prematurely.
         stride=min(2.0,distance-1.2)
-        destination=Vec3(before.x+dx/distance*stride,
-                         before.y+dy/distance*stride,
-                         before.z+(obj.position.z-before.z)*
-                         (stride/distance))
-        try:
-            if not nav.segment_clear(before.map_id,before.position,destination):
-                log(f'GO {obj.guid:016X}: Detour blocks close-range '
-                    'forward approach; not moving blindly')
-                return s,False
-            raw=nav.find_path(before.map_id,before.position,destination)
-            legs=validate_nav_path(raw,before.position,destination,
-                                   max_distance=6)
-        except (RuntimeError,OSError,ValueError,TimeoutError,LiveControlError) as exc:
-            log(f'GO {obj.guid:016X}: local Detour approach unavailable: {exc}')
-            return s,False
-        path_length=sum(a.distance_to(b) for a,b in zip(legs,legs[1:]))
-        if path_length>3.5:
-            log(f'GO {obj.guid:016X}: local Detour route would '
-                f'go {path_length:.2f} yards around an obstacle; not chasing')
+        legs=None
+        for proposal in dict.fromkeys(
+                (round(stride,2),round(min(1.7,stride),2),
+                 round(min(1.4,stride),2))):
+            if proposal < 1.35:
+                continue  # 1.0y arrival tolerance would make no progress
+            destination=Vec3(
+                before.x+dx/distance*proposal,
+                before.y+dy/distance*proposal,
+                before.z+(obj.position.z-before.z)*(proposal/distance))
+            try:
+                if not nav.segment_clear(
+                        before.map_id,before.position,destination):
+                    continue
+                raw=nav.find_path(before.map_id,before.position,destination)
+                candidate=validate_nav_path(
+                    raw,before.position,destination,max_distance=6)
+                path_length=sum(a.distance_to(b)
+                                for a,b in zip(candidate,candidate[1:]))
+                if path_length<=3.5:
+                    legs=candidate
+                    stride=proposal
+                    break
+            except (RuntimeError,OSError,ValueError,TimeoutError,LiveControlError) as exc:
+                log(f'GO {obj.guid:016X}: Detour rejected '
+                    f'{proposal:.2f}y closer proposal: {exc}')
+        if legs is None:
+            log(f'GO {obj.guid:016X}: Detour blocks close-range '
+                'forward approach (2.0/1.7/1.4y proposals); not moving blindly')
             return s,False
         log(f'GO {obj.guid:016X}: no quest credit, approaching same box '
             f'closer ({distance:.2f}y XY, step <=2.0y, '
