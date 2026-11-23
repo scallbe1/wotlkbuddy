@@ -14,7 +14,8 @@ from typing import Callable
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.profile import HordeProfile, QuestSpec
-from wotlkbuddy.horde.worlddata import (CreatureSpawnDatabase, nearest_objective_spawns)
+from wotlkbuddy.horde.worlddata import (
+    CreatureSpawnDatabase, Spawn, nearest_objective_spawns)
 from wotlkbuddy.live.codec import ClientTelemetry, QuestRecord
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_position import (
