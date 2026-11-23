@@ -178,14 +178,24 @@ def scan_and_clear_hostiles(
         f'{measured:.1f}y from player in Detour corridor; '
         'engaging before walking into aggro range')
     before_hp=target.health
-    cast=getattr(driver,'cast_fireball',None)
-    if callable(cast):
-        cast(state)
+    from wotlkbuddy.combat.runtime import selected_action
+    ability=selected_action(state)
+    cast_action=getattr(driver,'cast_action_spell',None)
+    if ability is not None and callable(cast_action):
+        cast_action(state,ability.spell_id)
+        log(f'Preemptive {ability.name} via verified action key {ability.key}')
     else:
-        driver.chat('/cast Fireball')
+        cast=getattr(driver,'cast_fireball',None)
+        if callable(cast):
+            cast(state)
+        else:
+            driver.chat('/cast Fireball')
     mid=fresh(state,.55)
-    cast_delay=(min(2.5,max(.3,mid.fireball_cast_remaining_ms/1000.+.2))
-                if mid.fireball_cast_remaining_ms is not None else 2.1)
+    cast_ms=(mid.current_cast_remaining_ms
+             if ability is not None and mid.current_cast_name==ability.name
+             else mid.fireball_cast_remaining_ms)
+    cast_delay=(min(2.5,max(.3,cast_ms/1000.+.2))
+                if cast_ms is not None else 2.1)
     state=fresh(mid,cast_delay)
     for _ in range(4):
         if state.player.target_guid!=chosen_guid:
