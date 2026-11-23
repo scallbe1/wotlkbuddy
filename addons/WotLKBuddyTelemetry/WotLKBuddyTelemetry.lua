@@ -48,6 +48,7 @@ end
 -- Verify the actual 1-0 key -> main action-button association.
 -- GetBindingKey may report two alternatives; GetBindingAction is a
 -- separate read-only lookup when available. Neither guesses WoW settings.
+-- BEGIN ACTIONBAR BINDING HELPER
 local function slotHasDigitBinding(slot)
     local key = slot == 10 and '0' or tostring(slot)
     local action = 'ACTIONBUTTON' .. tostring(slot)
@@ -60,6 +61,8 @@ local function slotHasDigitBinding(slot)
     end
     return false
 end
+
+-- END ACTIONBAR BINDING HELPER
 
 -- WotLK 3.3.5 completion history is a server response. Query it rather than
 -- assuming an absent journal entry means a completed quest.
@@ -253,6 +256,7 @@ local function tickData()
                 tostring(spellId), safe(observedAbilityName,48)}, '\t'))
         end
     end
+    -- BEGIN ACTIONBAR OBSERVATIONS
     -- Main bar observations are *priority* telemetry. Publishing these
     -- before quest/gear/merchant rows prevents omitted AS/ES data from
     -- causing repeated placement. AB never authorizes an input: its last
@@ -297,6 +301,7 @@ local function tickData()
     if freeAction > 0 then
         appendLine('ES\t' .. tostring(freeAction))
     end
+    -- END ACTIONBAR OBSERVATIONS
     -- Inventory tracking is read only. Match ItemId exactly against source
     -- Horde XML and report current inventory count in each fresh frame.
     if trackedQuestItemId > 0 and GetItemCount then
