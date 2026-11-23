@@ -41,6 +41,7 @@ def scan_and_clear_hostiles(
     capture: Callable[[], ClientTelemetry], driver,
     target_position: Callable[[ClientTelemetry], Vec3],
     log: Callable[[str], None] = lambda _: None,
+    direct_path_clear: Callable[[Vec3, Vec3], bool] | None = None,
     sleep: Callable[[float], None] = real_sleep,
     detection_yards: float = 27.,
     corridor_yards: float = 12.,
@@ -91,6 +92,10 @@ def scan_and_clear_hostiles(
 
     state=initial
     guard(state)
+    blocked = getattr(driver, 'blocked_combat_guids', None)
+    if blocked is None:
+        blocked = set()
+        driver.blocked_combat_guids = blocked
     # Enumerate a bounded set of targetable enemies. /targetenemy does NOT
     # determine whether a mob is near or hostile; exact GUID, reaction and
     # measured position must corroborate it. Keep no guessed NPC name list.
@@ -107,6 +112,8 @@ def scan_and_clear_hostiles(
         if not current_guid or current_guid in seen:
             break
         seen.add(current_guid)
+        if current_guid in blocked:
+            continue  # Previously failed verified attack; do not repeat here.
         if not target or not target.attackable or target.dead or target.health<=0:
             continue
         if target.reaction is None:
@@ -127,6 +134,20 @@ def scan_and_clear_hostiles(
                 distance_to_corridor(position,player_position.position,
                                      path_ahead)>corridor_yards):
             continue
+        # Range is not line of sight. In a cave the navmesh can verify
+        # whether a short direct route is blocked by rock. If so, defer
+        # the pull while Detour walks around the corner; no wall-casts.
+        if direct_path_clear is not None:
+            try:
+                if not direct_path_clear(player_position.position, position):
+                    log(f'Hostile {current_guid} is behind non-traversable cave '
+                        'geometry; following Detour instead of preemptive cast')
+                    continue
+            except (OSError, RuntimeError, ValueError, TimeoutError,
+                    LiveControlError) as exc:
+                log(f'Cannot verify direct cave approach for {current_guid}: '
+                    f'{exc}; deferring preemptive cast')
+                continue
         candidates.append((distance,current_guid,target.entry_id))
         if len(candidates)>crowd_limit:
             break
@@ -171,13 +192,44 @@ def scan_and_clear_hostiles(
     if (measured>detection_yards or abs(actual.z-player_position.z)>6 or
             distance_to_corridor(actual,player_position.position,
                                  path_ahead)>corridor_yards):
-        raise LiveControlError('Scanned hostile moved outside verified travel corridor')
+        # Dynamic mobs can walk between the first corridor observation and
+        # exact GUID reacquisition. A stale candidate isn't a navigation
+        # failure: stop this pull, clear the target, and let the existing
+        # Detour path continue. Combat is still handled reactively.
+        log(f'Scanned hostile {chosen_guid} moved outside the verified '
+            'travel corridor; deferring pull and continuing Detour')
+        if state.player.in_combat:
+            return defend_against_aggro(
+                initial=state, capture=capture, driver=driver,
+                log=log, sleep=sleep)
+        if state.player.target_guid:
+            driver.chat('/cleartarget')
+            state=fresh(state)
+        return state
+    if direct_path_clear is not None:
+        try:
+            if not direct_path_clear(player_position.position, actual):
+                log(f'Scanned hostile {chosen_guid} is behind blocked cave '
+                    'geometry after reacquisition; deferring preemptive pull')
+                if state.player.target_guid:
+                    driver.chat('/cleartarget')
+                    state=fresh(state)
+                return state
+        except (OSError, RuntimeError, ValueError, TimeoutError,
+                LiveControlError) as exc:
+            log(f'Cannot verify direct approach for {chosen_guid} after '
+                f'reacquisition: {exc}; deferring pull')
+            if state.player.target_guid:
+                driver.chat('/cleartarget')
+                state=fresh(state)
+            return state
     if state.mage_buffs is None or state.mage_buffs.knows_fireball is not True:
         raise LiveControlError('Cannot preemptively fight without learned Fireball')
     log(f'Preemptive hostile {chosen_entry}, GUID {chosen_guid}, '
         f'{measured:.1f}y from player in Detour corridor; '
         'engaging before walking into aggro range')
     before_hp=target.health
+    before_quests = state.quests
     from wotlkbuddy.combat.runtime import selected_action
     ability=selected_action(state)
     cast_action=getattr(driver,'cast_action_spell',None)
@@ -197,23 +249,72 @@ def scan_and_clear_hostiles(
     cast_delay=(min(2.5,max(.3,cast_ms/1000.+.2))
                 if cast_ms is not None else 2.1)
     state=fresh(mid,cast_delay)
+    # A killing projectile may remove the exact GUID before its target HP is
+    # sampled. Accept live progress as evidence of an attack's effect, never
+    # as proof that some unrelated selected target was killed.
+    from wotlkbuddy.horde.combat import objective_progress
+
+    def credited(before, after):
+        old = {(q.quest_id, obj.index): objective_progress(obj.description)
+               for q in before for obj in q.objectives
+               if obj.kind == 'monster' and not obj.done}
+        for q in after:
+            for obj in q.objectives:
+                key = (q.quest_id, obj.index)
+                if key not in old or old[key] is None:
+                    continue
+                nxt = objective_progress(obj.description)
+                if nxt is not None and nxt[1] == old[key][1] and (
+                        nxt[0] > old[key][0] or obj.done):
+                    return True
+        return False
+
+    lost_target = False
     for _ in range(4):
-        if state.player.target_guid!=chosen_guid:
-            if not state.player.in_combat and state.combat_target is not None:
-                raise LiveControlError('Preemptive hostile disappeared without verified damage')
+        if state.player.in_combat:
+            return defend_against_aggro(
+                initial=state, capture=capture, driver=driver,
+                log=log, sleep=sleep)
+        if state.player.target_guid != chosen_guid:
+            lost_target = True
             break
-        target=state.combat_target
-        if (target and (target.dead or target.health<before_hp)) or state.player.in_combat:
+        target = state.combat_target
+        if target and (target.dead or target.health < before_hp):
             break
-        state=fresh(state,.65)
+        state = fresh(state, .65)
     if state.player.in_combat:
         return defend_against_aggro(
-            initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
-    target=state.combat_target
-    if (state.player.target_guid==chosen_guid and target and
-            (target.dead or target.health==0)):
+            initial=state, capture=capture, driver=driver, log=log, sleep=sleep)
+    target = state.combat_target
+    if credited(before_quests, state.quests):
+        log(f'Live kill-objective credit advanced after preemptive '
+            f'attack on {chosen_guid}; continuing route')
+        if state.player.target_guid and state.player.target_guid != chosen_guid:
+            driver.chat('/cleartarget')
+            state = fresh(state)
+        return state
+    if (state.player.target_guid == chosen_guid and target and
+            (target.dead or target.health == 0)):
         log(f'Preemptive hostile {chosen_entry} defeated before entering combat')
         return state
-    raise LiveControlError(
-        'Preemptive Fireball did not confirm kill or combat engagement; '
-        'stopping rather than walking into the enemy')
+    if state.player.target_guid == chosen_guid and target and (
+            target.health < before_hp):
+        log(f'Preemptive {chosen_guid} took verified damage; '
+            'letting reactive defense handle any subsequent aggro')
+        return state
+    # Unknown result, not a successful kill. Never cast again at the same
+    # GUID from the same firing position; navigation may move around the
+    # obstruction, while reactive defense remains enabled if it attacks.
+    blocked.add(chosen_guid)
+    log(f'Preemptive attack on {chosen_guid} did not verify damage or credit'
+        + (' (target changed)' if lost_target else '')
+        + '; excluding GUID from proactive/quest pulls this phase')
+    if state.player.target_guid:
+        driver.chat('/cleartarget')
+        state = fresh(state)
+    if state.player.in_combat:
+        return defend_against_aggro(
+            initial=state, capture=capture, driver=driver,
+            log=log, sleep=sleep)
+    return state
+

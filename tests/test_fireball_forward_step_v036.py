@@ -200,8 +200,12 @@ class MageShortForwardRecoveryTests(unittest.TestCase):
                 77, WorldPosition(s.player.guid,0,0.,0.,0.,0.,1)),
             log=notes.append)
         self.assertTrue(outcome.objectives_complete)
-        self.assertEqual(nav.paths,[])
+        # A bounded alternative path query is allowed, but none of its
+        # segments are traversable: absolutely no keyboard movement.
+        self.assertEqual(len(nav.paths),1)
         self.assertTrue(any('Detour blocks safe short forward' in x
+                            for x in notes))
+        self.assertTrue(any('No bounded Detour firing position' in x
                             for x in notes))
 
     def test_active_aggro_prevents_forward_movement(self):
