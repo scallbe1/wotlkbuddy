@@ -247,6 +247,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     from wotlkbuddy.horde.gear import equip_mage_upgrades
     from wotlkbuddy.horde.active_objectives import (
         next_active_kill_quest, next_active_collect_quest)
+    from wotlkbuddy.horde.objective_diagnostics import unresolved_profile_objectives
     from wotlkbuddy.horde.combat import hunt_kill_objectives
     from wotlkbuddy.horde.gameobject_quests import (
         next_active_gameobject_quest, execute_gameobject_quest)
@@ -553,11 +554,25 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                     active_unfinished = [
                         {'quest_id': q.quest_id, 'title': q.title}
                         for q in state.quests if not q.complete]
+                    unresolved = unresolved_profile_objectives(
+                        quest_profile, state, map_id=current.map_id)
                     report['active_objective'] = {
-                        'status': 'no_supported_objective',
-                        'unfinished_quests': active_unfinished}
-                    log('No eligible CollectItem/KillMob/UseObject objective '
-                        'in live journal and loaded Horde XML')
+                        'status': ('unresolved_active_objectives'
+                                   if unresolved else 'no_supported_objective'),
+                        'unfinished_quests': active_unfinished,
+                        'unresolved_profile_objectives': list(unresolved)}
+                    if unresolved:
+                        for issue in unresolved:
+                            log(f"Blocked active quest {issue['quest_id']} "
+                                f"{issue['title']!r}: {issue['reason']}; "
+                                f"XML={issue['xml_objectives']}; "
+                                f"journal={issue['journal_objectives']}; "
+                                f"QuestOrder={issue['profile_steps']}")
+                        log('Active profile quest not selectable; not visiting '
+                            'later quest givers or guessing mob targets')
+                    else:
+                        log('No eligible CollectItem/KillMob/UseObject objective '
+                            'in live journal and loaded Horde XML')
                 elif collecting and not collection.sources:
                     report['active_objective'] = {
                         'status': 'missing_item_mob_sources',
@@ -727,9 +742,16 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
         objective = report.get('active_objective', {})
         status = objective.get('status')
         if status not in ('no_supported_objective', None):
-            # e.g. unsupported item source: stop rather than retry forever.
-            reason = 'unsupported_objective:' + str(status)
-            steps.append({'cycle': cycle+1, 'action': 'stop', 'status': status})
+            # An active unfinished XML quest that was not reconciled with
+            # journal data is a hard blocker. Do not visit later quest givers
+            # and open their unrelated or incomplete progress panels.
+            reason = ('unresolved_active_objectives'
+                      if status == 'unresolved_active_objectives'
+                      else 'unsupported_objective:' + str(status))
+            steps.append({
+                'cycle': cycle+1, 'action': 'stop', 'status': status,
+                'unresolved_profile_objectives': objective.get(
+                    'unresolved_profile_objectives', [])})
             break
         offers = phase('quests')
         newly_accepted = sorted({

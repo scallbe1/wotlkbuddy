@@ -66,10 +66,19 @@ def nearby_profile_quest_givers(
             names.setdefault(step.entry, set()).add(step.npc_name)
     results: list[NpcDestination] = []
     seen: set[int] = set()
-    for step in profile.steps:
+    for index, step in enumerate(profile.steps):
         if (step.kind != 'pickup' or not step.supported or step.entry <= 0
                 or step.quest_id in in_journal or step.quest_id in completed
                 or step.entry in seen):
+            continue
+        # QuestOrder follow-up pickup requires confirmed completion of
+        # every earlier turn-in from this same NPC. Mere absence from the
+        # live journal is NOT completion (telemetry can omit an active quest).
+        # Executor Arren: 380 must be server-completed before pickup 381.
+        if any(prior.kind == 'turnin' and prior.entry == step.entry
+               and (prior.quest_id not in completed
+                    or prior.quest_id in in_journal)
+               for prior in profile.steps[:index]):
             continue
         checks = [condition_value(
             expr, level=telemetry.player.level, race='Undead',
