@@ -223,7 +223,8 @@ local function auditActionIdentity(actionSlot, rawId)
     end
     local itemKind, itemId = query(GetSpellBookItemInfo, rawId, bookType)
     local resolved = 0
-    for _, candidate in ipairs({linkedId, itemId}) do
+    for pass = 1, 2 do
+        local candidate = pass == 1 and linkedId or itemId
         if type(candidate) == 'number' and candidate > 0 and
                 candidate == math.floor(candidate) and
                 candidate < 2147483648 and bookName then
