@@ -53,8 +53,8 @@ class SimGame:
             self.y += 8 * secs * sin(self.facing)
     def sample(self):
         self.seq = (self.seq + 1) % 256
-        if self.key is not None:
-            raise AssertionError('Sampling live position while key held')
+        # Read-only telemetry and memory observation are allowed during a
+        # held forward key; only action/target changes require releasing it.
         p = PlayerRecord('ActiveMage', self.guid, 1, 49, 49, self.combat, False,
                          .44, .81, 2, 13, 'Deathknell', '', '')
         r = PlayerResources(90, 100, 14, 16, 100, 0, 0, 'MAGE', 'Scourge')
@@ -120,6 +120,59 @@ class WorldTravelTests(unittest.TestCase):
                                  sleep=game.sleep,now=lambda:game.time)
         self.assertIn('Aggro/combat',report.stopped_reason)
         self.assertIsNone(game.key)
+    def test_longer_forward_holds_reduce_key_chatter(self):
+        game=SimGame()
+        result=game.run([Vec3(12,18,140),Vec3(20,18,140)])
+        self.assertEqual(result.stopped_reason,'complete',result)
+        self.assertLessEqual(result.movement_pulses,5)
+        self.assertEqual(len([x for x in game.keys if x[0]=='down']),
+                         len([x for x in game.keys if x[0]=='up']))
+        self.assertIsNone(game.key)
+
+    def test_combat_during_hold_interrupts_before_long_pulse_ends(self):
+        game=SimGame()
+        original=game.sleep
+        def enter_combat(seconds):
+            original(seconds)
+            if game.key == _MOVEMENT_SCANCODES['forward'] and game.time > .6:
+                game.combat=True
+        report=follow_world_path(
+            [Vec3(12,18,140), Vec3(20,18,140)],
+            sample=game.sample,keyboard=game,
+            stop_requested=game.emergency_stop_requested,
+            now=lambda:game.time,sleep=enter_combat)
+        self.assertIn('Aggro/combat',report.stopped_reason)
+        self.assertIsNone(game.key)
+        self.assertLess(game.x,20.)
+
+    def test_hostile_target_during_hold_stops_then_scans(self):
+        from dataclasses import replace
+        from wotlkbuddy.live.codec import CombatTarget
+        game=SimGame()
+        original=game.sample
+        observed=[]
+        def sample():
+            snap,world=original()
+            if game.x > 14:
+                snap=replace(
+                    snap, player=replace(snap.player,
+                        target_guid='0xF1300005E0000001'),
+                    combat_target=CombatTarget(
+                        1504,30,30,False,True,True,False,3))
+            return snap,world
+        def scan(snapshot, position, ahead):
+            observed.append((snapshot.player.target_guid,position.x))
+            # No casts in this movement-only test.
+            return snapshot
+        result=follow_world_path(
+            [Vec3(12,18,140),Vec3(20,18,140)],
+            sample=sample,keyboard=game,
+            stop_requested=game.emergency_stop_requested,
+            now=lambda:game.time,sleep=game.sleep,on_threat=scan)
+        self.assertEqual(result.stopped_reason,'complete',result)
+        self.assertTrue(any(x[1]>=14 for x in observed))
+        self.assertIsNone(game.key)
+
     def test_stuck_stops_instead_of_blind_walking(self):
         game=SimGame(can_walk=False)
         report=game.run([Vec3(12,18,140),Vec3(20,18,140)])
