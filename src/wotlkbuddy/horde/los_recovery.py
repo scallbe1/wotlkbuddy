@@ -40,6 +40,12 @@ def detour_firing_approach(nav, *, map_id: int, player: Vec3,
                                  max_distance=65.0, max_step=5.0)
     except (LiveControlError, RuntimeError, OSError, ValueError, TimeoutError):
         return None
+    # Recast/Detour corners alone do not prove a safe human-walkable leg.
+    # Validate every selected segment; if the route returns a straight edge
+    # through rock, do NOT issue any keyboard movement.
+    clearance = getattr(nav, 'segment_clear', None)
+    if not callable(clearance):
+        return None
     # Demand measurable progress toward the same GUID, leaving spell-casting
     # distance. An initial bend *away* from the creature is permitted.
     reduction = 2.5 if attempt == 0 else 4.0
@@ -50,6 +56,11 @@ def detour_firing_approach(nav, *, map_id: int, player: Vec3,
         accumulated += a.distance_to(point)
         if accumulated > max_route_yards:
             break
+        try:
+            if not clearance(map_id, a, point):
+                return None
+        except (RuntimeError, OSError, ValueError, TimeoutError):
+            return None
         distance = hypot(point.x-target.x, point.y-target.y)
         if (accumulated >= 2.0 and 6.0 <= distance <= desired
                 and distance <= initial-reduction
