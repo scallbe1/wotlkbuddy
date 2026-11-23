@@ -119,7 +119,7 @@ def return_and_turnin(
             expected_quest_id=quest_id, expected_map_id=world.map_id,
             max_seconds=min(600, max(15, max_seconds)),
             can_traverse=lambda a, b: nav.segment_clear(world.map_id, a, b),
-            progress=log)
+            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
         if report.stopped_reason != 'complete':
             raise LiveControlError(
                 'Return-to-NPC navigation stopped: ' + report.stopped_reason)
@@ -143,7 +143,7 @@ def return_and_turnin(
     result = turnin(
         profile, quest_id=quest_id, capture=capture, driver=driver,
         character=player.name, expected_guid=player.guid,
-        timeout=10, progress=log)
+        timeout=10, progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
     if result.status not in ('turned_in', 'already_turned_in'):
         raise LiveControlError(
             f'Quest {quest_id} turn-in not confirmed: {result.status}: '

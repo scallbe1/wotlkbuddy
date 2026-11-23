@@ -194,9 +194,23 @@ local function tickData()
         local ok, value = pcall(IsSpellInRange, 'Fireball', 'target')
         if ok and value ~= nil then targetRange = value == 1 and 1 or 0 end
     end
+    -- A hostile target is authorized for *defensive* combat only when
+    -- target-of-target resolves to this exact player GUID, not merely because
+    -- it is an attackable unit near the travel path.
+    local attackingPlayer = '-1'
+    if UnitExists('target') and UnitExists('targettarget') then
+        attackingPlayer = UnitGUID('targettarget') == guid and '1' or '0'
+    end
+    -- Reaction 1..3 is an actively hostile (red) NPC faction; reaction 4
+    -- is neutral (yellow) and must not be preemptively attacked.
+    local reaction = UnitExists('target') and UnitReaction and
+        UnitReaction('target', 'player') or nil
+    if type(reaction) ~= 'number' or reaction < 1 or reaction > 8 then
+        reaction = 0
+    end
     appendLine(table.concat({'T', tostring(targetEntry), tostring(targetHealth),
         tostring(targetMax), tostring(targetDead), tostring(canAttack),
-        tostring(targetRange)}, '\t'))
+        tostring(targetRange), attackingPlayer, tostring(reaction)}, '\t'))
     local function known(spellId)
         if not IsSpellKnown then return -1 end
         local ok, value = pcall(IsSpellKnown, spellId)
@@ -213,6 +227,41 @@ local function tickData()
     end
     appendLine(table.concat({'B', tostring(known(1459)), tostring(arcane),
         tostring(known(168)), tostring(armor), tostring(known(133))}, '\t'))
+
+    -- Read-only Mage sustenance telemetry: exact known conjured item IDs and
+    -- verified bag/slot for the best available stack. The addon NEVER casts
+    -- conjuration or uses food; the armed external controller decides.
+    local conjuredFood = {5349, 1113, 1114, 1487, 8075, 8076, 22895, 22019}
+    local conjuredWater = {5350, 2288, 2136, 3772, 8077, 8078, 8079, 30703, 22018}
+    local function scanConjured(ids)
+        local rankById = {}
+        for rank, id in ipairs(ids) do rankById[id] = rank end
+        local total, bestRank, bestBag, bestSlot, bestItem = 0, 0, -1, 0, 0
+        for bag = 0, 4 do
+            local slots = GetContainerNumSlots(bag) or 0
+            for slot = 1, slots do
+                local link = GetContainerItemLink(bag, slot)
+                local id = link and tonumber(string.match(link, 'item:(%d+)'))
+                local rank = id and rankById[id] or nil
+                if rank then
+                    local _, qty, locked = GetContainerItemInfo(bag, slot)
+                    if type(qty) == 'number' and qty > 0 and not locked then
+                        total = total + qty
+                        if rank > bestRank then
+                            bestRank, bestBag, bestSlot, bestItem = rank, bag, slot, id
+                        end
+                    end
+                end
+            end
+        end
+        return math.min(5000, total), bestBag, bestSlot, bestItem
+    end
+    local foodCount, foodBag, foodSlot, foodItem = scanConjured(conjuredFood)
+    local waterCount, waterBag, waterSlot, waterItem = scanConjured(conjuredWater)
+    appendLine(table.concat({'X', tostring(known(587)), tostring(known(5504)),
+        tostring(foodCount), tostring(waterCount),
+        tostring(foodBag), tostring(foodSlot), tostring(foodItem),
+        tostring(waterBag), tostring(waterSlot), tostring(waterItem)}, '\t'))
     -- Fast, observable Fireball input. Never guess an action-bar slot:
     -- export a digit key ONLY when its bound button actually holds the
     -- Fireball spell (not a macro or unrelated action). Cast timing is

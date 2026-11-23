@@ -219,7 +219,11 @@ def execute_gameobject_quest(
 
         def sample():
             snap=capture()
-            guard(snap)
+            if snap.player.in_combat:
+                if snap.truncated or snap.player.guid != guid or snap.player.dead:
+                    raise LiveControlError('GameObject navigation lost character during aggro')
+            else:
+                guard(snap)
             opid,wp=world_position(snap)
             if opid!=pid:
                 raise LiveControlError('WoW PID changed on GameObject route')
@@ -231,7 +235,7 @@ def execute_gameobject_quest(
             expected_quest_id=goal.quest_id,expected_map_id=world.map_id,
             max_seconds=min(600,max(15,max_seconds-(now()-started))),
             can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
-            progress=log)
+            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
         if report.stopped_reason!='complete':
             raise LiveControlError('GameObject navigation stopped: '+report.stopped_reason)
         return fresh(s)
@@ -311,7 +315,11 @@ def execute_gameobject_quest(
         kb=getattr(driver,'keyboard',driver)
         def sample():
             snap=capture()
-            guard(snap)
+            if snap.player.in_combat:
+                if snap.truncated or snap.player.guid != guid or snap.player.dead:
+                    raise LiveControlError('Local GO route lost character during aggro')
+            else:
+                guard(snap)
             sample_pid,sample_pos=world_position(snap)
             if sample_pid!=pid:
                 raise LiveControlError('WoW process changed during local GO step')
@@ -323,7 +331,7 @@ def execute_gameobject_quest(
             max_seconds=min(45,max(15,max_seconds-(now()-started))),
             arrival_yards=1.0,max_recoveries=0,
             can_traverse=lambda a,b:nav.segment_clear(before.map_id,a,b),
-            progress=log,sleep=sleep,now=now)
+            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None),sleep=sleep,now=now)
         if report.stopped_reason!='complete':
             log('Same-GO local approach stopped: '+report.stopped_reason)
             return s,False

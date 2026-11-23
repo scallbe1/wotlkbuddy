@@ -90,7 +90,7 @@ def visit_npc(
             expected_quest_id=None, expected_map_id=world.map_id,
             max_seconds=450,
             can_traverse=lambda a,b: nav.segment_clear(world.map_id,a,b),
-            progress=log)
+            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
         if result.stopped_reason != 'complete':
             raise LiveControlError(
                 f'NPC visit to {npc_name} stopped: {result.stopped_reason}')
