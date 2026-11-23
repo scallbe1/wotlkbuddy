@@ -10,7 +10,9 @@ local safe=function(value,limit)
     return string.sub(tostring(value),1,limit)
 end
 local factory=assert(loadstring(helper .. '\n' .. identity .. '\n' ..
-    resolver .. '\nreturn function(appendLine,safe)\n' .. audit .. '\nend'))
+    resolver .. '\nreturn function(appendLine,safe)\n' ..
+    'local page = GetActionBarPage and GetActionBarPage() or 0\n' ..
+    audit .. '\nend'))
 local perform=factory()
 local rows={}
 local function append(row) table.insert(rows,row) return true end
