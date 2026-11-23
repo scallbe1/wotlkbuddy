@@ -340,7 +340,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 )
             except ValueError as exc:
                 raise TelemetryError('Malformed player record') from exc
-        elif parts[0] == 'J':
+        elif parts[0] == 'DS':
             if (len(parts) != 5 or death_state is not None or
                     parts[1] not in ('0', '1') or parts[2] not in ('0', '1')):
                 raise TelemetryError('Malformed or duplicate death-state record')
