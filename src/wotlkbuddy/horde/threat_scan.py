@@ -192,7 +192,37 @@ def scan_and_clear_hostiles(
     if (measured>detection_yards or abs(actual.z-player_position.z)>6 or
             distance_to_corridor(actual,player_position.position,
                                  path_ahead)>corridor_yards):
-        raise LiveControlError('Scanned hostile moved outside verified travel corridor')
+        # Dynamic mobs can walk between the first corridor observation and
+        # exact GUID reacquisition. A stale candidate isn't a navigation
+        # failure: stop this pull, clear the target, and let the existing
+        # Detour path continue. Combat is still handled reactively.
+        log(f'Scanned hostile {chosen_guid} moved outside the verified '
+            'travel corridor; deferring pull and continuing Detour')
+        if state.player.in_combat:
+            return defend_against_aggro(
+                initial=state, capture=capture, driver=driver,
+                log=log, sleep=sleep)
+        if state.player.target_guid:
+            driver.chat('/cleartarget')
+            state=fresh(state)
+        return state
+    if direct_path_clear is not None:
+        try:
+            if not direct_path_clear(player_position.position, actual):
+                log(f'Scanned hostile {chosen_guid} is behind blocked cave '
+                    'geometry after reacquisition; deferring preemptive pull')
+                if state.player.target_guid:
+                    driver.chat('/cleartarget')
+                    state=fresh(state)
+                return state
+        except (OSError, RuntimeError, ValueError, TimeoutError,
+                LiveControlError) as exc:
+            log(f'Cannot verify direct approach for {chosen_guid} after '
+                f'reacquisition: {exc}; deferring pull')
+            if state.player.target_guid:
+                driver.chat('/cleartarget')
+                state=fresh(state)
+            return state
     if state.mage_buffs is None or state.mage_buffs.knows_fireball is not True:
         raise LiveControlError('Cannot preemptively fight without learned Fireball')
     log(f'Preemptive hostile {chosen_entry}, GUID {chosen_guid}, '
