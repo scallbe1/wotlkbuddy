@@ -853,6 +853,10 @@ def hunt_kill_objectives(
             if collect_items else
             next_kill_objective(profile, s, quest_id))
         if current_objective is None:
+            if not s.player.in_combat:
+                # The last kill also needs recovery before the long NPC
+                # hand-in route, not only between successive pulls.
+                s = rest(s)
             if collect_items and active_tracked_item:
                 result = collected_results.get(active_tracked_item)
                 if (result is None or
