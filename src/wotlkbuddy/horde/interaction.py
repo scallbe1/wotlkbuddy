@@ -90,6 +90,7 @@ class KeyboardQuestInput:
             '/cast Arcane Intellect',
             '/cast Frost Armor', '/cast Fireball', '/cast Frostbolt',
             '/cast Conjure Food', '/cast Conjure Water',
+            '/run RepopMe()',
         ) or re.fullmatch(r'/run LootSlot\(([1-9]|1[0-6])\)', command) is not None
         allowed_goal = re.fullmatch(
             r'/wbtgoal (0|[1-9][0-9]{0,5})', command) is not None
