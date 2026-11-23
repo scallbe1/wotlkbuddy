@@ -303,6 +303,11 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         first = driver.on_aggro(first)
     if first.player.in_combat:
         raise LiveControlError('Aggro unresolved before starting quest phase')
+    # CopilotBuddy-style character management runs before quest actions:
+    # refresh learned spells and populate only verified empty bound bar slots.
+    from wotlkbuddy.combat.runtime import provision_rotation_hotbar
+    provision_rotation_hotbar(capture=cap, driver=driver, log=log)
+    first = cap()
     pid, world = verified_live_position(first, pid=args.pid)
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
