@@ -57,6 +57,16 @@ slot,id,status,matches=resolve('Fireball')
 assert(slot==0 and id==0 and status=='NO_ID' and matches==2,
        'Invalid spell IDs must never be sent to PlaceAction')
 
+-- Some modified clients return an invalid book-item ID even when they
+-- expose GetSpellBookItemInfo. A verified spell-link ID can still recover.
+GetSpellLink = function(index, bookType)
+    return '|cff71d5ff|Hspell:' .. ids[index] .. ':0|h[' .. names[index] .. ']|h|r'
+end
+slot,id,status,matches=resolve('Fireball')
+assert(slot==4 and id==143 and status=='OK' and matches==2,
+       'A wrong book-item ID must fall back to the verified spell link')
+GetSpellLink = nil
+
 -- Missing GetSpellBookItemInfo and missing GetSpellLink: diagnostic rather
 -- than an incorrect claim that the character has not learned Fireball.
 GetSpellBookItemInfo = nil
