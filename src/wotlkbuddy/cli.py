@@ -297,22 +297,34 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         raise LiveControlError('Only a verified living Undead Mage is supported')
     driver = KeyboardQuestInput(interact_key=args.interact_key)
     from wotlkbuddy.horde.defense import defend_against_aggro
-    driver.on_aggro = lambda snapshot: defend_against_aggro(
-        initial=snapshot, capture=cap, driver=driver, log=log)
+    from wotlkbuddy.horde.sustain import maintain_mage_supplies
+
+    def recover_after_combat(snapshot):
+        if snapshot.player.in_combat:
+            return snapshot
+        return maintain_mage_supplies(
+            capture=cap, driver=driver, log=log, post_combat=True)
+
+    def defend_then_recover(snapshot):
+        defended = defend_against_aggro(
+            initial=snapshot, capture=cap, driver=driver, log=log)
+        return recover_after_combat(defended)
+    driver.on_aggro = defend_then_recover
     if first.player.in_combat:
         first = driver.on_aggro(first)
     if first.player.in_combat:
         raise LiveControlError('Aggro unresolved before starting quest phase')
     pid, world = verified_live_position(first, pid=args.pid)
-    from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
     from wotlkbuddy.live.world_position import verified_target_position
     driver.scan_hostiles = lambda snapshot, where, ahead: scan_and_clear_hostiles(
         initial=snapshot, player_position=where, path_ahead=ahead,
         capture=cap, driver=driver,
         target_position=lambda s: verified_target_position(s, pid=pid),
-        log=log, detection_yards=args.scan_yards)
-    maintain_mage_supplies(capture=cap, driver=driver, log=log)
+        log=log, detection_yards=args.scan_yards,
+        on_recovery=recover_after_combat)
+    maintain_mage_supplies(capture=cap, driver=driver, log=log,
+                           post_combat=True)
 
     def set_native_status(phase: str, quest_id: int = 0) -> None:
         if args.no_hud:
