@@ -306,11 +306,14 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     # CopilotBuddy-style character management runs before quest actions:
     # refresh learned spells and populate only verified empty bound bar slots.
     from wotlkbuddy.combat.character import progress_dps_talents
-    from wotlkbuddy.combat.runtime import provision_rotation_hotbar
-    # Talent changes can unlock abilities; develop the character first,
-    # then inspect the spellbook/hotbar before any quest combat.
+    # Automatic actionbar writes are suspended. Live 3.3.5a clients have
+    # repeatedly accepted PlaceAction but failed to report the resulting
+    # visible icons, causing duplicate Fireballs in slots 2, 6 and 7.
+    # Keep combat read-only during setup until the visible bar's page and
+    # slot identities can be reconciled independently.
     progress_dps_talents(capture=cap, driver=driver, log=log, max_points=1)
-    provision_rotation_hotbar(capture=cap, driver=driver, log=log)
+    log('Automatic spell placement DISABLED: existing action-bar icons will '
+        'not be changed. Run live-status for read-only slot diagnostics.')
     first = cap()
     if args.only in ('all', 'objectives', 'collect', 'continuous'):
         from wotlkbuddy.combat.runtime import require_verified_combat_key
