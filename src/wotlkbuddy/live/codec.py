@@ -251,6 +251,8 @@ class ClientTelemetry:
     merchant_items: tuple[MerchantItem, ...] = ()
     fireball_key: str | None = None
     fireball_cast_remaining_ms: int | None = None
+    mouse_world_name: str | None = None
+    spell_targeting: bool | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -288,6 +290,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     fireball_record_seen = False
     fireball_key = None
     fireball_cast_remaining_ms = None
+    mouse_world_name = None
+    spell_targeting = None
     for line in content.splitlines():
         parts = line.split('\t')
         if parts[0] == 'P':
@@ -379,6 +383,14 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                         '\\r' in parts[3] or '\\n' in parts[3]):
                     raise TelemetryError('Invalid quest item name')
                 tracked_item_name = parts[3] or None
+        elif parts[0] == 'G':
+            if (len(parts) not in (2,3) or mouse_world_name is not None or
+                    len(parts[1]) > 75 or
+                    any(ord(c) < 32 for c in parts[1]) or
+                    (len(parts)==3 and parts[2] not in ('0','1'))):
+                raise TelemetryError('Malformed or duplicate WorldFrame hover record')
+            mouse_world_name = parts[1]
+            spell_targeting = (parts[2]=='1') if len(parts)==3 else None
         elif parts[0] == 'F':
             if (len(parts) != 3 or fireball_record_seen or
                     parts[1] not in ('-', *'0123456789')):
@@ -667,4 +679,6 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            merchant_items=tuple(
                                merchant_items[k] for k in sorted(merchant_items)),
                            fireball_key=fireball_key,
-                           fireball_cast_remaining_ms=fireball_cast_remaining_ms)
+                           fireball_cast_remaining_ms=fireball_cast_remaining_ms,
+                           mouse_world_name=mouse_world_name,
+                           spell_targeting=spell_targeting)

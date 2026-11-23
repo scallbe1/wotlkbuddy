@@ -114,6 +114,18 @@ local function tickData()
         safe(UnitName('target'), 50),
     }, '\t')
     appendLine(playerLine)
+    -- Optional, read-only WorldFrame hover: a name is only exported if the
+    -- cursor is over the 3-D world, not a bag/chat/tooltip/action bar region.
+    -- Python correlates this with a double-observed GO template/GUID and
+    -- world distance before permitting any right-click.
+    local hoveredWorldName = ''
+    if GetMouseFocus and GetMouseFocus() == WorldFrame and
+            GameTooltip and GameTooltip:IsShown() and
+            GameTooltipTextLeft1 then
+        hoveredWorldName = safe(GameTooltipTextLeft1:GetText(), 75)
+    end
+    local targeting = SpellIsTargeting and SpellIsTargeting() and '1' or '0'
+    appendLine(table.concat({'G', hoveredWorldName, targeting}, '\t'))
     -- Inventory tracking is read only. Match ItemId exactly against source
     -- Horde XML and report current inventory count in each fresh frame.
     if trackedQuestItemId > 0 and GetItemCount then

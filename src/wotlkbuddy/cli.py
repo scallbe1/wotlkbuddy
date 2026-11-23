@@ -247,6 +247,9 @@ def _horde_progress(args: argparse.Namespace) -> None:
     from wotlkbuddy.horde.active_objectives import (
         next_active_kill_quest, next_active_collect_quest)
     from wotlkbuddy.horde.combat import hunt_kill_objectives
+    from wotlkbuddy.horde.gameobject_quests import (
+        next_active_gameobject_quest, execute_gameobject_quest)
+    from wotlkbuddy.horde.marla_prerequisite import collect_samuel_remains
     from wotlkbuddy.horde.return_turnin import return_and_turnin
     from wotlkbuddy.horde.merchant import (
         free_bag_space, next_ready_profile_turnin)
@@ -317,7 +320,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
         equipped = equip_mage_upgrades(capture=cap, driver=driver, log=log)
         report['equipped_item_ids'] = equipped
     if args.only in ('all', 'quests', 'train', 'vendor', 'objectives',
-                     'collect', 'turnin'):
+                     'collect', 'objects', 'turnin'):
         if not args.nav_dll or not args.python32:
             raise ValueError('NPC navigation requires --nav-dll and --python32')
         dll = Path(args.nav_dll).expanduser().resolve()
@@ -354,7 +357,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                     min_free_slots=minimum, log=log)
                 return serialize_vendor_sale(sold)
 
-            if args.only in ('all', 'vendor', 'objectives', 'collect', 'turnin'):
+            if args.only in ('all', 'vendor', 'objectives', 'collect', 'objects',
+                              'turnin'):
                 # Bags can fill while collecting items. Preflight before
                 # questing and again immediately before claiming a reward.
                 ensure_reward_bag_space()
@@ -453,7 +457,7 @@ def _horde_progress(args: argparse.Namespace) -> None:
                             f'Quest hand-in contradicted by post-training '
                             f'journal/history: {confirmations!r}')
             delivered_ready_quest = False
-            if args.only in ('all', 'objectives', 'collect', 'turnin'):
+            if args.only in ('all', 'objectives', 'collect', 'objects', 'turnin'):
                 state, current = location()
                 quest = next_ready_profile_turnin(quest_profile, state)
                 if quest is not None:
@@ -497,18 +501,34 @@ def _horde_progress(args: argparse.Namespace) -> None:
                 report['turnin_status'] = (
                     'no_ready_active_quest; unknown history is not a '
                     'safe reason to retry a reward')
-            if args.only in ('all', 'objectives', 'collect') and not delivered_ready_quest:
+            if args.only in ('all', 'objectives', 'collect', 'objects') and not delivered_ready_quest:
                 state, current = location()
                 kill = (next_active_kill_quest(
                     quest_profile, state, map_id=current.map_id)
-                    if args.only != 'collect' else None)
-                collection = next_active_collect_quest(
+                    if args.only not in ('collect','objects') else None)
+                collection = (next_active_collect_quest(
                     quest_profile, state, map_id=current.map_id)
-                collecting = collection is not None and (
-                    kill is None or
-                    args.only == 'collect' or
-                    collection.profile_step <= kill.profile_step)
-                target_quest = collection if collecting else kill
+                    if args.only != 'objects' else None)
+                gameobject = next_active_gameobject_quest(
+                    quest_profile, state, map_id=current.map_id)
+                if args.only == 'collect' and gameobject is not None and (
+                        gameobject.objective_type != 'CollectItem'):
+                    gameobject = None
+                # GameObject-backed CollectItem from the same profile step
+                # supersedes an empty Mob source list; it is not an unknown
+                # creature to hunt. Otherwise honor XML QuestOrder strictly.
+                options = [
+                    (entry.profile_step, mode, entry)
+                    for mode, entry in (
+                        ('kill', kill),
+                        ('collect', collection),
+                        ('gameobject', gameobject))
+                    if entry is not None]
+                options.sort(key=lambda val:(
+                    val[0], 0 if val[1]=='gameobject' else 1))
+                target_mode = options[0][1] if options else None
+                target_quest = options[0][2] if options else None
+                collecting = target_mode=='collect'
                 if target_quest is None:
                     active_unfinished = [
                         {'quest_id': q.quest_id, 'title': q.title}
@@ -516,8 +536,8 @@ def _horde_progress(args: argparse.Namespace) -> None:
                     report['active_objective'] = {
                         'status': 'no_supported_objective',
                         'unfinished_quests': active_unfinished}
-                    log('No eligible CollectItem/KillMob objective in live '
-                        'journal and loaded Horde XML; no combat started')
+                    log('No eligible CollectItem/KillMob/UseObject objective '
+                        'in live journal and loaded Horde XML')
                 elif collecting and not collection.sources:
                     report['active_objective'] = {
                         'status': 'missing_item_mob_sources',
@@ -538,26 +558,48 @@ def _horde_progress(args: argparse.Namespace) -> None:
                     hud.set(goal=f'Complete active quest: {quest_title}',
                             action='Selecting profile-verified objective enemy')
                     set_native_status('hunt', target_quest.quest_id)
-                    if collecting:
+                    if target_mode=='gameobject':
+                        pass
+                    elif collecting:
                         log(f'CollectItem from profile: {quest_title!r} '
                             f'(quest {collection.quest_id}), '
                             f'item={collection.item_id} x'
                             f'{collection.required_count}, '
                             f'Mob IDs={collection.sources}; '
                             f'journal={collection.journal_description!r}')
-                    else:
+                    elif target_mode=='kill':
                         log(f'Active objective from profile: {quest_title!r} '
                             f'(quest {kill.quest_id}), '
                             f'KillMob entry {kill.mob_entry}, '
                             f'journal={kill.objective_description!r}')
-                    hunt = hunt_kill_objectives(
-                        profile=quest_profile, quest_id=target_quest.quest_id,
-                        pid=pid, capture=cap, driver=driver, nav=nav, spawns=db,
-                        max_seconds=args.max_seconds,
-                        max_kills=(args.collect_max_kills if collecting
-                                   else args.max_kills),
-                        collect_items=collecting,
-                        log=log)
+                    if target_mode=='gameobject':
+                        log(f'GameObject quest from Horde XML: '
+                            f'{target_quest.title!r}, quest={target_quest.quest_id}, '
+                            f'entry={target_quest.object_id} '
+                            f'({target_quest.object_name}), '
+                            f'type={target_quest.objective_type}')
+                        hud.set(action=f'Finding verified {target_quest.object_name}')
+                        if (target_quest.quest_id==6395 and
+                                target_quest.object_id==178090):
+                            prereq=collect_samuel_remains(
+                                profile=quest_profile, pid=pid,
+                                capture=cap, driver=driver, nav=nav,
+                                spawns=db, log=log)
+                            if prereq is not None:
+                                report['prerequisite_hunt'] = prereq.to_dict()
+                            ensure_reward_bag_space()
+                        hunt = execute_gameobject_quest(
+                            goal=target_quest, pid=pid, capture=cap,
+                            driver=driver, nav=nav,
+                            max_seconds=args.max_seconds, log=log)
+                    else:
+                        hunt = hunt_kill_objectives(
+                            profile=quest_profile, quest_id=target_quest.quest_id,
+                            pid=pid, capture=cap, driver=driver, nav=nav,
+                            spawns=db, max_seconds=args.max_seconds,
+                            max_kills=(args.collect_max_kills if collecting
+                                       else args.max_kills),
+                            collect_items=collecting, log=log)
                     report['active_objective'] = hunt.to_dict()
                     if not hunt.objectives_complete:
                         raise LiveControlError(
@@ -1496,7 +1538,7 @@ def main(argv: list[str] | None = None) -> int:
     progression = sub.add_parser('horde-progress',
                        help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
     progression.add_argument('--only', choices=['all','gear','quests','train','vendor',
-                                                'objectives','collect','turnin'],
+                                                'objectives','collect','objects','turnin'],
                              default='all')
     progression.add_argument('--profiles-root',
                              help='Horde quest profile root (defaults to ~/Questing-profiles)')
