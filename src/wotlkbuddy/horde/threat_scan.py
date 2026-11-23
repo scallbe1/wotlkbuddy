@@ -45,6 +45,7 @@ def scan_and_clear_hostiles(
     detection_yards: float = 27.,
     corridor_yards: float = 12.,
     max_targets: int = 7, crowd_limit: int = 2,
+    on_recovery: Callable[[ClientTelemetry], ClientTelemetry] | None = None,
 ) -> ClientTelemetry:
     """Scan, stop before any crowded hostile corridor, or pull one verified mob.
 
@@ -55,6 +56,11 @@ def scan_and_clear_hostiles(
         raise ValueError('Invalid nearby hostile proximity bounds')
     if not 1 <= max_targets <= 10 or not 1 <= crowd_limit <= 3:
         raise ValueError('Invalid hostile scan budgets')
+    def finished_fight(snapshot: ClientTelemetry) -> ClientTelemetry:
+        if snapshot.player.in_combat:
+            raise LiveControlError('Combat still active; refusing to eat or drink')
+        return on_recovery(snapshot) if on_recovery is not None else snapshot
+
     if not path_ahead:
         return initial
     guid=initial.player.guid
@@ -65,9 +71,9 @@ def scan_and_clear_hostiles(
             player_position.player_guid.lower()!=guid.lower()):
         raise LiveControlError('Verified Mage/player position required for threat scan')
     if initial.player.in_combat:
-        return defend_against_aggro(
+        return finished_fight(defend_against_aggro(
             initial=initial,capture=capture,driver=driver,
-            log=log,sleep=sleep)
+            log=log,sleep=sleep))
 
     def guard(snapshot: ClientTelemetry):
         if (snapshot.truncated or snapshot.player.guid!=guid or
@@ -98,8 +104,8 @@ def scan_and_clear_hostiles(
     candidates: list[tuple[float,str,int]]=[]
     for _ in range(max_targets):
         if state.player.in_combat:
-            return defend_against_aggro(
-                initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
+            return finished_fight(defend_against_aggro(
+                initial=state,capture=capture,driver=driver,log=log,sleep=sleep))
         driver.chat('/targetenemy')
         state=fresh(state)
         target=state.combat_target
@@ -154,9 +160,9 @@ def scan_and_clear_hostiles(
             driver.chat('/targetenemy')
             state=fresh(state)
             if state.player.in_combat:
-                return defend_against_aggro(
+                return finished_fight(defend_against_aggro(
                     initial=state,capture=capture,driver=driver,
-                    log=log,sleep=sleep)
+                    log=log,sleep=sleep))
             if state.player.target_guid==chosen_guid:
                 break
         else:
@@ -197,13 +203,13 @@ def scan_and_clear_hostiles(
             break
         state=fresh(state,.65)
     if state.player.in_combat:
-        return defend_against_aggro(
-            initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
+        return finished_fight(defend_against_aggro(
+            initial=state,capture=capture,driver=driver,log=log,sleep=sleep))
     target=state.combat_target
     if (state.player.target_guid==chosen_guid and target and
             (target.dead or target.health==0)):
         log(f'Preemptive hostile {chosen_entry} defeated before entering combat')
-        return state
+        return finished_fight(state)
     raise LiveControlError(
         'Preemptive Fireball did not confirm kill or combat engagement; '
         'stopping rather than walking into the enemy')
