@@ -72,4 +72,28 @@ def summarize_telemetry(telemetry: ClientTelemetry) -> str:
         for obj in quest.objectives:
             lines.append(f'      {obj.index}. {obj.description} '
                          f'[{"done" if obj.done else "pending"}]')
+    lines.append('Actionbar (read-only; no spell placement):')
+    if telemetry.actionbar_page is None:
+        lines.append('  Visible bar page: unknown (addon/API may be outdated)')
+    else:
+        lines.append(f'  Visible main bar page: {telemetry.actionbar_page}')
+    if not telemetry.actionbar_inspected:
+        lines.append('  GetActionInfo: unavailable or addon not updated')
+    elif not telemetry.raw_action_slots:
+        lines.append('  Raw slot diagnostics: missing; reinstall updated addon and /reload')
+    else:
+        for item in telemetry.raw_action_slots:
+            spell_name = f' [{item.name}]' if item.name else ''
+            lines.append(
+                f'  {item.view} button {item.button} -> action '
+                f'{item.action_index}: {item.kind} id={item.action_id}'
+                f'{spell_name} | digit-bound={item.digit_bound}')
+    occupied = ', '.join(f'{a.name}@{a.slot}'
+                         for a in telemetry.observed_bar_spells)
+    ready_keys = ', '.join(
+        f'{a.name}@{a.key}' for a in telemetry.action_spells)
+    lines.append('  Observed physical spells: ' + (occupied or 'none reported'))
+    lines.append('  Verified 1-0 actions: ' + (ready_keys or 'none reported'))
+    lines.append(
+        '  Next bot run will NOT place or replace action-bar spells.')
     return '\n'.join(lines)
