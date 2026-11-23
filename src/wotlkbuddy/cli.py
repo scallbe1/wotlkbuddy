@@ -304,6 +304,13 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         raise LiveControlError('Aggro unresolved before starting quest phase')
     pid, world = verified_live_position(first, pid=args.pid)
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
+    from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
+    from wotlkbuddy.live.world_position import verified_target_position
+    driver.scan_hostiles = lambda snapshot, where, ahead: scan_and_clear_hostiles(
+        initial=snapshot, player_position=where, path_ahead=ahead,
+        capture=cap, driver=driver,
+        target_position=lambda s: verified_target_position(s, pid=pid),
+        log=log, detection_yards=args.scan_yards)
     maintain_mage_supplies(capture=cap, driver=driver, log=log)
 
     def set_native_status(phase: str, quest_id: int = 0) -> None:
@@ -1663,6 +1670,8 @@ def main(argv: list[str] | None = None) -> int:
                              help='Bound kills while collecting quest item drops')
     progression.add_argument('--max-seconds', type=float, default=900,
                              help='Bound the objective hunt duration')
+    progression.add_argument('--scan-yards', type=float, default=27.,
+                             help='Proactive red-hostile scan radius (12..35 yd)')
     progression.add_argument('--max-cycles', type=int, default=80,
                              help='Bound continuous quest/offer stages (1..250)')
     progression.add_argument('--auto-minutes', type=int, default=180,
