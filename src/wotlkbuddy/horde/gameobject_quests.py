@@ -158,6 +158,7 @@ def execute_gameobject_quest(
     visited_guids: set[int]=set()
     visited_hotspots: set[int]=set()
     no_progress=0
+    grave_item_activated=False
 
     def guard(s):
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()
@@ -251,6 +252,13 @@ def execute_gameobject_quest(
     if state.mouse_world_name is None:
         raise LiveControlError('GameObject hover telemetry unavailable; '
                                'reinstall updated addon and /reload')
+    if goal.quest_id==6395 and goal.object_id==178090:
+        if (state.tracked_item_id!=16333 or
+                state.tracked_item_count is None or
+                state.tracked_item_count<1):
+            raise LiveControlError(
+                "Marla's Grave requires source-confirmed Samuel's Remains "
+                "item 16333. Collect from Samuel Fipps NPC 1919 first.")
     for iteration in range(max_interactions*5):
         state=fresh(state)
         current=count(state)
@@ -343,7 +351,27 @@ def execute_gameobject_quest(
             raise LiveControlError('GameObject moved/disappeared before click')
         before_count=count(state)
         before_item=(state.tracked_item_count if goal.item_id else None)
-        mouse.right_click()
+        if goal.quest_id==6395 and goal.object_id==178090:
+            if not grave_item_activated:
+                # Item is verified in bags and the exact grave template is
+                # visible within 5y. Use the item only now, never at an
+                # unverified/guessed coordinate.
+                driver.chat('/run UseItemByName(16333)')
+                grave_item_activated=True
+                state=fresh(state,.9)
+                if count(state)>before_count or journal(state)[0].complete:
+                    interacted+=1
+                    log("Samuel's Remains item used at Marla's Grave; "
+                        'quest objective confirmed without a ground click')
+                    continue
+            if state.spell_targeting is True:
+                mouse.left_click()
+                log("Samuel's Remains has a live ground-target cursor; "
+                    "left-clicking the verified grave")
+            else:
+                mouse.right_click()
+        else:
+            mouse.right_click()
         interacted+=1
         visited_guids.add(obj.guid)
         state=fresh(state,.9)
