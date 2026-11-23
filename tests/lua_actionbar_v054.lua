@@ -28,7 +28,7 @@ function safe(value,limit)
     return string.sub(tostring(value),1,limit)
 end
 
-local function has(rows,expected)
+-- This old regression isolates the actionbar inventory block; its new AX\n-- diagnostics belong to the separate v056 identity audit test.\nfunction auditActionIdentity() return '', '', 0, '-1', '-1' end\n\nlocal function has(rows,expected)
     for _,row in ipairs(rows) do
         if row == expected then return true end
     end
