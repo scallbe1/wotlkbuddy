@@ -328,8 +328,10 @@ def hunt_kill_objectives(
             raise LiveControlError(
                 'Fireball target changed before close-range recovery')
         try:
-            observed_pid, player_pos = world_position(s)
+            # The exact target can despawn without changing addon state;
+            # check its read-only memory record before a second process scan.
             mob_pos = target_xyz(s)
+            observed_pid, player_pos = world_position(s)
         except (WorldPositionError, OSError, ValueError,
                 LiveControlError) as exc:
             log(f'Cannot validate Fireball target/world position: {exc}')
