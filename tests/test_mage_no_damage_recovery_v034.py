@@ -114,8 +114,9 @@ def run(game, *, nav=None, target_xyz=None, world_position=None,
         profile=PROFILE,quest_id=364,pid=77,
         capture=game.capture,driver=game,
         nav=nav or Nav(),spawns=None,
-        target_xyz=target_xyz or (
-            lambda s:Vec3(25.,0.,0.)),
+        # Simulations with no observable corpse XYZ must not attempt
+        # the real Win32 process reader on a CI runner.
+        target_xyz=target_xyz or (lambda s:None),
         world_position=world_position,
         travel=travel or (
             lambda legs,**kwargs:SimpleNamespace(stopped_reason='complete')),
