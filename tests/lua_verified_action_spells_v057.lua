@@ -65,7 +65,11 @@ end
 GetSpellBookItemInfo=nil
 GetActionTexture=function(slot)
     local book=books[physical[slot]]
-    return book and book[3]
+    if book then return book[3] end
+    -- A stock client returns a database spell ID from GetActionInfo.
+    -- Its action icon still comes from the same visible button.
+    local database=db[physical[slot]]
+    return database and database[2]
 end
 IsUsableAction=function() return true end
 IsActionInRange=function() return 1 end
