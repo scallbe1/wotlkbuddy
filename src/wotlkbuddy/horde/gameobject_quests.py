@@ -157,6 +157,11 @@ def execute_gameobject_quest(
     interacted=0
     visited_guids: set[int]=set()
     visited_hotspots: set[int]=set()
+    # Failed clicks are not successful interactions. Keep the exact GO GUID
+    # selected for at most two shorter, measured local approaches before
+    # abandoning that instance. Do not walk to another box immediately.
+    local_approaches: dict[int,int] = {}
+    preferred_guid: int | None = None
     no_progress=0
     grave_item_activated=False
 
@@ -232,6 +237,124 @@ def execute_gameobject_quest(
             raise LiveControlError('GameObject navigation stopped: '+report.stopped_reason)
         return fresh(s)
 
+    def local_approach(s, obj):
+        """Move a measured ~1 yard closer to the SAME observed GO.
+
+        A visible mouseover tooltip proves object identity, not interaction
+        range. Unlike normal long-distance navigation, this recovery asks
+        Detour to clear the short world-space segment, uses a 1.0-yard
+        arrival tolerance with obstacle recovery disabled, and verifies the
+        player's new XYZ + original GO GUID before allowing another click.
+        """
+        used=local_approaches.get(obj.guid,0)
+        if used>=2:
+            log(f'GO {obj.guid:016X}: local approach budget exhausted (2)')
+            return s,False
+        opid,before=world_position(s)
+        if opid!=pid:
+            raise LiveControlError('WoW process changed during local GO approach')
+        matching=tuple(
+            candidate for candidate in observe_objects(s,goal.object_id)
+            if candidate.guid==obj.guid and
+               candidate.entry==goal.object_id and
+               candidate.position.distance_to(obj.position)<=.5)
+        if len(matching)!=1:
+            log('Previously clicked GameObject disappeared or moved; '
+                'cannot safely nudge toward it')
+            return s,False
+        dx=obj.position.x-before.x
+        dy=obj.position.y-before.y
+        distance=hypot(dx,dy)
+        height=abs(before.z-obj.position.z)
+        if not 2.0<distance<=5.0 or height>2.0:
+            log(f'No safe closer approach for GO {obj.guid:016X}: '
+                f'XY={distance:.2f}y, Z difference={height:.2f}y')
+            return s,False
+        # The endpoint is at least ~1.2 yards from the GO, and no more
+        # than 2.0 yards from the measured player. No object crossing.
+        # If Detour blocks a 2-yard segment, check a shorter 1.7 or 1.4
+        # yard segment. The first 1 yard may be clear even when the full
+        # proposal crosses a wall, so avoid abandoning the GO prematurely.
+        stride=min(2.0,distance-1.2)
+        legs=None
+        for proposal in dict.fromkeys(
+                (round(stride,2),round(min(1.7,stride),2),
+                 round(min(1.4,stride),2))):
+            if proposal < 1.35:
+                continue  # 1.0y arrival tolerance would make no progress
+            destination=Vec3(
+                before.x+dx/distance*proposal,
+                before.y+dy/distance*proposal,
+                before.z+(obj.position.z-before.z)*(proposal/distance))
+            try:
+                if not nav.segment_clear(
+                        before.map_id,before.position,destination):
+                    continue
+                raw=nav.find_path(before.map_id,before.position,destination)
+                candidate=validate_nav_path(
+                    raw,before.position,destination,max_distance=6)
+                path_length=sum(a.distance_to(b)
+                                for a,b in zip(candidate,candidate[1:]))
+                if path_length<=3.5:
+                    legs=candidate
+                    stride=proposal
+                    break
+            except (RuntimeError,OSError,ValueError,TimeoutError,LiveControlError) as exc:
+                log(f'GO {obj.guid:016X}: Detour rejected '
+                    f'{proposal:.2f}y closer proposal: {exc}')
+        if legs is None:
+            log(f'GO {obj.guid:016X}: Detour blocks close-range '
+                'forward approach (2.0/1.7/1.4y proposals); not moving blindly')
+            return s,False
+        log(f'GO {obj.guid:016X}: no quest credit, approaching same box '
+            f'closer ({distance:.2f}y XY, step <=2.0y, '
+            f'attempt {used+1}/2)')
+        kb=getattr(driver,'keyboard',driver)
+        def sample():
+            snap=capture()
+            guard(snap)
+            sample_pid,sample_pos=world_position(snap)
+            if sample_pid!=pid:
+                raise LiveControlError('WoW process changed during local GO step')
+            return snap,sample_pos
+        report=travel(
+            legs,sample=sample,keyboard=kb,
+            stop_requested=driver.emergency_stop_requested,
+            expected_quest_id=goal.quest_id,expected_map_id=before.map_id,
+            max_seconds=min(45,max(15,max_seconds-(now()-started))),
+            arrival_yards=1.0,max_recoveries=0,
+            can_traverse=lambda a,b:nav.segment_clear(before.map_id,a,b),
+            progress=log,sleep=sleep,now=now)
+        if report.stopped_reason!='complete':
+            log('Same-GO local approach stopped: '+report.stopped_reason)
+            return s,False
+        current=fresh(s)
+        latest_pid,after=world_position(current)
+        if latest_pid!=pid or after.map_id!=before.map_id:
+            raise LiveControlError('WoW map/PID changed after close-range step')
+        actual=hypot(obj.position.x-after.x,obj.position.y-after.y)
+        moved=hypot(after.x-before.x,after.y-before.y)
+        if moved>3.0 or abs(after.z-before.z)>2.0:
+            raise LiveControlError('Close-range correction moved unexpectedly far')
+        if distance-actual<.35:
+            log(f'GO {obj.guid:016X}: forward step gave insufficient '
+                f'closer progress ({distance:.2f} -> {actual:.2f}y)')
+            return current,False
+        after_object=tuple(
+            candidate for candidate in observe_objects(current,goal.object_id)
+            if candidate.guid==obj.guid and
+               candidate.entry==goal.object_id and
+               candidate.position.distance_to(obj.position)<=.5)
+        if len(after_object)!=1:
+            log('GO not present after close-range step; '
+                'will not interact with a replacement')
+            return current,False
+        local_approaches[obj.guid]=used+1
+        log(f'Same GO verified after closer approach: '
+            f'{distance:.2f} -> {actual:.2f}y XY; '
+            'rechecking tooltip and quest credit')
+        return current,True
+
     guard(first)
     log(f'GameObject objective {goal.quest_id}: {goal.object_name} '
         f'(template {goal.object_id}), {goal.objective_type} '
@@ -291,9 +414,29 @@ def execute_gameobject_quest(
                 min(o.position.distance_to(h) for h in goal.hotspots)<40 and
                 o.position.distance_to(world.position)<175 and
                 o.guid not in visited_guids))
+        # After a failed interaction, prefer the same exact GO GUID instead
+        # of starting a long navigation route toward another box.
         options=tuple(sorted(
-            options,key=lambda o:o.position.distance_to(world.position)))
+            options,key=lambda o:(o.guid!=preferred_guid,
+                                  o.position.distance_to(world.position))))
+        if preferred_guid is not None and not any(
+                o.guid==preferred_guid for o in options):
+            log('Previously selected box is no longer loaded; '
+                'choosing another profile-confirmed object')
+            preferred_guid=None
         if not options:
+            # A hotspot that already contains a GUID we just exhausted is
+            # not a fresh search destination. Otherwise a failed click can
+            # cause a useless long detour BACK to that same box, matching
+            # the obstruction loop in Aarr's log. Distinct GOs in one
+            # hotspot remain eligible because they are selected above.
+            visible_now=observe_objects(state,goal.object_id)
+            for i,hotspot in enumerate(goal.hotspots):
+                if any((loaded.guid in visited_guids and
+                        loaded.entry==goal.object_id and
+                        loaded.position.distance_to(hotspot)<=12)
+                       for loaded in visible_now):
+                    visited_hotspots.add(i)
             unexplored=sorted(
                 ((i,h) for i,h in enumerate(goal.hotspots)
                  if i not in visited_hotspots and
@@ -344,9 +487,16 @@ def execute_gameobject_quest(
                 break
             state=again
         if not verified_hover:
+            state,moved=local_approach(state,obj)
+            if moved:
+                preferred_guid=obj.guid
+                log('Retrying hover confirmation on the same GO after '
+                    'a measured closer approach')
+                continue
             visited_guids.add(obj.guid)
-            log(f'Unable to hover-confirm visible {goal.object_name}; '
-                'trying another verified spawn/hotspot')
+            preferred_guid=None
+            log(f'Unable to hover-confirm visible {goal.object_name} '
+                'after bounded close-range recovery; trying another box')
             continue
         # Last pre-click checks: matching GO still nearby; same quest and
         # item tracking still active. The *only* authorized click is after
@@ -381,7 +531,9 @@ def execute_gameobject_quest(
         else:
             mouse.right_click()
         interacted+=1
-        visited_guids.add(obj.guid)
+        # Mark the GO visited only AFTER confirming objective credit or
+        # exhausting its bounded local recovery. An attempted click can
+        # silently fail because the object is visible but out of range.
         state=fresh(state,.9)
         if state.loot_open is True and (state.loot_count or 0)>0:
             for slot in range(min(16,state.loot_count),0,-1):
@@ -404,13 +556,27 @@ def execute_gameobject_quest(
                     raise LiveControlError(
                         'Object quest journal advanced without tracked inventory credit')
                 no_progress=0
+                visited_guids.add(obj.guid)
+                preferred_guid=None
                 log(f'{goal.object_name}: journal progress '
                     f'{before_count}->{count(state)}/{goal.required_count}')
                 break
             state=fresh(state,.65)
         else:
             no_progress+=1
-            log(f'Interaction with GO {goal.object_id} yielded no verified quest credit')
-            if no_progress>=3:
-                raise LiveControlError('Three object interactions without journal credit')
+            log(f'Interaction with GO {goal.object_id} GUID '
+                f'0x{obj.guid:016X} yielded no verified quest credit; '
+                'checking short approach before abandoning this box')
+            if no_progress>=5:
+                raise LiveControlError(
+                    'Five GameObject clicks without quest credit; '
+                    'stopping before repeated unsafe interactions')
+            state,moved=local_approach(state,obj)
+            if moved:
+                preferred_guid=obj.guid
+                continue
+            visited_guids.add(obj.guid)
+            preferred_guid=None
+            log('Object click remained uncredited and safe local approach '
+                'is unavailable/exhausted; trying another verified box')
     raise LiveControlError('GameObject hotspot/interaction budget exceeded')
