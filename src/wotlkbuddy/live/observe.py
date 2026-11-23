@@ -86,7 +86,7 @@ def summarize_telemetry(telemetry: ClientTelemetry) -> str:
             spell_name = f' [{item.name}]' if item.name else ''
             lines.append(
                 f'  {item.view} button {item.button} -> action '
-                f'{item.action_index}: {item.kind} id={item.action_id}'
+                f'{item.action_index}: {item.kind} raw={item.action_id}'
                 f'{spell_name} | digit-bound={item.digit_bound}')
     if telemetry.action_identity_audits:
         lines.append('  Action spell identity audit (read-only; not yet for casting):')
@@ -102,10 +102,12 @@ def summarize_telemetry(telemetry: ClientTelemetry) -> str:
                 f'book-index={book}, spell-ID={a.spellbook_id or "unknown"} '
                 f'[icon={icon_text(a.spellbook_icon_match)}]')
         lines.append('  These comparisons do NOT authorize casting or hotbar changes.')
-    occupied = ', '.join(f'{a.name}@{a.slot}'
-                         for a in telemetry.observed_bar_spells)
+    occupied = ', '.join(
+        f'{a.name} (spell ID {a.spell_id})@{a.slot}'
+        for a in telemetry.observed_bar_spells)
     ready_keys = ', '.join(
-        f'{a.name}@{a.key}' for a in telemetry.action_spells)
+        f'{a.name} (spell ID {a.spell_id})@{a.key}'
+        for a in telemetry.action_spells)
     lines.append('  Observed physical spells: ' + (occupied or 'none reported'))
     lines.append('  Verified 1-0 actions: ' + (ready_keys or 'none reported'))
     lines.append(
