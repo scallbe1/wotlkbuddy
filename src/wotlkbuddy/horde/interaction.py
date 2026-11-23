@@ -129,9 +129,6 @@ class KeyboardQuestInput:
                 not (command.startswith('/wbtability ') and
                      re.fullmatch(r'[A-Za-z :]{1,48}',
                                   command[len('/wbtability '):])) and
-                not re.fullmatch(
-                    r'/run PickupSpell\(([1-9][0-9]{0,2}),BOOKTYPE_SPELL\);PlaceAction\((10|[1-9])\);ClearCursor\(\)',
-                    command) and
                 not (command.startswith('/targetexact ') and
                      _NPC_NAME.fullmatch(command[len('/targetexact '):]))):
             raise ValueError('Only verified quest-targeting and fixed quest API commands are allowed')
