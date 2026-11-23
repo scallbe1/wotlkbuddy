@@ -29,3 +29,5 @@ jobs:
         run: luac5.1 -p addons/WotLKBuddyTelemetry/WotLKBuddyTelemetry.lua
       - name: Exercise legacy 3.3.5a spellbook ID resolution
         run: lua5.1 tests/lua_spellbook_v053.lua
+      - name: Verify actual actionbar observation and duplicate slot preservation
+        run: lua5.1 tests/lua_actionbar_v054.lua

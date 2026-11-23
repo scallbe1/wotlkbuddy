@@ -45,6 +45,25 @@ local function safe(value, maxLength)
     return string.sub(s, 1, maxLength or 100)
 end
 
+-- Verify the actual 1-0 key -> main action-button association.
+-- GetBindingKey may report two alternatives; GetBindingAction is a
+-- separate read-only lookup when available. Neither guesses WoW settings.
+-- BEGIN ACTIONBAR BINDING HELPER
+local function slotHasDigitBinding(slot)
+    local key = slot == 10 and '0' or tostring(slot)
+    local action = 'ACTIONBUTTON' .. tostring(slot)
+    if GetBindingAction and GetBindingAction(key) == action then
+        return true
+    end
+    if GetBindingKey then
+        local first, second = GetBindingKey(action)
+        return first == key or second == key
+    end
+    return false
+end
+
+-- END ACTIONBAR BINDING HELPER
+
 -- WotLK 3.3.5 completion history is a server response. Query it rather than
 -- assuming an absent journal entry means a completed quest.
 local completionCache = nil
@@ -237,6 +256,52 @@ local function tickData()
                 tostring(spellId), safe(observedAbilityName,48)}, '\t'))
         end
     end
+    -- BEGIN ACTIONBAR OBSERVATIONS
+    -- Main bar observations are *priority* telemetry. Publishing these
+    -- before quest/gear/merchant rows prevents omitted AS/ES data from
+    -- causing repeated placement. AB never authorizes an input: its last
+    -- field says whether the slot's digit key was independently verified.
+    local freeAction = 0
+    appendLine('AH\t' .. (GetActionInfo and '1' or '0'))
+    if GetActionInfo then
+        for slot = 1, 10 do
+            local keyOK = slotHasDigitBinding(slot)
+            local kind, id = GetActionInfo(slot)
+            if not kind then
+                if keyOK and freeAction == 0 then
+                    freeAction = slot
+                end
+            elseif kind == 'spell' and type(id) == 'number' and GetSpellInfo then
+                local name = GetSpellInfo(id)
+                if type(name) == 'string' and name ~= '' and id > 0 then
+                    appendLine(table.concat({'AB', tostring(slot),
+                        tostring(id), safe(name,44),
+                        keyOK and '1' or '0'}, '\t'))
+                    if keyOK then
+                        local usable = IsUsableAction and IsUsableAction(slot) and 1 or 0
+                        local inRange = IsActionInRange and IsActionInRange(slot)
+                        local range = inRange == nil and -1 or (inRange == 1 and 1 or 0)
+                        local cooldown = 0
+                        if GetActionCooldown then
+                            local start, duration, enabled = GetActionCooldown(slot)
+                            if enabled == 1 and type(start) == 'number' and
+                                    type(duration) == 'number' then
+                                cooldown = math.max(0, math.min(300000,
+                                    math.floor(1000*(start+duration-GetTime()))))
+                            end
+                        end
+                        appendLine(table.concat({'AS', tostring(slot),
+                            tostring(id), safe(name,44), tostring(usable),
+                            tostring(range), tostring(cooldown)}, '\t'))
+                    end
+                end
+            end
+        end
+    end
+    if freeAction > 0 then
+        appendLine('ES\t' .. tostring(freeAction))
+    end
+    -- END ACTIONBAR OBSERVATIONS
     -- Inventory tracking is read only. Match ItemId exactly against source
     -- Horde XML and report current inventory count in each fresh frame.
     if trackedQuestItemId > 0 and GetItemCount then
@@ -379,13 +444,13 @@ local function tickData()
     -- measured from UnitCastingInfo, not projectile impact guesses.
     local fireballKey = '-'
     local fireballName = GetSpellInfo and GetSpellInfo(133)
-    if fireballName and GetActionInfo and GetBindingKey then
+    if fireballName and GetActionInfo then
         for index = 1, 10 do
             local kind, id = GetActionInfo(index)
             local expectedKey = index == 10 and '0' or tostring(index)
-            local key = GetBindingKey('ACTIONBUTTON' .. tostring(index))
             if kind == 'spell' and type(id) == 'number' and
-                    GetSpellInfo(id) == fireballName and key == expectedKey then
+                    GetSpellInfo(id) == fireballName and
+                    slotHasDigitBinding(index) then
                 fireballKey = expectedKey
                 break
             end
@@ -817,49 +882,7 @@ local function tickData()
             for _, row in ipairs(services) do appendLine(row) end
         end
     end
-    -- Optional combat extensions are emitted last so quest progress,
-    -- trainer, loot and completion telemetry take precedence in full frames.
-    -- Generic spell action observations: verified key, ID, cooldown, range.
-    local freeAction = 0
-    if GetActionInfo and GetBindingKey then
-        for slot = 1, 10 do
-            local key = slot == 10 and '0' or tostring(slot)
-            if GetBindingKey('ACTIONBUTTON' .. tostring(slot)) == key then
-                local kind, id = GetActionInfo(slot)
-                if not kind and freeAction == 0 then
-                    freeAction = slot
-                elseif kind == 'spell' and type(id) == 'number' and GetSpellInfo then
-                    local name = GetSpellInfo(id)
-                    if type(name) == 'string' and name ~= '' then
-                        local usable = IsUsableAction and IsUsableAction(slot) and 1 or 0
-                        local inRange = IsActionInRange and IsActionInRange(slot)
-                        local range = inRange == nil and -1 or (inRange == 1 and 1 or 0)
-                        local cooldown = 0
-                        if GetActionCooldown then
-                            local start, duration, enabled = GetActionCooldown(slot)
-                            if enabled == 1 and type(start) == 'number' and
-                                    type(duration) == 'number' then
-                                cooldown = math.max(0, math.min(300000,
-                                    math.floor(1000*(start+duration-GetTime()))))
-                            end
-                        end
-                        local record = table.concat({'AS', tostring(slot),
-                            tostring(id), safe(name, 44), tostring(usable),
-                            tostring(range), tostring(cooldown)}, '\t')
-                        if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
-                            appendLine(record)
-                        end
-                    end
-                end
-            end
-        end
-    end
-    if freeAction > 0 then
-        local record = 'ES\t' .. tostring(freeAction)
-        if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
-            appendLine(record)
-        end
-    end
+    -- Optional talent/cast/aura records follow the priority quest data.
     -- One controller-requested talent, resolved by *name* to the real
     -- tree/index on this 3.3.5a client. The addon NEVER spends points.
     if observedTalentName ~= '' and GetNumTalentTabs and

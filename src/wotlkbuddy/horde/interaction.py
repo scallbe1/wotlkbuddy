@@ -161,9 +161,16 @@ class KeyboardQuestInput:
         matching = [a for a in snapshot.action_spells
                     if a.spell_id == spell_id and a.usable and
                     a.cooldown_ms == 0 and a.in_range is True]
-        if len(matching) != 1:
-            raise LiveControlError('Spell not uniquely verified and ready on the hotbar')
-        self._tap(_DIGITS[matching[0].key])
+        if not matching:
+            raise LiveControlError('Spell not verified and ready on the hotbar')
+        # A player can deliberately have two identical copies on 1-0.
+        # Both are the same observed spell ID, so selecting the lowest
+        # physical bound slot is deterministic and safe. Never guess
+        # between conflicting names for the same numeric spell ID.
+        if len({action.name for action in matching}) != 1:
+            raise LiveControlError('Conflicting names for same bound spell ID')
+        chosen = min(matching, key=lambda action: action.slot)
+        self._tap(_DIGITS[chosen.key])
 
     def place_book_spell(self, book_index: int, slot: int) -> None:
         """Move one verified spellbook action into a verified empty digit slot.

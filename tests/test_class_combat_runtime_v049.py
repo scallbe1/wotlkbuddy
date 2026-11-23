@@ -6,7 +6,7 @@ from test_horde_combat_v019 import snap
 from wotlkbuddy.combat.runtime import selected_action, provision_rotation_hotbar
 from wotlkbuddy.combat.character import progress_dps_talents
 from wotlkbuddy.live.codec import (
-    ActionSpell, SpellBookProbe, TalentProbe, CombatTarget, parse_payload)
+    ActionSpell, ObservedBarSpell, SpellBookProbe, TalentProbe, CombatTarget, parse_payload)
 from wotlkbuddy.live.control import LiveControlError
 
 
@@ -87,6 +87,10 @@ class HotbarGame:
         book=self.available.get(self.requested)
         return replace(s,sequence=self.seq,
             empty_action_slot=self.empty,
+            actionbar_inspected=True,
+            observed_bar_spells=tuple(
+                ObservedBarSpell(a.slot,a.spell_id,a.name,True)
+                for a in self.actions),
             spellbook_probe=(SpellBookProbe(book[0],book[1],self.requested)
                              if book else None))
 
