@@ -378,7 +378,13 @@ def follow_world_path(
                     raise LiveControlError(f'Movement diverged from waypoint {index}')
                 prev_distance = distance
             if abs(world.z - waypoint.z) > 5:
-                raise LiveControlError(f'Waypoint {index} is on another height/floor')
+                # Include the live-vs-mesh height disagreement so a failed
+                # route can be diagnosed without guessing a different floor.
+                raise LiveControlError(
+                    f'Waypoint {index} is on another height/floor: '
+                    f'live z={world.z:.2f}, Detour z={waypoint.z:.2f}, '
+                    f'delta={world.z-waypoint.z:+.2f}y, '
+                    f'XY remaining={_distance_xy(world.position, waypoint):.2f}y')
             reached += 1
             if index == len(waypoints)-1 or index % 4 == 0:
                 notify(f'World waypoint {index}/{len(waypoints)-1} reached; '
