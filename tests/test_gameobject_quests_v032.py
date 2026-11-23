@@ -168,7 +168,19 @@ class GameObjectQuestTests(unittest.TestCase):
         self.assertIn('/wbttrack 11127',game.commands)
         self.assertTrue(all('UseItemByName' not in x for x in game.commands))
 
-    def test_grave_item_used_once_at_verified_object(self):
+    def test_uncached_gameobject_item_name_still_observes_numeric_id(self):
+        class UncachedFirstItem(Game):
+            def capture(self):
+                state=super().capture()
+                if self.count==0:
+                    return replace(state,tracked_item_name=None)
+                return state
+        game=UncachedFirstItem()
+        report=game.run()
+        self.assertTrue(report.objectives_complete)
+        self.assertEqual(report.inventory_count,2)
+        self.assertEqual(game.clicks,2)
+
         game=Game(grave=True)
         report=game.run()
         self.assertTrue(report.objectives_complete)
