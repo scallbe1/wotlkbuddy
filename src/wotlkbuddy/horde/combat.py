@@ -225,6 +225,7 @@ def hunt_kill_objectives(
     unhittable_guids: set[str] = set()
     unhittable_positions: list[Vec3] = []
     unhittable_count = 0
+    logged_live_kill_totals: set[int] = set()
 
     def guard(s: ClientTelemetry) -> None:
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()):
@@ -945,6 +946,26 @@ def hunt_kill_objectives(
             collected_results[spec.entry] = (s.tracked_item_count, spec.count)
         expected = allowed_sources[0]
         last_description = observed.description
+        if not collect_items:
+            # Server quest variants can demand a different number of kills
+            # than the imported Honorbuddy XML. XML supplies the creature
+            # entry and search hotspots; the live journal supplies the
+            # required total and the done flag. Never stop at XML KillCount.
+            live_credit = objective_progress(observed.description)
+            if (live_credit is None or live_credit[1] <= 0 or
+                    not 0 <= live_credit[0] < live_credit[1]):
+                raise LiveControlError(
+                    'Active kill objective has no valid unfinished live '
+                    f'journal count: {observed.description!r}')
+            if spec.entry not in logged_live_kill_totals:
+                logged_live_kill_totals.add(spec.entry)
+                if spec.count != live_credit[1]:
+                    log(f'KillMob entry {spec.entry}: live journal requires '
+                        f'{live_credit[1]} kills, while XML requests '
+                        f'{spec.count}; honoring live quest journal')
+                else:
+                    log(f'KillMob entry {spec.entry}: live journal progress '
+                        f'{live_credit[0]}/{live_credit[1]}')
         s = rest(s)
         s = buffs(s)
         s = rest(s)  # Buffing costs mana; do not start a pull while depleted.

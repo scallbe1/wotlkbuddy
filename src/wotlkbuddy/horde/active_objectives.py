@@ -35,13 +35,16 @@ def next_active_kill_quest(
         raise LiveControlError('Cannot select quest without safe active Undead Mage state')
     journal = {q.quest_id: q for q in telemetry.quests}
     completed = {qid for qid, done in telemetry.quest_completions if done}
-    examined = set()
     for index, step in enumerate(profile.steps, 1):
         if (not step.supported or step.kind != 'objective' or
                 step.objective_type != 'KillMob' or step.quest_id <= 0 or
-                step.quest_id in examined or step.quest_id in completed):
+                step.quest_id in completed):
             continue
-        examined.add(step.quest_id)
+        # Keep examining later KillMob steps in the *same* quest. The first
+        # step can already be complete; next_kill_objective() identifies the
+        # first unfinished journal objective, whose creature ID must match
+        # THIS QuestOrder step. Do not discard the quest after the first
+        # nonmatching step.
         quest = journal.get(step.quest_id)
         if quest is None or quest.complete:
             continue
