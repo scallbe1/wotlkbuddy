@@ -17,7 +17,8 @@ from wotlkbuddy.horde.profile import HordeProfile, QuestSpec
 from wotlkbuddy.horde.worlddata import (CreatureSpawnDatabase, nearest_objective_spawns)
 from wotlkbuddy.live.codec import ClientTelemetry, QuestRecord
 from wotlkbuddy.live.control import LiveControlError
-from wotlkbuddy.live.world_position import verified_live_position, verified_target_position
+from wotlkbuddy.live.world_position import (
+    WorldPositionError, verified_live_position, verified_target_position)
 from wotlkbuddy.live.world_travel import validate_nav_path, follow_world_path
 
 
@@ -331,7 +332,8 @@ def hunt_kill_objectives(
         try:
             _pid, world = world_position(s)
             monster = target_xyz(s)
-        except (OSError, ValueError, LiveControlError) as exc:
+        except (OSError, ValueError, LiveControlError,
+                WorldPositionError) as exc:
             log(f'Cannot verify live target/world XYZ for cast recovery: {exc}')
             return s, False
         if _pid != pid:
