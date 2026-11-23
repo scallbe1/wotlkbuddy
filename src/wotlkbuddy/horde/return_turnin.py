@@ -98,7 +98,8 @@ def return_and_turnin(
     start_time = monotonic()
     if hypot(world.x-destination.x, world.y-destination.y) > 3.0:
         path = nav.find_path(world.map_id, world.position, destination)
-        waypoints = validate_nav_path(path, world.position, destination)
+        waypoints = validate_nav_path(
+            path, world.position, destination, max_step=18.0)
         log(f'NPC return path verified: {len(waypoints)-1} short legs')
         kb = getattr(driver, 'keyboard', driver)
 
@@ -119,7 +120,10 @@ def return_and_turnin(
             expected_quest_id=quest_id, expected_map_id=world.map_id,
             max_seconds=min(600, max(15, max_seconds)),
             can_traverse=lambda a, b: nav.segment_clear(world.map_id, a, b),
-            progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
+            progress=log, on_aggro=getattr(driver, 'on_aggro', None),
+            on_threat=getattr(driver, 'scan_hostiles', None),
+            waypoint_spacing=18.0, continuous_forward=True,
+            threat_check_yards=14.0)
         if report.stopped_reason != 'complete':
             raise LiveControlError(
                 'Return-to-NPC navigation stopped: ' + report.stopped_reason)
