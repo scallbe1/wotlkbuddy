@@ -24,7 +24,7 @@ IsUsableAction = function() return true end
 IsActionInRange = function() return 1 end
 GetActionCooldown = function() return 0,0,1 end
 GetTime = function() return 10 end
-local function safe(value,limit)
+function safe(value,limit)
     return string.sub(tostring(value),1,limit)
 end
 
