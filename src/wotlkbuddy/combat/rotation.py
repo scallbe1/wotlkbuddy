@@ -67,10 +67,8 @@ class Rotation:
 # without changing spell input, movement, objective selection or telemetry.
 DEFAULT_ROTATIONS: dict[str, Rotation] = {
     'MAGE': Rotation('MAGE', (
-        RotationRule('Frost Armor', 0, required_buff_absent='Frost Armor',
-                     requires_range=False),
-        RotationRule('Arcane Intellect', 1, required_buff_absent='Arcane Intellect',
-                     requires_range=False),
+        # Maintenance buffs remain a separate pre-combat behavior.
+        RotationRule('Fire Blast', 5),
         RotationRule('Frostbolt', 10),
         RotationRule('Fireball', 20),
     )),
