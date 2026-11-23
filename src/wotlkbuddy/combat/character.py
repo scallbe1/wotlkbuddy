@@ -114,7 +114,7 @@ def progress_dps_talents(
                     after.resources is None):
                 raise LiveControlError('Character changed after talent input')
             nxt=after.talent_probe
-            if nxt is not None and (nxt.tree,nxt.index,nxt.name)==(
+            if (nxt is not None and (nxt.tree,nxt.index,nxt.name)==(
                     probe.tree,probe.index,probe.name) and
                     nxt.rank == probe.rank+1 and
                     after.resources.unspent_talent_points ==
