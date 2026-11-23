@@ -73,7 +73,13 @@ def provision_rotation_hotbar(
         return ()
     added=[]
     guid=first.player.guid
-    for rule in sorted(rotation.rules, key=lambda r:r.priority):
+    # Provision the basic class attack before higher-priority spells.
+    # A character with one remaining free slot must be able to attack.
+    starter = {'MAGE': 'Fireball', 'PRIEST': 'Smite'}.get(
+        first.resources.class_token.upper(), '')
+    rules = sorted(rotation.rules,
+                   key=lambda r: (r.spell_name != starter, r.priority))
+    for rule in rules:
         if len(added)>=max_actions:
             break
         state=capture()
@@ -85,6 +91,8 @@ def provision_rotation_hotbar(
         if any(a.name==rule.spell_name for a in state.action_spells):
             continue
         if state.empty_action_slot is None:
+            log('No empty digit-bound action slot; preserving existing hotbar. '
+                'To add class spells, free a slot bound to 1-0.')
             break
         # The addon resolves an exact named spell to its real highest-rank
         # book index; Python never guesses a spellbook position or action.
@@ -98,6 +106,8 @@ def provision_rotation_hotbar(
             raise LiveControlError('Hotbar changed during spellbook probe')
         book=probe.spellbook_probe
         if book is None or book.name!=rule.spell_name:
+            log(f'Spellbook has no verified learned {rule.spell_name}; '
+                'cannot bind a guessed spell.')
             continue  # Spell not learned or absent on this server.
         # Confirm a second advancing observation before modifying a slot.
         sleep(.6)
@@ -125,3 +135,22 @@ def provision_rotation_hotbar(
         added.append(rule.spell_name)
         log(f'Assigned verified {rule.spell_name} to hotbar key {key}')
     return tuple(added)
+
+def require_verified_combat_key(snapshot: ClientTelemetry) -> None:
+    """Never silently revert to a typed /cast spell during quest combat."""
+    if snapshot.truncated or snapshot.resources is None or snapshot.player.dead:
+        raise LiveControlError('Character telemetry unavailable for combat hotbar preflight')
+    cls = snapshot.resources.class_token.upper()
+    rotation = DEFAULT_ROTATIONS.get(cls)
+    if rotation is None:
+        raise LiveControlError(f'No combat rotation registered for class {cls}')
+    names = {r.spell_name for r in rotation.rules}
+    if any(a.name in names for a in snapshot.action_spells):
+        return
+    if cls == 'MAGE' and snapshot.fireball_key in '1234567890':
+        return  # Legacy verified action binding is still a real digit key.
+    raise LiveControlError(
+        f'No verified {cls} damage spell on a 1-0 action button. '
+        'Auto hotbar setup could not find a valid free slot or learned '
+        'spellbook entry; free an action-button slot and verify its 1-0 '
+        'key binding, then retry. Chat casting is disabled.')
