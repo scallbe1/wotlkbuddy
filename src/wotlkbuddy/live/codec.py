@@ -185,6 +185,16 @@ class ActionSpell:
 
 
 @dataclass(frozen=True)
+class TalentProbe:
+    tree: int
+    index: int
+    rank: int
+    max_rank: int
+    learnable: bool | None
+    name: str
+
+
+@dataclass(frozen=True)
 class SpellBookProbe:
     """One requested learned spell's verified book index and ID."""
     book_index: int
@@ -298,6 +308,7 @@ class ClientTelemetry:
     action_spells: tuple[ActionSpell, ...] = ()
     empty_action_slot: int | None = None
     spellbook_probe: SpellBookProbe | None = None
+    talent_probe: TalentProbe | None = None
     fireball_key: str | None = None
     fireball_cast_remaining_ms: int | None = None
     mouse_world_name: str | None = None
@@ -344,6 +355,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     action_spells: dict[int, ActionSpell] = {}
     empty_action_slot = None
     spellbook_probe = None
+    talent_probe = None
     fireball_record_seen = False
     fireball_key = None
     fireball_cast_remaining_ms = None
@@ -548,6 +560,21 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                     not parts[3] or len(parts[3]) > 48):
                 raise TelemetryError('Invalid spellbook probe')
             spellbook_probe = SpellBookProbe(index,spell_id,parts[3])
+        elif parts[0] == 'TL':
+            if len(parts) != 7 or talent_probe is not None or (
+                    parts[5] not in ('-1','0','1')):
+                raise TelemetryError('Invalid or duplicate talent probe')
+            try:
+                tree, index, rank, maximum = map(int,parts[1:5])
+            except ValueError as exc:
+                raise TelemetryError('Invalid talent probe numbers') from exc
+            if (not 1 <= tree <= 3 or not 1 <= index <= 45 or
+                    not 0 <= rank <= maximum <= 5 or
+                    not parts[6] or len(parts[6]) > 48):
+                raise TelemetryError('Invalid talent index/rank/name')
+            talent_probe = TalentProbe(
+                tree,index,rank,maximum,
+                None if parts[5] == '-1' else parts[5] == '1',parts[6])
         elif parts[0] == 'M':
             if (len(parts) != 3 or merchant_seen or
                     parts[1] not in ('0', '1')):
@@ -833,6 +860,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                                for i in sorted(action_spells)),
                            empty_action_slot=empty_action_slot,
                            spellbook_probe=spellbook_probe,
+                           talent_probe=talent_probe,
                            fireball_key=fireball_key,
                            fireball_cast_remaining_ms=fireball_cast_remaining_ms,
                            mouse_world_name=mouse_world_name,
