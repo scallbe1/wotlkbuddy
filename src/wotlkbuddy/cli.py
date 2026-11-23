@@ -320,7 +320,8 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         initial=snapshot, player_position=where, path_ahead=ahead,
         capture=cap, driver=driver,
         target_position=lambda s: verified_target_position(s, pid=pid),
-        log=log, detection_yards=args.scan_yards)
+        log=log, detection_yards=args.scan_yards,
+        direct_path_clear=getattr(driver, 'direct_path_clear', None))
     maintain_mage_supplies(capture=cap, driver=driver, log=log)
 
     def set_native_status(phase: str, quest_id: int = 0) -> None:
@@ -365,6 +366,11 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         log(f'NPC services and quest profile: {quest_profile.name}')
         with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
                 NavigationProxy(py32, dll) as nav:
+            # Detour's *walking* segment clearance is a negative cave-wall
+            # signal, not proof of spell line-of-sight. Do not preemptively
+            # pull enemies through non-traversable rock.
+            driver.direct_path_clear = (
+                lambda start, end: nav.segment_clear(world.map_id, start, end))
 
             def location():
                 state = cap()
