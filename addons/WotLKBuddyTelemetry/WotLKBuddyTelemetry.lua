@@ -124,7 +124,8 @@ local function tickData()
             GameTooltipTextLeft1 then
         hoveredWorldName = safe(GameTooltipTextLeft1:GetText(), 75)
     end
-    appendLine('G\t' .. hoveredWorldName)
+    local targeting = SpellIsTargeting and SpellIsTargeting() and '1' or '0'
+    appendLine(table.concat({'G', hoveredWorldName, targeting}, '\t'))
     -- Inventory tracking is read only. Match ItemId exactly against source
     -- Horde XML and report current inventory count in each fresh frame.
     if trackedQuestItemId > 0 and GetItemCount then
