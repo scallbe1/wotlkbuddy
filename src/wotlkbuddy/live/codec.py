@@ -185,6 +185,15 @@ class ActionSpell:
 
 
 @dataclass(frozen=True)
+class ObservedBarSpell:
+    """Read-only physical main action-bar spell, even if not digit-bound."""
+    slot: int
+    spell_id: int
+    name: str
+    digit_bound: bool
+
+
+@dataclass(frozen=True)
 class TalentProbe:
     tree: int
     index: int
@@ -314,6 +323,8 @@ class ClientTelemetry:
     player_auras: tuple[str, ...] = ()
     target_auras: tuple[str, ...] = ()
     action_spells: tuple[ActionSpell, ...] = ()
+    observed_bar_spells: tuple[ObservedBarSpell, ...] = ()
+    actionbar_inspected: bool = False
     empty_action_slot: int | None = None
     spellbook_probe: SpellBookProbe | None = None
     spellbook_diagnostic: SpellBookDiagnostic | None = None
@@ -362,6 +373,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     player_auras: list[str] = []
     target_auras: list[str] = []
     action_spells: dict[int, ActionSpell] = {}
+    observed_bar_spells: dict[int, ObservedBarSpell] = {}
+    actionbar_inspected = False
+    actionbar_header_seen = False
     empty_action_slot = None
     spellbook_probe = None
     spellbook_diagnostic = None
@@ -531,6 +545,25 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             if len(target_list) >= 12 or parts[1] in target_list:
                 raise TelemetryError('Duplicate or excessive aura observation')
             target_list.append(parts[1])
+        elif parts[0] == 'AH':
+            if (len(parts) != 2 or actionbar_header_seen or
+                    parts[1] not in ('0','1')):
+                raise TelemetryError('Invalid or duplicate actionbar inventory header')
+            actionbar_header_seen = True
+            actionbar_inspected = parts[1] == '1'
+        elif parts[0] == 'AB':
+            if len(parts) != 5 or not actionbar_inspected:
+                raise TelemetryError('Actionbar spell without inspected header')
+            try:
+                slot, spell_id = int(parts[1]), int(parts[2])
+            except ValueError as exc:
+                raise TelemetryError('Malformed observed actionbar spell') from exc
+            if (not 1 <= slot <= 10 or slot in observed_bar_spells or
+                    not 1 <= spell_id < 2**31 or not parts[3] or
+                    len(parts[3]) > 44 or parts[4] not in ('0','1')):
+                raise TelemetryError('Invalid or duplicate observed actionbar spell')
+            observed_bar_spells[slot] = ObservedBarSpell(
+                slot, spell_id, parts[3], parts[4] == '1')
         elif parts[0] == 'AS':
             if len(parts) != 7:
                 raise TelemetryError('Malformed action spell record')
@@ -828,6 +861,19 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             (spellbook_probe is not None and
              spellbook_diagnostic.name != spellbook_probe.name)):
         raise TelemetryError('Spellbook diagnostic disagrees with spellbook probe')
+    if actionbar_header_seen and not actionbar_inspected and (
+            action_spells or observed_bar_spells or empty_action_slot is not None):
+        raise TelemetryError('Actionbar rows supplied despite unavailable API')
+    if actionbar_inspected:
+        if any(
+                slot not in observed_bar_spells or
+                observed_bar_spells[slot].spell_id != action.spell_id or
+                observed_bar_spells[slot].name != action.name or
+                not observed_bar_spells[slot].digit_bound
+                for slot, action in action_spells.items()):
+            raise TelemetryError('Verified action conflicts with observed actionbar')
+        if empty_action_slot in observed_bar_spells:
+            raise TelemetryError('Action slot cannot be both occupied and empty')
     if empty_action_slot in action_spells:
         raise TelemetryError('Action slot both empty and occupied')
     if trainer_seen and len(trainer_services) != trainer_count:
@@ -890,6 +936,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            target_auras=tuple(target_auras),
                            action_spells=tuple(action_spells[i]
                                for i in sorted(action_spells)),
+                           observed_bar_spells=tuple(observed_bar_spells[i]
+                               for i in sorted(observed_bar_spells)),
+                           actionbar_inspected=actionbar_inspected,
                            empty_action_slot=empty_action_slot,
                            spellbook_probe=spellbook_probe,
                            spellbook_diagnostic=spellbook_diagnostic,
