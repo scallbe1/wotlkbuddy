@@ -397,20 +397,58 @@ def hunt_kill_objectives(
             return s, False
         if observed_pid != pid:
             raise LiveControlError('WoW PID changed before LOS recovery')
-        from wotlkbuddy.horde.los_recovery import detour_firing_approach
-        legs = detour_firing_approach(
-            nav, map_id=player_pos.map_id, player=player_pos.position,
-            target=mob_pos, attempt=attempt)
+        dx, dy = mob_pos.x-player_pos.x, mob_pos.y-player_pos.y
+        old_distance = hypot(dx,dy)
+        if not 5.5 <= old_distance <= 42 or abs(mob_pos.z-player_pos.z)>6:
+            log('No safe LOS reposition: target distance/height outside bounds')
+            return s, False
+        short_step = min(2.8 if attempt == 0 else 2.0,
+                         old_distance-4.5)
+        legs = None
+        short_route = False
+        if short_step >= 1.5:
+            destination = Vec3(
+                player_pos.x+dx/old_distance*short_step,
+                player_pos.y+dy/old_distance*short_step,
+                player_pos.z+(mob_pos.z-player_pos.z)*short_step/old_distance)
+            try:
+                if nav.segment_clear(player_pos.map_id,player_pos.position,
+                                     destination):
+                    straight = nav.find_path(
+                        player_pos.map_id,player_pos.position,destination)
+                    candidate = validate_nav_path(
+                        straight, player_pos.position,destination,max_distance=10)
+                    length = sum(a.distance_to(b)
+                                 for a,b in zip(candidate,candidate[1:]))
+                    if length <= 5.5:
+                        legs = candidate
+                        short_route = True
+                else:
+                    log('Detour blocks safe short forward Fireball approach; '
+                        'checking an around-corner navmesh route')
+            except (OSError,RuntimeError,ValueError,TimeoutError,
+                    LiveControlError) as exc:
+                log(f'No safe short approach: {exc}; '
+                    'checking an around-corner navmesh route')
+        if not legs:
+            from wotlkbuddy.horde.los_recovery import detour_firing_approach
+            legs = detour_firing_approach(
+                nav, map_id=player_pos.map_id, player=player_pos.position,
+                target=mob_pos, attempt=attempt)
         if not legs:
             log('No bounded Detour firing position around cave geometry; '
                 'not moving directly through an obstructing wall')
             return s, False
         route_length = sum(a.distance_to(b)
-                           for a, b in zip(legs, legs[1:]))
-        old_distance = hypot(player_pos.x-mob_pos.x, player_pos.y-mob_pos.y)
-        log(f'No verified spell damage: Detour LOS recovery {attempt+1}/2 '
-            f'around cave geometry via {len(legs)-1} legs '
-            f'({route_length:.1f}y); target GUID {target_guid}')
+                           for a,b in zip(legs, legs[1:]))
+        if short_route:
+            log(f'Fireball range reports valid but no damage: moving '
+                f'{short_step:.1f}y toward same GUID {target_guid} '
+                f'({attempt+1}/2) with verified short Detour')
+        else:
+            log(f'No verified spell damage: Detour LOS recovery {attempt+1}/2 '
+                f'around cave geometry via {len(legs)-1} legs '
+                f'({route_length:.1f}y); target GUID {target_guid}')
         kb = getattr(driver, 'keyboard', driver)
 
         def sample():
@@ -464,9 +502,10 @@ def hunt_kill_objectives(
             log(f'Detour moved but target distance did not improve sufficiently '
                 f'({old_distance:.1f} -> {new_distance:.1f}y)')
             return after, False
-        log(f'New navmesh firing position reached; target distance '
-            f'{old_distance:.1f} -> {new_distance:.1f}y; '
-            'retrying cast and verifying target HP/quest credit')
+        log(f'Fireball firing position improved: '
+            f'{old_distance:.1f} -> {new_distance:.1f}y via '
+            + ('short forward Detour' if short_route else 'cave corner Detour')
+            + '; retrying cast and verifying target HP/quest credit')
         return after, True
 
     def attack(s: ClientTelemetry, expected: int, objective_index: int,
