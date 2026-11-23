@@ -50,8 +50,7 @@ def collect_samuel_remains(
     latest=capture()
     for _ in range(8):
         if (latest.tracked_item_id==REMAINS_ITEM_ID and
-                latest.tracked_item_count is not None and
-                latest.tracked_item_name):
+                latest.tracked_item_count is not None):
             break
         sleep(.35)
         latest=capture()
@@ -79,7 +78,6 @@ def collect_samuel_remains(
                 state.player.dead or
                 state.tracked_item_id!=REMAINS_ITEM_ID or
                 state.tracked_item_count is None or
-                not state.tracked_item_name or
                 not any(q.quest_id==MARLA_QUEST_ID for q in state.quests)):
             raise LiveControlError(
                 'Samuel prerequisite tracker or real quest changed during fight')
@@ -87,13 +85,22 @@ def collect_samuel_remains(
         if live_quest.complete:
             raise LiveControlError(
                 'Marla quest unexpectedly completed during item farm')
+        if (state.tracked_item_name and
+                state.tracked_item_name.casefold()!="samuel's remains"):
+            raise LiveControlError(
+                'Tracked item name conflicts with source-verified Samuel item')
         count=min(1,state.tracked_item_count)
+        # GetItemInfo(16333) can be uncached before first drop. The
+        # trusted source name is only a local report label; the actual
+        # collected item count remains bound to the client's numeric 16333.
+        item_name=state.tracked_item_name or "Samuel's Remains"
         simulated=QuestRecord(
             MARLA_QUEST_ID,live_quest.level,count>=1,live_quest.title,
             (QuestObjective(
                 1,count>=1,'item',
-                f'{state.tracked_item_name}: {count}/1'),))
-        return replace(state, quests=tuple(
+                f'{item_name}: {count}/1'),))
+        adapted=replace(state, tracked_item_name=item_name)
+        return replace(adapted, quests=tuple(
             simulated if q.quest_id==MARLA_QUEST_ID else q
             for q in state.quests))
 
