@@ -48,5 +48,5 @@ def test_class_telemetry_exported_after_priority_quest_data():
     trainer = src.index("-- Class trainer services are read only.")
     truncation = src.index("if isTruncated then table.insert")
     assert trainer < optional < truncation
-    for tag in ("'AS'", "'ES'", "'SF'", "'TL'", "'CT'", "'AP'", "'AT'"):
+    for tag in ("'AS'", "'ES\\t'", "'SF'", "'TL'", "'CT'", "'AP'", "'AT" + "'"):
         assert tag in src
