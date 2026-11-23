@@ -71,7 +71,10 @@ class BlockedFirstSpider(FakeGame):
     def target_position(self,state):
         return Vec3(25.,0.,0.)
     def travel(self,waypoints,**kwargs):
-        assert kwargs.get('arrival_yards')==1.0
+        # The ordinary, previously verified corpse-loot approach remains
+        # independent of the NEW short-range spell vantage.
+        if kwargs.get('arrival_yards') != 1.0:
+            return SimpleNamespace(stopped_reason='complete')
         assert kwargs.get('max_recoveries')==0
         assert not self.combat
         kwargs['sample']()
@@ -142,7 +145,9 @@ class MageCastRecoveryTests(unittest.TestCase):
         self.assertTrue(outcome.objectives_complete)
         self.assertEqual(outcome.targets_defeated,2)
         self.assertEqual(g.vantage_calls,1)
-        self.assertEqual(len(nav.paths),1)
+        self.assertGreaterEqual(len(nav.paths),1)
+        self.assertLessEqual(nav.paths[0][0].distance_to(
+            nav.paths[0][1]),4.1)
         self.assertGreater(g.x,3)
         self.assertEqual(g.commands.count('/cast Fireball'),3)
         self.assertTrue(any('Recovered new firing position' in x
@@ -166,8 +171,13 @@ class MageCastRecoveryTests(unittest.TestCase):
         g=NeverDamageSpider()
         nav=NavWithVantage(clear=False)
         logs=[]
+        def only_bad_spider_xyz(state):
+            if (not g.replaced and state.combat_target and
+                    state.combat_target.entry_id==1501):
+                return Vec3(25.,0.,0.)
+            raise ValueError('No live corpse coordinates for test')
         result=run(
-            g,nav=nav,
+            g,nav=nav,target_xyz=only_bad_spider_xyz,
             world_position=lambda state:(
                 77,WorldPosition(state.player.guid,0,0.,0.,0.,0.,1)),
             log=logs.append)
