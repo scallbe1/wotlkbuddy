@@ -42,6 +42,24 @@ class WorldObjectMouse:
             raise OSError('WoW world mouse interaction is Windows-only')
         self.pid = pid
         self._user32 = ctypes.WinDLL('user32', use_last_error=True)
+        u=self._user32
+        u.GetForegroundWindow.argtypes=[]
+        u.GetForegroundWindow.restype=wintypes.HWND
+        u.GetWindowThreadProcessId.argtypes=[
+            wintypes.HWND,ctypes.POINTER(wintypes.DWORD)]
+        u.GetWindowThreadProcessId.restype=wintypes.DWORD
+        u.GetClientRect.argtypes=[wintypes.HWND,ctypes.POINTER(_Rect)]
+        u.GetClientRect.restype=wintypes.BOOL
+        u.ClientToScreen.argtypes=[wintypes.HWND,ctypes.POINTER(_Point)]
+        u.ClientToScreen.restype=wintypes.BOOL
+        u.SetCursorPos.argtypes=[wintypes.INT,wintypes.INT]
+        u.SetCursorPos.restype=wintypes.BOOL
+        u.GetCursorPos.argtypes=[ctypes.POINTER(_Point)]
+        u.GetCursorPos.restype=wintypes.BOOL
+        u.mouse_event.argtypes=[
+            wintypes.DWORD,wintypes.DWORD,wintypes.DWORD,wintypes.DWORD,
+            ctypes.c_size_t]
+        u.mouse_event.restype=None
 
     def _client(self) -> ClientRectangle:
         u=self._user32
