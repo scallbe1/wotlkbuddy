@@ -889,9 +889,15 @@ def hunt_kill_objectives(
         if not s.player.in_combat:
             visited: set[str] = set()
             for _ in range(7):
+                if s.player.target_guid in unhittable_guids:
+                    log(f'Skipping previously blocked spider '
+                        f'{s.player.target_guid}; exact GUID only')
+                    driver.chat('/cleartarget')
+                    s=fresh(s)
                 if (s.combat_target and
                         s.combat_target.entry_id in allowed_sources and
-                        s.combat_target.attackable and not s.combat_target.dead):
+                        s.combat_target.attackable and not s.combat_target.dead
+                        and s.player.target_guid not in unhittable_guids):
                     break
                 driver.chat('/targetenemy')
                 s = fresh(s)
@@ -900,7 +906,9 @@ def hunt_kill_objectives(
                 visited.add(s.player.target_guid)
 
         t = s.combat_target
-        if t and t.entry_id in allowed_sources and t.attackable and not t.dead:
+        if (t and t.entry_id in allowed_sources and t.attackable
+                and not t.dead and
+                s.player.target_guid not in unhittable_guids):
             expected = t.entry_id
             corpse_xyz = None
             try:
@@ -933,8 +941,42 @@ def hunt_kill_objectives(
                 before = qlog(s)
                 before_text = tuple(o.description for o in before.objectives)
                 dead_guid = s.player.target_guid
-                s = attack(s, expected, observed.index,
-                           objective_progress(observed.description))
+                try:
+                    s = attack(s, expected, observed.index,
+                               objective_progress(observed.description))
+                except UnhittableMobError as exc:
+                    # The Fireball cast neither damaged nor killed this
+                    # exact GUID, and we verified that navigation was
+                    # attempted only when safely out of combat. Search for
+                    # a different profile-authorized spider, not this one.
+                    latest=capture()
+                    guard(latest)
+                    if latest.player.in_combat:
+                        raise LiveControlError(
+                            'Unhittable target entered combat; cannot '
+                            'safely abandon an attacker') from exc
+                    if latest.player.target_guid not in (
+                            '',exc.target_guid):
+                        raise LiveControlError(
+                            'Different mob targeted during Fireball recovery; '
+                            'cannot safely exclude original GUID') from exc
+                    unhittable_count+=1
+                    unhittable_guids.add(exc.target_guid)
+                    if corpse_xyz is not None:
+                        unhittable_positions.append(corpse_xyz)
+                    log(f'Cannot hit spider {exc.target_guid}; '
+                        f'excluding that GUID without kill credit '
+                        f'({unhittable_count}/3), seeking another '
+                        'verified quest target')
+                    if unhittable_count>=3:
+                        raise LiveControlError(
+                            'Three verified spiders were unreachable '
+                            'by Fireball after short forward corrections; '
+                            'stop for manual LOS diagnosis') from exc
+                    if latest.player.target_guid == exc.target_guid:
+                        driver.chat('/cleartarget')
+                        latest=fresh(latest)
+                    continue
                 s = fresh(s, 1.0)
                 if s.player.in_combat:
                     # A second enemy might be nearby; cannot loot during active combat.
@@ -981,6 +1023,10 @@ def hunt_kill_objectives(
             nearby.extend(nearest_objective_spawns(
                 spawns, entry=source_entry, map_id=world.map_id,
                 origin=world.position, hotspots=spec.hotspots))
+        nearby=[
+            spawn for spawn in nearby
+            if all(spawn.position.distance_to(blocked)>5.0
+                   for blocked in unhittable_positions)]
         nearby.sort(key=lambda p: p.position.distance_to(world.position))
         if not nearby:
             raise LiveControlError(
