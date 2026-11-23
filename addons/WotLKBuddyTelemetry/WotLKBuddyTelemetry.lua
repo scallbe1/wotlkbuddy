@@ -105,6 +105,75 @@ SlashCmdList['WOTLKBUDDYTRACK'] = function(message)
     trackedQuestItemId = id
 end
 
+-- BEGIN SPELLBOOK PROBE HELPER
+-- Legacy WotLK clients can expose GetSpellName but lack
+-- GetSpellBookItemInfo. Use the exact spellbook slot plus GetSpellLink's
+-- spell ID as a fallback; never infer a spell ID from its name alone.
+local function resolveSpellbook(name)
+    if name == '' then return 0, 0, 'NO_REQUEST', 0 end
+    local bookType = BOOKTYPE_SPELL or 'spell'
+    if not GetSpellName and not GetSpellInfo then
+        return 0, 0, 'NO_NAME_API', 0
+    end
+    local bestIndex, bestId, matches = 0, 0, 0
+    local tabsAvailable = GetNumSpellTabs and GetSpellTabInfo
+    local scanned = 0
+
+    local function inspect(index)
+        if index < 1 or index > 500 then return end
+        local spellName = GetSpellName and GetSpellName(index, bookType)
+        if not spellName and GetSpellInfo then
+            spellName = GetSpellInfo(index, bookType)
+        end
+        if spellName ~= name then return end
+        matches = matches + 1
+        local id = nil
+        if GetSpellBookItemInfo then
+            local kind, itemId = GetSpellBookItemInfo(index, bookType)
+            if (kind == 'SPELL' or kind == 'spell') and
+                    type(itemId) == 'number' then
+                id = itemId
+            end
+        end
+        if (not id or id <= 0) and GetSpellLink then
+            local link, linkedId = GetSpellLink(index, bookType)
+            if type(linkedId) == 'number' then
+                id = linkedId
+            elseif type(link) == 'string' then
+                id = tonumber(string.match(link, '|Hspell:(%d+)'))
+            end
+        end
+        -- A linked or book-item ID must resolve back to the exact spell
+        -- name. This prevents placing a wrong spell from a mismatched slot.
+        if type(id) == 'number' and id == math.floor(id) and
+                id > 0 and id < 2147483648 and GetSpellInfo and
+                GetSpellInfo(id) == name then
+            bestIndex, bestId = index, id
+        end
+    end
+
+    if tabsAvailable then
+        for tab = 1, math.min(12, GetNumSpellTabs() or 0) do
+            local _, _, offset, count = GetSpellTabInfo(tab)
+            local first = math.max(1, (offset or 0) + 1)
+            local last = math.min(500, (offset or 0) + (count or 0))
+            for index = first, last do
+                scanned = scanned + 1
+                inspect(index)
+            end
+        end
+    end
+    -- Some private 3.3.5a builds do not expose usable spell tabs. Search
+    -- a bounded number of actual book slots instead (read-only).
+    if scanned == 0 then
+        for index = 1, 160 do inspect(index) end
+    end
+    if bestIndex > 0 then return bestIndex, bestId, 'OK', matches end
+    if matches > 0 then return 0, 0, 'NO_ID', matches end
+    return 0, 0, 'NO_MATCH', 0
+end
+-- END SPELLBOOK PROBE HELPER
+
 local function tickData()
     local lines = {}
     local isTruncated = false
@@ -149,6 +218,19 @@ local function tickData()
     end
     local targeting = SpellIsTargeting and SpellIsTargeting() and '1' or '0'
     appendLine(table.concat({'G', hoveredWorldName, targeting}, '\t'))
+    -- Prioritize explicitly requested spellbook probes ahead of optional
+    -- quest detail, gear, and merchant records so a busy frame cannot
+    -- silently drop the result. SD always acknowledges the request.
+    if observedAbilityName ~= '' then
+        local bookIndex, spellId, status, matches =
+            resolveSpellbook(observedAbilityName)
+        appendLine(table.concat({'SD', safe(observedAbilityName,48),
+            status, tostring(matches)}, '\t'))
+        if bookIndex > 0 then
+            appendLine(table.concat({'SF', tostring(bookIndex),
+                tostring(spellId), safe(observedAbilityName,48)}, '\t'))
+        end
+    end
     -- Inventory tracking is read only. Match ItemId exactly against source
     -- Horde XML and report current inventory count in each fresh frame.
     if trackedQuestItemId > 0 and GetItemCount then
@@ -770,29 +852,6 @@ local function tickData()
         local record = 'ES\t' .. tostring(freeAction)
         if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
             appendLine(record)
-        end
-    end
-    if observedAbilityName ~= '' and GetNumSpellTabs and GetSpellTabInfo and
-            GetSpellName and GetSpellBookItemInfo then
-        local bookIndex, spellId = 0, 0
-        for tab = 1, GetNumSpellTabs() do
-            local _, _, offset, count = GetSpellTabInfo(tab)
-            for i = (offset or 0)+1, (offset or 0)+(count or 0) do
-                local name = GetSpellName(i, BOOKTYPE_SPELL)
-                if name == observedAbilityName then
-                    local kind, id = GetSpellBookItemInfo(i, BOOKTYPE_SPELL)
-                    if kind == 'SPELL' and type(id) == 'number' then
-                        bookIndex, spellId = i, id
-                    end
-                end
-            end
-        end
-        if bookIndex > 0 then
-            local record = table.concat({'SF', tostring(bookIndex),
-                tostring(spellId), safe(observedAbilityName, 48)}, '\t')
-            if payloadBytes + string.len(record) + 1 <= CAPACITY - 20 then
-                appendLine(record)
-            end
         end
     end
     -- One controller-requested talent, resolved by *name* to the real
