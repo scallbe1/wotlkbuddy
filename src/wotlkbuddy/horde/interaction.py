@@ -35,6 +35,7 @@ _SPECIAL = {' ': (0x39, False), '/': (0x35, False), ',': (0x33, False),
             '-': (0x0c, False)}
 _INTERACT_KEYS = {'f': 0x21, 'g': 0x22}
 _ENTER = 0x1c
+_TAB = 0x0f  # WoW default: target nearest enemy (binding must remain Tab)
 _SHIFT = 0x2a
 
 
@@ -82,7 +83,18 @@ class KeyboardQuestInput:
                 self.keyboard.key_up(_SHIFT)
         real_sleep(0.012)
 
+    def target_nearest_enemy(self) -> None:
+        """One ordinary Tab press, never a typed /targetenemy macro.
+
+        Callers verify the resulting target GUID, reaction, and eligibility
+        through fresh telemetry rather than assuming Tab chose a safe mob.
+        """
+        self._tap(_TAB)
+
     def chat(self, command: str) -> None:
+        if command == '/targetenemy':
+            self.target_nearest_enemy()
+            return
         allowed_combat = command in (
             '/targetenemy', '/targetlasttarget', '/cleartarget',
             '/wbthud show', '/wbthud hide',
@@ -174,7 +186,9 @@ class KeyboardQuestInput:
         if snapshot.fireball_key in _DIGITS:
             self._tap(_DIGITS[snapshot.fireball_key])
         else:
-            self.chat('/cast Fireball')
+            raise LiveControlError(
+                'Fireball is not verified on a digit-bound action button; '
+                'will not type /cast Fireball. Check hotbar provisioning.')
 
     def interact(self) -> None:
         self._tap(_INTERACT_KEYS[self.interact_key])
