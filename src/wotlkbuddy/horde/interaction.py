@@ -109,6 +109,10 @@ class KeyboardQuestInput:
                 not re.fullmatch(r'/run Select(?:GossipActiveQuest|ActiveQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and
                 not re.fullmatch(r'/click (?:GossipTitleButton|QuestTitleButton)([1-9]|[12][0-9]|3[0-2])', command) and
                 not re.fullmatch(r'/run Select(?:GossipAvailableQuest|AvailableQuest)\(([1-9]|[12][0-9]|3[0-2])\)', command) and
+                not (command.startswith('/wbttalent ') and
+                     re.fullmatch(r'[A-Za-z :]{1,48}',
+                                  command[len('/wbttalent '):])) and
+                not re.fullmatch(r'/run LearnTalent\(([1-3]),([1-9]|[1-3][0-9]|4[0-5])\)', command) and
                 not (command.startswith('/wbtability ') and
                      re.fullmatch(r'[A-Za-z :]{1,48}',
                                   command[len('/wbtability '):])) and
@@ -131,6 +135,13 @@ class KeyboardQuestInput:
                 code, shifted = _SPECIAL[letter]
             self._tap(code, shifted=shifted)
         self._tap(_ENTER)
+
+    def learn_verified_talent(self, tree: int, index: int) -> None:
+        """Spend exactly one previously verified class-specific talent point."""
+        if not (type(tree) is int and 1 <= tree <= 3 and
+                type(index) is int and 1 <= index <= 45):
+            raise ValueError('Invalid talent tree or index')
+        self.chat(f'/run LearnTalent({tree},{index})')
 
     def cast_action_spell(self, snapshot: ClientTelemetry, spell_id: int) -> None:
         """One verified normal keypress for an observed, ready spell action."""
