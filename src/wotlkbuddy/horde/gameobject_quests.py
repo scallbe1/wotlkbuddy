@@ -163,7 +163,6 @@ def execute_gameobject_quest(
     local_approaches: dict[int,int] = {}
     preferred_guid: int | None = None
     no_progress=0
-    grave_item_activated=False
 
     def guard(s):
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()
@@ -510,26 +509,18 @@ def execute_gameobject_quest(
         before_count=count(state)
         before_item=(state.tracked_item_count if goal.item_id else None)
         if goal.quest_id==6395 and goal.object_id==178090:
-            if not grave_item_activated:
-                # Item is verified in bags and the exact grave template is
-                # visible within 5y. Use the item only now, never at an
-                # unverified/guessed coordinate.
-                driver.chat('/run UseItemByName(16333)')
-                grave_item_activated=True
-                state=fresh(state,.9)
-                if count(state)>before_count or journal(state)[0].complete:
-                    interacted+=1
-                    log("Samuel's Remains item used at Marla's Grave; "
-                        'quest objective confirmed without a ground click')
-                    continue
+            # Aarr's live run confirmed that right-clicking the verified
+            # grave completes the burial. An earlier /run UseItemByName(16333)
+            # caused a protected-action warning and did not advance the
+            # journal, so avoid that insecure Lua action altogether.
+            # Never click into an unrelated pending ground-target cursor.
             if state.spell_targeting is True:
-                mouse.left_click()
-                log("Samuel's Remains has a live ground-target cursor; "
-                    "left-clicking the verified grave")
-            else:
-                mouse.right_click()
-        else:
-            mouse.right_click()
+                raise LiveControlError(
+                    'Unexpected spell-targeting cursor before grave '
+                    'interaction; refusing to click blindly')
+            log("Right-clicking verified Marla's Grave with Samuel's "
+                "Remains in bags (no Lua item-use macro)")
+        mouse.right_click()
         interacted+=1
         # Mark the GO visited only AFTER confirming objective credit or
         # exhausting its bounded local recovery. An attempted click can
