@@ -135,7 +135,10 @@ local function resolveSpellbook(name)
                 id = itemId
             end
         end
-        if (not id or id <= 0) and GetSpellLink then
+        local validBookId = type(id) == 'number' and
+            id > 0 and id == math.floor(id) and id < 2147483648 and
+            GetSpellInfo and GetSpellInfo(id) == name
+        if not validBookId and GetSpellLink then
             local link, linkedId = GetSpellLink(index, bookType)
             if type(linkedId) == 'number' then
                 id = linkedId
