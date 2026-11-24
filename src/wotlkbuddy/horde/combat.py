@@ -514,6 +514,22 @@ def hunt_kill_objectives(
             + '; retrying cast and verifying target HP/quest credit')
         return after, True
 
+    def clear_remaining_aggro(s: ClientTelemetry) -> ClientTelemetry:
+        if not s.player.in_combat:
+            return s
+        log('Active encounter: suspending quest work until verified attackers are cleared')
+        callback = getattr(driver, 'on_aggro', None)
+        if callable(callback):
+            s = callback(s)
+        else:
+            from wotlkbuddy.horde.defense import defend_against_aggro
+            s = defend_against_aggro(initial=s, capture=capture, driver=driver,
+                                     log=log, sleep=sleep)
+        guard(s)
+        if s.player.in_combat:
+            raise LiveControlError('Defensive encounter did not clear combat')
+        return s
+
     def attack(s: ClientTelemetry, expected: int, objective_index: int,
                previous_credit: tuple[int, int] | None) -> ClientTelemetry:
         nonlocal kills, last_target
@@ -538,6 +554,30 @@ def hunt_kill_objectives(
             raise LiveControlError('Fireball range not confirmed; move closer before attacking')
         target_guid = s.player.target_guid
         log(f'Engaging verified creature entry {expected}, GUID {target_guid}')
+        def recover_encounter(snapshot: ClientTelemetry) -> ClientTelemetry:
+            nonlocal kills, last_target
+            snapshot = clear_remaining_aggro(snapshot)
+            if collect_items:
+                # Defense may have changed the selection several times.
+                # Only exact corpse identity can prove the original kill.
+                if snapshot.player.target_guid != target_guid:
+                    driver.chat('/targetlasttarget')
+                    snapshot = fresh(snapshot)
+                corpse = snapshot.combat_target
+                confirmed = (snapshot.player.target_guid == target_guid and
+                             corpse is not None and corpse.entry_id == expected
+                             and corpse.dead is True)
+            else:
+                confirmed = quest_credit_advanced(snapshot)
+            if confirmed:
+                kills += 1
+                last_target = expected
+                log('Original objective kill verified after defensive combat')
+            else:
+                log('Original objective kill unverified after defense; '
+                    'no kill credit or unverified corpse interaction')
+            return snapshot
+
         unchanged = 0
         approach_attempts = 0
         for _ in range(18):
@@ -545,6 +585,8 @@ def hunt_kill_objectives(
             t = s.combat_target
             if (s.player.target_guid != target_guid or t is None or
                     t.entry_id != expected):
+                if s.player.in_combat:
+                    return recover_encounter(s)
                 raise LiveControlError('Target GUID changed during combat; aborting')
             if t.dead or t.health == 0:
                 kills += 1
@@ -597,6 +639,8 @@ def hunt_kill_objectives(
             new = s.combat_target
             if (s.player.target_guid != target_guid or new is None
                     or new.entry_id != expected):
+                if s.player.in_combat:
+                    return recover_encounter(s)
                 if collect_items:
                     # Loot-item credit comes only after opening the corpse,
                     # so kill credit cannot prove death for item collection.
@@ -645,6 +689,8 @@ def hunt_kill_objectives(
                     new = s.combat_target
                     if (s.player.target_guid!=target_guid or
                             new is None or new.entry_id!=expected):
+                        if s.player.in_combat:
+                            return recover_encounter(s)
                         if quest_credit_advanced(s):
                             kills+=1
                             last_target=expected
@@ -998,10 +1044,8 @@ def hunt_kill_objectives(
         s = buffs(s)
         s = rest(s)  # Buffing costs mana; do not start a pull while depleted.
         if s.player.in_combat:
-            # Only engage aggressors from the explicitly authorized source set.
-            if (not s.combat_target or
-                    s.combat_target.entry_id not in allowed_sources):
-                raise LiveControlError('Attacked by non-objective mob; unsupported aggro fight')
+            s = clear_remaining_aggro(s)
+            continue
         elif (s.combat_target and
               s.combat_target.entry_id not in allowed_sources):
             driver.chat('/cleartarget')
@@ -1051,9 +1095,9 @@ def hunt_kill_objectives(
                     staging = Vec3(corpse_xyz.x+dx/d*12,
                                    corpse_xyz.y+dy/d*12, corpse_xyz.z)
                     s = navigate(s, staging)
-                    if s.player.in_combat and (s.combat_target is None or
-                            s.combat_target.entry_id != expected):
-                        raise LiveControlError('Unrelated aggro occurred while approaching target')
+                    if s.player.in_combat:
+                        s = clear_remaining_aggro(s)
+                        continue
                 else:
                     log('No live NPC XYZ; will use nearby profile-filtered spawn below')
             if (s.combat_target and
@@ -1101,10 +1145,9 @@ def hunt_kill_objectives(
                     continue
                 s = fresh(s, 1.0)
                 if s.player.in_combat:
-                    # A second enemy might be nearby; cannot loot during active combat.
-                    log('Combat persists after target death; resolve further aggro before loot')
-                else:
-                    s = loot(s, corpse_xyz, dead_guid, expected)
+                    log('Combat persists after target death; clearing additional attackers before loot')
+                    s = clear_remaining_aggro(s)
+                s = loot(s, corpse_xyz, dead_guid, expected)
                 latest = qlog(s)
                 if collect_items:
                     if (s.tracked_item_id != spec.entry or
@@ -1241,9 +1284,9 @@ def hunt_kill_objectives(
                     'indoor/collision routing'
                 ) from exc
             continue
-        if s.player.in_combat and (s.combat_target is None or
-                s.combat_target.entry_id not in allowed_sources):
-            raise LiveControlError('Attacked by non-objective mob while traveling')
+        if s.player.in_combat:
+            s = clear_remaining_aggro(s)
+            continue
         if reference_only:
             log(f'At source-labeled search area for creature {goal.entry}; '
                 'looking for live NPC by exact entry/GUID, '

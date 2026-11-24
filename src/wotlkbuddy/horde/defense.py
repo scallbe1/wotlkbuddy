@@ -20,7 +20,7 @@ def defend_against_aggro(
     sleep: Callable[[float], None] = real_sleep,
     max_casts: int = 12, max_acquire: int = 5,
 ) -> ClientTelemetry:
-    """Defend one verified aggressor, then return live post-combat telemetry."""
+    """Resolve a bounded encounter of verified aggressors before resuming."""
     if not 1 <= max_casts <= 20 or not 1 <= max_acquire <= 8:
         raise ValueError('Invalid defensive fight budgets')
     guid = initial.player.guid
@@ -33,7 +33,7 @@ def defend_against_aggro(
 
     def guard(s: ClientTelemetry):
         if (s.truncated or s.player.guid != guid or s.player.dead or
-                s.resources is None or s.combat_target is None or
+                s.resources is None or
                 s.resources.class_token.upper() != 'MAGE' or
                 driver.emergency_stop_requested() or
                 not driver.wow_is_foreground()):
@@ -54,47 +54,39 @@ def defend_against_aggro(
 
     state=initial
     guard(state)
-    # Explicitly resolve an enemy currently attacking the *player*, not
-    # merely a nearby red-name NPC selected by /targetenemy.
-    for _ in range(max_acquire):
-        t=state.combat_target
-        if not state.player.in_combat:
-            log('Incoming combat cleared before a verified attacker was acquired')
-            return state
-        if (t and t.entry_id>0 and t.attackable and not t.dead and
-                t.attacks_player is True and
-                creature_entry_from_guid(state.player.target_guid)==t.entry_id):
-            break
-        driver.chat('/targetenemy')
-        state=fresh(state)
-    else:
-        raise LiveControlError(
-            'Aggro detected but no exact hostile attacker targeting the Mage '
-            'could be verified (updated addon target-of-target required)')
+    def verified_attacker(snapshot):
+        t = snapshot.combat_target
+        return bool(t and t.entry_id > 0 and t.attackable and not t.dead
+                    and t.health > 0 and t.attacks_player is True
+                    and creature_entry_from_guid(snapshot.player.target_guid)
+                    == t.entry_id)
 
-    target_guid=state.player.target_guid
-    target_entry=state.combat_target.entry_id
-    log(f'Defending against verified attacker {target_entry}, GUID {target_guid}')
-    no_damage=0
-    damaged=False
+    target_guid = None
+    target_entry = None
+    no_damage = 0
+    # A global cast budget and bounded acquisition keep the encounter finite.
+    # A dead, cleared, or changed target is normal while adds remain alive.
     for _ in range(max_casts):
         guard(state)
         if not state.player.in_combat:
             log('Incoming combat cleared; navigation may resume')
             return state
-        t=state.combat_target
-        if state.player.target_guid != target_guid or t.entry_id != target_entry:
-            raise LiveControlError('Verified attacker GUID changed during defense')
-        if t.dead or t.health == 0:
-            log(f'Defensive attacker {target_entry} defeated')
-            # Confirm combat ended before continuing world navigation.
-            for _ in range(6):
-                state=fresh(state,.5)
-                if not state.player.in_combat:
-                    return state
-            raise LiveControlError('Enemy dead but player still in combat')
-        if t.attacks_player is not True:
-            raise LiveControlError('Target no longer verified as the attacker')
+        for _acquire in range(max_acquire + 1):
+            if not state.player.in_combat:
+                return state
+            if verified_attacker(state):
+                break
+            if _acquire == max_acquire:
+                raise LiveControlError(
+                    'Aggro persists but no exact living attacker could be verified')
+            driver.chat('/targetenemy')
+            state = fresh(state)
+        if state.player.target_guid != target_guid:
+            target_guid = state.player.target_guid
+            target_entry = state.combat_target.entry_id
+            no_damage = 0
+            log(f'Defending against verified attacker {target_entry}, GUID {target_guid}')
+        t = state.combat_target
         if t.fireball_in_range is not True:
             raise LiveControlError('Verified attacker is outside Fireball range; '
                                    'unsafe combat pursuit is unavailable')
@@ -124,30 +116,25 @@ def defend_against_aggro(
         state=fresh(mid,wait)
         # Wait for the projectile (which may land after casting finishes).
         for _impact in range(3):
-            new=state.combat_target
-            if state.player.target_guid != target_guid:
-                if not state.player.in_combat and damaged:
-                    log('Previously damaged aggressor lost and combat ended')
-                    return state
-                raise LiveControlError('Aggressor target changed without verified kill')
-            if new.entry_id != target_entry:
-                raise LiveControlError('Defensive target entry changed')
-            if new.dead or new.health < before_hp or not state.player.in_combat:
+            new = state.combat_target
+            if not state.player.in_combat:
+                log('Incoming combat ended; verified Mage is safe to resume')
+                return state
+            if (state.player.target_guid != target_guid or new is None
+                    or new.entry_id != target_entry or new.dead or new.health == 0):
                 break
-            state=fresh(state,.7)
-        new=state.combat_target
-        if new.dead or new.health==0:
-            log(f'Defensive attacker {target_entry} defeated')
-            for _ in range(6):
-                state=fresh(state,.5)
-                if not state.player.in_combat:
-                    return state
-            raise LiveControlError('Defense finished but combat flag persists')
+            if new.health < before_hp:
+                break
+            state = fresh(state, .7)
+        new = state.combat_target
         if not state.player.in_combat:
-            log('Incoming combat ended; verified Mage is safe to resume')
             return state
+        if (state.player.target_guid != target_guid or new is None
+                or new.entry_id != target_entry or new.dead or new.health == 0):
+            log('Attacker defeated or target changed; combat persists, reacquiring')
+            target_guid = None
+            continue
         if new.health < before_hp:
-            damaged=True
             no_damage=0
             log(f'Defensive Fireball hit: {before_hp}->{new.health} HP')
         else:
