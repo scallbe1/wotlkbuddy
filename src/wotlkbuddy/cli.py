@@ -711,6 +711,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
 
 def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dict:
     from wotlkbuddy.horde.death_recovery import recover_corpse
+    from wotlkbuddy.live.corpse_position import verified_client_corpse
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.live.capture import capture_monitor
     from wotlkbuddy.live.control import LiveControlError
@@ -746,6 +747,7 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
         return recover_corpse(
             sample=sample, driver=driver, nav=nav,
             known_corpse=getattr(args, 'corpse_world', None),
+            read_corpse=lambda state, pos: verified_client_corpse(state, pos, pid=pid),
             log=lambda line: print(line, file=sys.stderr, flush=True))
 
 
@@ -1773,7 +1775,7 @@ def main(argv: list[str] | None = None) -> int:
     progression.add_argument('--python32', help='Python 32-bit for nav worker')
     progression.add_argument('--corpse-world', nargs=4, type=float,
                              metavar=('MAP', 'X', 'Y', 'Z'),
-                             help='Verified server corpse world coordinates for an already released ghost')
+                             help='Optional explicit corpse world override; defaults to client corpse cache')
     progression.add_argument('--spawns-db')
     progression.add_argument('--interact-key', choices=['f','g'], default='f')
     progression.add_argument('--enable-input', action='store_true')
