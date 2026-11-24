@@ -12,6 +12,7 @@ from typing import Callable
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.profile import HordeProfile, OrderStep
+from wotlkbuddy.horde.interaction import navigate_with_status
 from wotlkbuddy.horde.turnin import turnin_profile_quest
 from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, distance_world
 from wotlkbuddy.live.codec import ClientTelemetry
@@ -114,7 +115,8 @@ def return_and_turnin(
                 raise LiveControlError('WoW PID changed during return')
             return state, observed
 
-        report = travel(
+        report = navigate_with_status(
+            driver, 'npc', lambda: travel(
             waypoints, sample=sample, keyboard=kb,
             stop_requested=driver.emergency_stop_requested,
             expected_quest_id=quest_id, expected_map_id=world.map_id,
@@ -123,7 +125,7 @@ def return_and_turnin(
             progress=log, on_aggro=getattr(driver, 'on_aggro', None),
             on_threat=getattr(driver, 'scan_hostiles', None),
             waypoint_spacing=18.0, continuous_forward=True,
-            threat_check_yards=14.0)
+            threat_check_yards=14.0), target=step.npc_name)
         if report.stopped_reason != 'complete':
             raise LiveControlError(
                 'Return-to-NPC navigation stopped: ' + report.stopped_reason)

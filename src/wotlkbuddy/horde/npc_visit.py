@@ -9,6 +9,7 @@ from math import hypot
 from time import monotonic, sleep as real_sleep
 from typing import Callable
 
+from wotlkbuddy.horde.interaction import navigate_with_status
 from wotlkbuddy.horde.worlddata import distance_world
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
@@ -84,7 +85,8 @@ def visit_npc(
             if seen_pid != pid:
                 raise LiveControlError('WoW PID changed during NPC visit')
             return state, pos
-        result = travel(
+        result = navigate_with_status(
+            driver, 'npc', lambda: travel(
             path, sample=sample, keyboard=getattr(driver, 'keyboard', driver),
             stop_requested=driver.emergency_stop_requested,
             expected_quest_id=None, expected_map_id=world.map_id,
@@ -93,7 +95,7 @@ def visit_npc(
             progress=log, on_aggro=getattr(driver, 'on_aggro', None),
             on_threat=getattr(driver, 'scan_hostiles', None),
             waypoint_spacing=18.0, continuous_forward=True,
-            threat_check_yards=14.0)
+            threat_check_yards=14.0), target=npc_name)
         if result.stopped_reason != 'complete':
             raise LiveControlError(
                 f'NPC visit to {npc_name} stopped: {result.stopped_reason}')

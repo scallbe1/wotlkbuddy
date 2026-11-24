@@ -7,6 +7,8 @@ calibrated from the on-screen marker instead of assumed to equal CELL.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import sleep as real_sleep
+from typing import Callable
 
 from wotlkbuddy.live.codec import (CELL, COLS, MAGIC, ROWS, ClientTelemetry,
                                    TelemetryError, decode_pixels, parse_payload)
@@ -175,8 +177,14 @@ def decode_bgra_frame(buffer: bytes, width: int, height: int) -> ClientTelemetry
                          'check for mixed frames, UI effects, or a changed addon')
 
 
-def capture_monitor(monitor_index: int = 0) -> ClientTelemetry:
-    """Capture one monitor; 0 means all screens, 1 means primary."""
+def capture_monitor(monitor_index: int = 0, *,
+                    sleep: Callable[[float], None] = real_sleep) -> ClientTelemetry:
+    """Read a fresh RGB frame; tolerate only a brief missing-marker dropout.
+
+    The native HUD, game UI, or a brief rendering transition can obscure a
+    marker in a single screenshot. Never reuse stale telemetry, retry corrupt
+    payloads, or proceed if three consecutive *new* grabs cannot find it.
+    """
     try:
         import mss
     except ImportError as exc:
@@ -184,5 +192,19 @@ def capture_monitor(monitor_index: int = 0) -> ClientTelemetry:
     with mss.mss() as screen:
         if not 0 <= monitor_index < len(screen.monitors):
             raise ValueError(f'Invalid monitor index {monitor_index}; available 0..{len(screen.monitors) - 1}')
-        frame = screen.grab(screen.monitors[monitor_index])
-        return decode_bgra_frame(frame.raw, frame.width, frame.height)
+        for attempt in range(3):
+            frame = screen.grab(screen.monitors[monitor_index])
+            try:
+                return decode_bgra_frame(frame.raw, frame.width, frame.height)
+            except TelemetryError as exc:
+                # Missing header only: retry 2 fresh screenshots. Never
+                # convert checksum-valid bad telemetry into movement input.
+                if str(exc) != (
+                        'Telemetry marker not visible; keep WoW unobstructed'):
+                    raise
+                if attempt == 2:
+                    raise TelemetryError(
+                        'Telemetry marker not visible in 3 consecutive frames; '
+                        'keep WoW unobstructed and /wbt show') from exc
+                sleep(0.12)
+    raise AssertionError('Unreachable screenshot retry state')

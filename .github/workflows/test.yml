@@ -37,3 +37,5 @@ jobs:
         run: lua5.1 tests/lua_action_identity_v056.lua
       - name: Resolve verified action spells and Fireball key on actual 3.3.5a semantics
         run: lua5.1 tests/lua_verified_action_spells_v057.lua
+      - name: Show sourced Detour destinations in the native goal/action HUD
+        run: lua5.1 tests/lua_native_hud_travel_v060.lua
