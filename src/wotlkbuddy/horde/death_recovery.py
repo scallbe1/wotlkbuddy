@@ -12,7 +12,7 @@ from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 from wotlkbuddy.horde.resurrection_site import (
-    acceptable_site, approach_path, clearance, plan_resurrection_sites)
+    APPROACH_DISTANCE, acceptable_site, approach_path, clearance, plan_resurrection_sites)
 
 
 def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
@@ -87,20 +87,78 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
         f'({corpse.x:.2f},{corpse.y:.2f},{corpse.z:.2f})')
     set_status = getattr(driver, 'set_navigation_status', None)
 
-    def walk(path, label):
+    def ghost_position():
+        state, position = observe()
+        if (not state.player.dead or not state.death_state.ghost or
+                position.map_id != corpse_map):
+            raise LiveControlError('Ghost/map changed during corpse navigation')
+        return position
+
+    def walk(path, label, *, toward_corpse=False):
+        """Replan from measured XYZ on a bounded terrain failure.
+
+        A failed offset-site route may be abandoned for a different candidate;
+        never ignore a floor mismatch, lost focus, or invalid player state.
+        """
         if not path:
-            return
+            return True
+        destination = path[-1]
+        failures = []
+        deadline = now()+600
         if callable(set_status):
             set_status('deathrun')
         try:
-            travel = follow_world_path(
-                path, sample=observe, keyboard=driver.keyboard,
-                stop_requested=driver.emergency_stop_requested,
-                expected_quest_id=None, expected_map_id=corpse_map,
-                max_seconds=600, progress=log, ghost_only=True,
-                can_traverse=lambda a,b:nav.segment_clear(corpse_map,a,b))
-            if travel.stopped_reason != 'complete':
-                raise LiveControlError(label+' navigation stopped: '+travel.stopped_reason)
+            for attempt in range(5):
+                start = ghost_position().position
+                remaining_time = deadline-now()
+                if remaining_time < 15:
+                    raise LiveControlError(label+' navigation time budget exhausted')
+                travel = follow_world_path(
+                    path, sample=observe, keyboard=driver.keyboard,
+                    stop_requested=driver.emergency_stop_requested,
+                    expected_quest_id=None, expected_map_id=corpse_map,
+                    max_seconds=min(600,remaining_time), progress=log, ghost_only=True,
+                    can_traverse=lambda a,b:nav.segment_clear(corpse_map,a,b))
+                if travel.stopped_reason == 'complete':
+                    return True
+                reason = travel.stopped_reason
+                terrain_failure = any(marker in reason for marker in (
+                    'height/floor', 'No forward progress',
+                    'Measured movement disagrees with client facing',
+                    'Movement diverged from waypoint'))
+                if not terrain_failure:
+                    raise LiveControlError(label+' navigation stopped: '+reason)
+                measured = ghost_position().position
+                if toward_corpse and measured.distance_to(corpse)<=APPROACH_DISTANCE:
+                    log('Reached corpse vicinity on measured floor; assessing reclaim sites')
+                    return True
+                if not toward_corpse and any(measured.distance_to(p)<2 for p in failures):
+                    log('Repeated terrain failure approaching offset site; checking another site')
+                    return False
+                if attempt==4 or any(measured.distance_to(p)<1.5 for p in failures):
+                    if not toward_corpse:
+                        log('Offset site terrain route exhausted; checking another site')
+                        return False
+                    raise LiveControlError(label+' navigation could not find a different reachable floor: '+reason)
+                failures.append(measured)
+                log(f'{label} terrain mismatch; replanning {attempt+1}/4 from '
+                    f'actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}); '
+                    f'moved {start.distance_to(measured):.1f}y on last route')
+                try:
+                    if toward_corpse:
+                        path = approach_path(nav,corpse_map,measured,corpse)
+                    else:
+                        raw = nav.find_path(corpse_map,measured,destination)
+                        if not raw or raw[-1].distance_to(destination)>2:
+                            raise LiveControlError('Replanned offset route is incomplete')
+                        path = validate_nav_path(raw,measured,destination,max_step=9)
+                except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError) as exc:
+                    if not toward_corpse:
+                        log(f'Offset site cannot be rerouted: {exc}; checking alternatives')
+                        return False
+                    raise LiveControlError(label+' could not replan from measured floor: '+str(exc)) from exc
+                if not path:
+                    return True
         finally:
             if (callable(set_status) and driver.wow_is_foreground() and
                     not driver.emergency_stop_requested()):
@@ -111,7 +169,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
     if approach:
         log(f'Running toward corpse as ghost; stopping near reclaim range '
             f'({approach[-1].distance_to(corpse):.1f}y from corpse)')
-        walk(approach,'Corpse vicinity')
+        walk(approach,'Corpse vicinity',toward_corpse=True)
     state, position = observe()
     # Only now is it meaningful to inspect the local creature scene.
     log(f'Arrived near corpse ({position.position.distance_to(corpse):.1f}y); '
@@ -147,7 +205,8 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                 if not path or path[-1].distance_to(point)>2:
                     continue
                 path = validate_nav_path(path,position.position,point,max_step=9)
-                walk(path,'Resurrection site')
+                if not walk(path,'Resurrection site'):
+                    continue
             state, position = observe()
             if not acceptable_site(position.position,corpse,tuple(read_hazards(state,corpse))):
                 log('Creature clearance lost at proposed site; checking alternatives')

@@ -132,3 +132,58 @@ def test_released_ghost_uses_client_corpse_reader_without_releasing_again():
     reader.assert_called_once()
     assert result['resurrection_world'] == [0,1830,1400,90]
     driver.chat.assert_called_once_with('/run RetrieveCorpse()')
+
+
+def test_ghost_replans_from_measured_floor_after_height_mismatch():
+    from wotlkbuddy.game.types import Vec3
+    base = snap()
+    guid = base.player.guid
+    corpse = Vec3(1800,1400,90)
+    start = WorldPosition(guid,0,1900,1500,90,0,1)
+    mismatch = WorldPosition(guid,0,1860,1460,84.66,0,1)
+    site = WorldPosition(guid,0,1830,1400,90,0,1)
+    where = start
+    alive = False
+    driver = Mock()
+    driver.wow_is_foreground.return_value = True
+    driver.emergency_stop_requested.return_value = False
+
+    def sample():
+        player = replace(base.player,dead=not alive,health=50 if alive else 0)
+        return replace(base,player=player,death_state=DeathState(
+            not alive,False,not alive and where==site)),where
+
+    def chat(command):
+        nonlocal alive
+        assert command == '/run RetrieveCorpse()'
+        assert where == site
+        alive = True
+
+    driver.chat.side_effect = chat
+    calls = []
+
+    def approach(nav,map_id,origin,corpse):
+        calls.append(origin)
+        return (origin,site.position)
+
+    def travel(path,**kwargs):
+        nonlocal where
+        assert kwargs['ghost_only']
+        if where == start:
+            where = mismatch
+            return Mock(stopped_reason='Waypoint 14 is on another height/floor: delta=-5.34y')
+        assert path[0] == mismatch.position
+        where = site
+        return Mock(stopped_reason='complete')
+
+    nav = Mock()
+    nav.find_path.side_effect=lambda _,a,b:[a,b]
+    with patch('wotlkbuddy.horde.death_recovery.follow_world_path',side_effect=travel), \
+            patch('wotlkbuddy.horde.death_recovery.approach_path',side_effect=approach), \
+            patch('wotlkbuddy.horde.death_recovery.plan_resurrection_sites',
+                  return_value=[(site.position,())]):
+        result=recover_corpse(sample=sample,driver=driver,nav=nav,
+            known_corpse=(0,corpse.x,corpse.y,corpse.z),
+            read_hazards=lambda *_:(),sleep=lambda _:None)
+    assert calls == [start.position,mismatch.position]
+    assert result['status']=='resurrected'
