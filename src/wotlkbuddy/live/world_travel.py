@@ -163,9 +163,14 @@ def follow_world_path(
         if now() - start_time > max_seconds:
             raise LiveControlError('World navigation time limit reached')
 
-    def checked(*, force_scan: bool = False) -> tuple[ClientTelemetry, WorldPosition]:
+    def checked(*, force_scan: bool = False,
+                observation: tuple[ClientTelemetry, WorldPosition] | None = None
+                ) -> tuple[ClientTelemetry, WorldPosition]:
         nonlocal aggro_fights, last_threat_scan_xyz, last_threat_scan_time
-        snap, pos = sample()
+        # Accept a position already captured immediately after a key release.
+        # Threat scans and reactive combat can move the character; they must
+        # not inflate the distance attributed to a single forward W hold.
+        snap, pos = observation if observation is not None else sample()
         if (snap.truncated or snap.player.guid != guid or
                 pos.player_guid.lower() != guid.lower() or
                 pos.map_id != expected_map_id or snap.player.dead):
@@ -228,43 +233,43 @@ def follow_world_path(
             raise LiveControlError('Quest journal changed while walking; stopping')
         return snap, pos
 
-    def pulse(key: str, duration: float) -> None:
-        """Hold W continuously between steering corrections.
+    def pulse(key: str, duration: float) -> float:
+        """Hold one movement key for a bounded *wall-clock* interval.
 
-        While running in continuous mode, inspect live combat every ~0.36 s
-        with W still held, and release W immediately on combat/death/target
-        threat. In all cases, release the key even after a telemetry failure.
-        Do not invoke chat-based threat selection with W held.
+        Previously we read live telemetry while W was down. Each live
+        sample performs a second memory observation after a 120ms wait,
+        plus an image capture. That blocking time was omitted from the
+        nominal hold duration, so a requested 1.2-second pulse could
+        move the character for multiple seconds and trip the 12-yard
+        jump check on a perfectly valid Detour path.
+
+        Never perform blocking telemetry capture with a movement key
+        down. Check focus/Escape/time limit every <=40ms, release the
+        key unconditionally, then let checked() observe and handle aggro.
+        No movement key stays down during a threat scan or client read.
         """
         guard()
         scan = _MOVEMENT_SCANCODES[key]
+        started = now()
         keyboard.key_down(scan)
         try:
-            remaining = duration
-            since_observed = 0.
-            while remaining > 0:
+            accounted = 0.0
+            while accounted < duration:
                 guard()
-                step = min(0.04, remaining)
+                # Both clocks bound the hold: a real elapsed-time deadline
+                # handles slow/suspended sleeps, while the finite duration
+                # budget supports deterministic simulated/frozen test clocks.
+                left = min(duration - accounted, duration - (now() - started))
+                if left <= 0:
+                    break
+                step = min(0.04, left)
                 sleep(step)
-                remaining -= step
-                since_observed += step
-                if (continuous_forward and key == 'forward' and
-                        since_observed >= .36):
-                    since_observed = 0.
-                    observed, measured = sample()
-                    if (observed.truncated or observed.player.guid != guid or
-                            observed.player.dead or measured.map_id != expected_map_id or
-                            measured.player_guid.lower() != guid.lower()):
-                        raise LiveControlError(
-                            'Character/map changed during continuous forward hold')
-                    if observed.player.in_combat or (
-                            observed.combat_target is not None and
-                            observed.player.target_guid and
-                            observed.combat_target.attacks_player is True):
-                        break
+                accounted += step
         finally:
             keyboard.key_up(scan)
+        held = now() - started
         guard()
+        return held
 
     # Reusing measured calibration across nearby Detour legs avoids a
     # visible 0.12s D-key twitch before every corpse and vendor approach.
@@ -447,12 +452,29 @@ def follow_world_path(
                     forward_duration = min(
                         1.20 if continuous_forward else 0.45,
                         max(0.18, 0.75*(dxy-arrival_yards)/8.0))
-                    pulse('forward', forward_duration)
+                    held = pulse('forward', forward_duration)
                     moves += 1
-                    current, world = checked()
-                    displacement = _distance_xy(before.position, world.position)
-                    if displacement > (12 if continuous_forward else 4):
-                        raise LiveControlError('Implausible world jump during forward movement')
+                    # Measure immediately after releasing W, BEFORE the
+                    # reactive handler or proactive scan can alter position.
+                    # checked() can reuse the identical live observation and
+                    # still run normal combat, identity and quest guards.
+                    released = sample()
+                    current, world = checked(observation=released)
+                    moved_to = released[1]
+                    displacement = _distance_xy(before.position, moved_to.position)
+                    # This bound is tied to the actual key-down interval,
+                    # rather than a hardcoded 12 yards regardless of timing.
+                    # 11 yd/s is above normal unmounted running speed; the
+                    # additional 2 yards cover polling/snapshot jitter.
+                    allowed = max(4.0, 11.0 * held + 2.0)
+                    if displacement > allowed:
+                        raise LiveControlError(
+                            'Implausible world jump during forward movement: '
+                            f'{displacement:.2f}y in {held:.2f}s of W '
+                            f'(limit {allowed:.2f}y; '
+                            f'from {before.x:.2f},{before.y:.2f} '
+                            f'to {moved_to.x:.2f},{moved_to.y:.2f}; '
+                            f'waypoint {index}/{len(waypoints)-1})')
                     stalls = stalls + 1 if displacement < 0.15 else 0
                     if stalls >= 4:
                         if recover_around_wall(waypoint):
@@ -462,7 +484,8 @@ def follow_world_path(
                             continue
                         raise LiveControlError('No forward progress: local obstacle recovery failed or disabled')
                     if displacement > 0.2:
-                        forward_angle = atan2(world.y-before.y, world.x-before.x)
+                        forward_angle = atan2(moved_to.y-before.y,
+                                              moved_to.x-before.x)
                         if abs(_angle(forward_angle - before.facing_rad)) > 0.85:
                             raise LiveControlError('Measured movement disagrees with client facing')
                 count += 1
