@@ -1177,7 +1177,8 @@ end
 local elapsedTime = 0
 canvas:SetScript('OnUpdate', function(_, elapsed)
     elapsedTime = elapsedTime + elapsed
-    if elapsedTime < 0.5 then return end
+    -- Faster verified target/cast observations without changing WoW spell timing.
+    if elapsedTime < 0.15 then return end
     elapsedTime = 0
     publish()
 end)

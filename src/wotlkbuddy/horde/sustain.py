@@ -76,8 +76,8 @@ def maintain_mage_supplies(
             learned = (supply.knows_conjure_water if kind == 'water'
                        else supply.knows_conjure_food)
             if count >= reserve or learned is not True:
-                if learned is False and count < reserve:
-                    log(f'Conjure {kind.title()} not yet trained; skipping')
+                # Untrained spells are expected at low levels; avoid repeating
+                # this non-action every time a spawn is checked.
                 break
             if state.resources.free_bag_slots < 1:
                 log('No free bag slots for conjured supplies; not casting')

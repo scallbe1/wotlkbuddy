@@ -79,15 +79,15 @@ def scan_and_clear_hostiles(
         if snapshot.player.health/max(1,snapshot.player.max_health)<.30:
             raise LiveControlError('Mage below 30% health near hostiles')
 
-    def fresh(before: ClientTelemetry, delay: float=.35):
+    def fresh(before: ClientTelemetry, delay: float=.15):
         guard(before)
         sleep(delay)
-        for _ in range(6):
+        for _ in range(10):
             newer=capture()
             guard(newer)
             if newer.sequence != before.sequence:
                 return newer
-            sleep(.2)
+            sleep(.08)
         raise LiveControlError('Nearby threat scan telemetry stalled')
 
     state=initial
@@ -242,11 +242,11 @@ def scan_and_clear_hostiles(
             cast(state)
         else:
             driver.chat('/cast Fireball')
-    mid=fresh(state,.55)
+    mid=fresh(state,.15)
     cast_ms=(mid.current_cast_remaining_ms
              if ability is not None and mid.current_cast_name==ability.name
              else mid.fireball_cast_remaining_ms)
-    cast_delay=(min(2.5,max(.3,cast_ms/1000.+.2))
+    cast_delay=(min(2.5,max(.10,cast_ms/1000.+.02))
                 if cast_ms is not None else 2.1)
     state=fresh(mid,cast_delay)
     # A killing projectile may remove the exact GUID before its target HP is
