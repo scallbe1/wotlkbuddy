@@ -253,12 +253,18 @@ def follow_world_path(
         started = now()
         keyboard.key_down(scan)
         try:
-            while True:
+            accounted = 0.0
+            while accounted < duration:
                 guard()
-                remaining = duration - (now() - started)
-                if remaining <= 0:
+                # Both clocks bound the hold: a real elapsed-time deadline
+                # handles slow/suspended sleeps, while the finite duration
+                # budget supports deterministic simulated/frozen test clocks.
+                left = min(duration - accounted, duration - (now() - started))
+                if left <= 0:
                     break
-                sleep(min(0.04, remaining))
+                step = min(0.04, left)
+                sleep(step)
+                accounted += step
         finally:
             keyboard.key_up(scan)
         held = now() - started
