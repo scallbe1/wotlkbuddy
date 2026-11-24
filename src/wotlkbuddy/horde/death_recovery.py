@@ -1,7 +1,7 @@
 """Verified corpse recovery. Capture the exact death location before release.
 
-Already released ghosts require an explicit authoritative corpse world position
-(e.g. the server corpse record); never infer world XYZ from minimap percentages.
+Already released ghosts use the client's own cached corpse world position;
+never infer world XYZ from minimap percentages.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 
 
-def recover_corpse(*, sample, driver, nav, known_corpse=None,
+def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                    sleep=real_sleep, now=monotonic, log=lambda _: None):
     first, origin = sample()
     guid = first.player.guid
@@ -53,9 +53,10 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None,
 
     if first.death_state.ghost:
         if known_corpse is None:
-            raise LiveControlError(
-                'Already a ghost; supply verified --corpse-world MAP X Y Z. '
-                'Never use graveyard or last enemy coordinates as the corpse.')
+            if read_corpse is None:
+                raise LiveControlError('Already a ghost; client corpse reader unavailable')
+            known_corpse = read_corpse(first, origin)
+            log('Own corpse world coordinates read from WoW client memory')
         map_value, x, y, z = known_corpse
         if (not all(isfinite(v) for v in known_corpse) or
                 not 0 <= map_value <= 9999 or int(map_value) != map_value or

@@ -79,3 +79,45 @@ def test_death_record_and_old_frame():
     assert parse_payload(prefix, 1).death_state is None
     assert parse_payload(prefix+b'DS\t1\t0\t1\n', 2).death_state == DeathState(
         True, False, True)
+
+
+
+def test_released_ghost_uses_client_corpse_reader_without_releasing_again():
+    base = snap()
+    guid = base.player.guid
+    ghost = WorldPosition(guid, 0, 1900, 1500, 90, 0, 1)
+    corpse = WorldPosition(guid, 0, 1800, 1400, 90, 0, 1)
+    stage = 'ghost'
+    driver = Mock()
+    driver.wow_is_foreground.return_value = True
+    driver.emergency_stop_requested.return_value = False
+
+    def chat(command):
+        nonlocal stage
+        assert command == '/run RetrieveCorpse()'
+        stage = 'alive'
+
+    driver.chat.side_effect = chat
+
+    def sample():
+        alive = stage == 'alive'
+        return (replace(base, player=replace(base.player, dead=not alive,
+                        health=50 if alive else 0),
+                        death_state=DeathState(not alive, False, stage == 'near')),
+                ghost if stage == 'ghost' else corpse)
+
+    def travel(*args, **kwargs):
+        nonlocal stage
+        stage = 'near'
+        return Mock(stopped_reason='complete')
+
+    nav = Mock()
+    nav.find_path.return_value = [ghost.position, corpse.position]
+    reader = Mock(return_value=(0, 1800, 1400, 90))
+    with patch('wotlkbuddy.horde.death_recovery.follow_world_path', side_effect=travel):
+        result = recover_corpse(sample=sample, driver=driver, nav=nav,
+                                read_corpse=reader, sleep=lambda _: None)
+    assert result['status'] == 'resurrected'
+    reader.assert_called_once()
+    nav.find_path.assert_called_once_with(0, ghost.position, corpse.position)
+    driver.chat.assert_called_once_with('/run RetrieveCorpse()')
