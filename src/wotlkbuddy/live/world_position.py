@@ -212,3 +212,47 @@ def verified_target_position(snapshot: ClientTelemetry, *, pid: int) -> Vec3:
     with ProcessMemory(pid, writable=False) as memory:
         return observe_target_position(memory, player_guid=snapshot.player.guid,
                                        target_guid=snapshot.player.target_guid)
+
+
+def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
+                             center: Vec3, radius: float = 80) -> tuple[Vec3, ...]:
+    """Read creature positions from the existing verified object manager.
+
+    Ghost visibility may be incomplete; treat every visible creature as a
+    potential hazard, not as proven hostile or alive. Supplement with local
+    spawn data. No new memory offsets, writes or corpse-memory lookup.
+    """
+    own = parse_unit_guid(expected_guid)
+    origin = observe_world_position(memory, expected_guid=expected_guid)
+    root = memory.read_u32(MANAGER_ROOT)
+    manager = memory.read_u32(root + MANAGER_POINTER_OFFSET)
+    current = memory.read_u32(manager + FIRST_OBJECT_OFFSET)
+    seen = set()
+    positions = []
+    while current and not current & 1:
+        if current in seen or len(seen) >= MAX_OBJECTS or not 0x10000 <= current < 0xFFFF0000:
+            raise WorldPositionError('Corrupt creature object list')
+        seen.add(current)
+        object_guid = _u64(memory, current + OBJECT_GUID_OFFSET)
+        if object_guid >> 48 == 0xF130:
+            xyz = tuple(memory.read_f32(current + WORLD_POSITION_OFFSET + 4*i)
+                        for i in range(3))
+            if all(isfinite(v) and abs(v) <= 100000 for v in xyz):
+                point = Vec3(*xyz)
+                if point.distance_to(center) <= radius:
+                    positions.append(point)
+        current = memory.read_u32(current + NEXT_OBJECT_OFFSET)
+    if (_u64(memory, manager + LOCAL_GUID_OFFSET) != own or
+            memory.read_u32(WORLD_MAP_ID_ADDRESS) != origin.map_id):
+        raise WorldPositionError('Character or map changed during creature scan')
+    return tuple(positions)
+
+
+def verified_nearby_creatures(snapshot: ClientTelemetry, *, pid: int,
+                              center: Vec3, radius: float = 80) -> tuple[Vec3, ...]:
+    from wotlkbuddy.game.win32 import ProcessMemory
+    if snapshot.truncated or not snapshot.player.guid:
+        raise WorldPositionError('Verified character required for creature scan')
+    with ProcessMemory(pid, writable=False) as memory:
+        return observe_nearby_creatures(memory, expected_guid=snapshot.player.guid,
+                                        center=center, radius=radius)

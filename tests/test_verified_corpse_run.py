@@ -16,6 +16,7 @@ def test_recovery_uses_body_not_graveyard_coordinates():
     guid = base.player.guid
     corpse = WorldPosition(guid, 0, 1800, 1400, 90, 0, 1)
     graveyard = WorldPosition(guid, 0, 1900, 1500, 90, 0, 1)
+    site = WorldPosition(guid, 0, 1830, 1400, 90, 0, 1)
     stage = 'dead'
     driver = Mock()
     driver.wow_is_foreground.return_value = True
@@ -37,7 +38,7 @@ def test_recovery_uses_body_not_graveyard_coordinates():
         return (replace(base, player=player,
                         death_state=DeathState(ghost, stage == 'dead',
                                                stage == 'at_corpse')),
-                graveyard if stage == 'ghost' else corpse)
+                graveyard if stage == 'ghost' else (corpse if stage == 'dead' else site))
 
     def travel(*args, **kwargs):
         nonlocal stage
@@ -47,13 +48,18 @@ def test_recovery_uses_body_not_graveyard_coordinates():
         return Mock(stopped_reason='complete')
 
     nav = Mock()
-    nav.find_path.return_value = [graveyard.position, corpse.position]
-    with patch('wotlkbuddy.horde.death_recovery.follow_world_path', side_effect=travel):
+    nav.find_path.return_value = [graveyard.position, site.position]
+    with patch('wotlkbuddy.horde.death_recovery.follow_world_path', side_effect=travel), \
+            patch('wotlkbuddy.horde.death_recovery.approach_path',
+                  return_value=(graveyard.position, site.position)), \
+            patch('wotlkbuddy.horde.death_recovery.plan_resurrection_sites',
+                  return_value=[(site.position, ())]):
         result = recover_corpse(sample=sample, driver=driver, nav=nav,
-                                sleep=lambda _: None)
+                                read_hazards=lambda *_: (), sleep=lambda _: None)
     assert result['status'] == 'resurrected'
     assert result['corpse_world'] == [0, 1800, 1400, 90]
-    nav.find_path.assert_called_once_with(0, graveyard.position, corpse.position)
+    assert result['resurrection_world'] == [0,1830,1400,90]
+    assert result['resurrection_world'] == [0,1830,1400,90]
     assert [c.args[0] for c in driver.chat.call_args_list] == [
         '/run RepopMe()', '/run RetrieveCorpse()']
 
@@ -87,6 +93,7 @@ def test_released_ghost_uses_client_corpse_reader_without_releasing_again():
     guid = base.player.guid
     ghost = WorldPosition(guid, 0, 1900, 1500, 90, 0, 1)
     corpse = WorldPosition(guid, 0, 1800, 1400, 90, 0, 1)
+    site = WorldPosition(guid, 0, 1830, 1400, 90, 0, 1)
     stage = 'ghost'
     driver = Mock()
     driver.wow_is_foreground.return_value = True
@@ -104,7 +111,7 @@ def test_released_ghost_uses_client_corpse_reader_without_releasing_again():
         return (replace(base, player=replace(base.player, dead=not alive,
                         health=50 if alive else 0),
                         death_state=DeathState(not alive, False, stage == 'near')),
-                ghost if stage == 'ghost' else corpse)
+                ghost if stage == 'ghost' else site)
 
     def travel(*args, **kwargs):
         nonlocal stage
@@ -112,12 +119,16 @@ def test_released_ghost_uses_client_corpse_reader_without_releasing_again():
         return Mock(stopped_reason='complete')
 
     nav = Mock()
-    nav.find_path.return_value = [ghost.position, corpse.position]
+    nav.find_path.return_value = [ghost.position, site.position]
     reader = Mock(return_value=(0, 1800, 1400, 90))
-    with patch('wotlkbuddy.horde.death_recovery.follow_world_path', side_effect=travel):
+    with patch('wotlkbuddy.horde.death_recovery.follow_world_path', side_effect=travel), \
+            patch('wotlkbuddy.horde.death_recovery.approach_path',
+                  return_value=(ghost.position, site.position)), \
+            patch('wotlkbuddy.horde.death_recovery.plan_resurrection_sites',
+                  return_value=[(site.position, ())]):
         result = recover_corpse(sample=sample, driver=driver, nav=nav,
-                                read_corpse=reader, sleep=lambda _: None)
+                                read_corpse=reader, read_hazards=lambda *_: (), sleep=lambda _: None)
     assert result['status'] == 'resurrected'
     reader.assert_called_once()
-    nav.find_path.assert_called_once_with(0, ghost.position, corpse.position)
+    assert result['resurrection_world'] == [0,1830,1400,90]
     driver.chat.assert_called_once_with('/run RetrieveCorpse()')

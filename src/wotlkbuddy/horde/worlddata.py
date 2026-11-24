@@ -146,6 +146,20 @@ class CreatureSpawnDatabase:
         return tuple(Spawn(entry, map_id, *map(float, r)) for r in rows)
 
 
+    def nearby(self, map_id: int, center: Vec3, radius: float = 80) -> tuple[Spawn, ...]:
+        """Conservative local creature-density evidence; not a live hostility list."""
+        if not 0 <= map_id <= 9999 or not 1 <= radius <= 120:
+            raise ValueError('Invalid nearby spawn search')
+        rows = self._conn.execute(
+            'SELECT entry, x, y, z FROM spawns WHERE map_id = ? '
+            'AND x BETWEEN ? AND ? AND y BETWEEN ? AND ? AND z BETWEEN ? AND ?',
+            (map_id, center.x-radius, center.x+radius, center.y-radius,
+             center.y+radius, center.z-12, center.z+12)).fetchall()
+        return tuple(Spawn(int(entry), map_id, float(x), float(y), float(z))
+                     for entry, x, y, z in rows
+                     if all(isfinite(float(v)) for v in (x,y,z)))
+
+
 def distance_world(first: Vec3, second: Vec3) -> float:
     return dist((first.x, first.y, first.z), (second.x, second.y, second.z))
 
