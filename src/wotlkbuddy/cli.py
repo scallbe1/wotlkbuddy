@@ -879,10 +879,35 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
         if original_error is not None:
             raise original_error
         raise
-    if not first.player.dead or first.truncated:
+    if first.truncated:
         if original_error is not None:
             raise original_error
         raise LiveControlError('Recovery requires complete dead-character telemetry')
+    from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error,settle_aggro
+    if not first.player.dead:
+        if original_error is None or not recoverable_aggro_error(original_error):
+            if original_error is not None:
+                raise original_error
+            raise LiveControlError('Recovery requires complete dead-character telemetry')
+        # The phase may have stopped before the final incoming hit. Keep
+        # supervising a verified live encounter instead of exiting to shell.
+        recovery_driver=KeyboardQuestInput(interact_key=args.interact_key)
+        recovery_driver.native_hud_enabled=not getattr(args,'no_hud',False)
+        recovery_pid=getattr(args,'pid',None)
+        recovery_driver.face_combat_target=lambda state: face_target_in_place(
+            state,capture=cap,driver=recovery_driver,
+            player_position=lambda s:verified_live_position(s,pid=recovery_pid)[1],
+            target_position=lambda s:verified_target_position(s,pid=recovery_pid),
+            log=lambda line:print(line,file=sys.stderr,flush=True))
+        log_recovery=lambda line:print(line,file=sys.stderr,flush=True)
+        log_recovery('Quest phase interrupted by unresolved aggro; keeping control until combat clears or death is verified')
+        first=settle_aggro(initial=first,capture=cap,driver=recovery_driver,
+            defend=lambda state:defend_against_aggro(initial=state,capture=cap,
+                driver=recovery_driver,log=log_recovery),log=log_recovery)
+        if not first.player.dead:
+            log_recovery('Combat cleared alive; refreshing quest and resource state')
+            return {'status':'combat_cleared','character_guid':first.player.guid}
+    print('Verified death; starting corpse recovery',file=sys.stderr,flush=True)
     if not args.nav_dll or not args.python32:
         raise ValueError('Corpse recovery needs --nav-dll and --python32')
     dll = Path(args.nav_dll).expanduser().resolve()
@@ -961,6 +986,7 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
     reason = 'cycle_limit'
     train_level = -1
     recoveries = 0
+    aggro_recoveries = 0
 
     def phase(mode: str) -> dict:
         child = argparse.Namespace(**vars(args))
@@ -980,11 +1006,22 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
         except LiveControlError as exc:
             if recoveries >= 3:
                 raise
+            if aggro_recoveries>=5:
+                from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error
+                if recoverable_aggro_error(exc):
+                    raise
             recovery = _recover_horde_death(args, original_error=exc)
-            recoveries += 1
-            steps.append({'cycle': cycle+1, 'action': 'death_recovery',
+            if recovery.get('status')=='combat_cleared':
+                aggro_recoveries+=1
+                action='aggro_recovery'
+            else:
+                recoveries+=1
+                aggro_recoveries=0
+                action='death_recovery'
+            steps.append({'cycle': cycle+1, 'action': action,
                           'recovery': recovery})
             continue
+        aggro_recoveries=0
         checked=report.get('training_checked_level')
         if isinstance(checked,int):
             train_level=checked
@@ -1055,9 +1092,19 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
         except LiveControlError as exc:
             if recoveries >= 3:
                 raise
+            if aggro_recoveries>=5:
+                from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error
+                if recoverable_aggro_error(exc):
+                    raise
             recovery = _recover_horde_death(args, original_error=exc)
-            recoveries += 1
-            steps.append({'cycle': cycle+1, 'action': 'death_recovery',
+            if recovery.get('status')=='combat_cleared':
+                aggro_recoveries+=1
+                action='aggro_recovery'
+            else:
+                recoveries+=1
+                aggro_recoveries=0
+                action='death_recovery'
+            steps.append({'cycle': cycle+1, 'action': action,
                           'recovery': recovery})
             continue
         if isinstance(offers.get('training_checked_level'),int):
