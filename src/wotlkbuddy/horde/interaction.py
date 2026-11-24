@@ -78,6 +78,7 @@ class KeyboardQuestInput:
             raise ValueError('Interact key must be f or g')
         self.keyboard = WindowsKeyboard()
         self.interact_key = interact_key
+        self.native_hud_enabled = True
 
     def wow_is_foreground(self) -> bool:
         return self.keyboard.wow_is_foreground()
