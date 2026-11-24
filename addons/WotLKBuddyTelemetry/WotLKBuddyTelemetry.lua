@@ -320,6 +320,24 @@ local function selectGhostMap()
     SetMapToCurrentZone()
 end
 
+local recentKills = {}
+local killSequence = 0
+local lootSequence = 0
+local killFrame = CreateFrame('Frame')
+killFrame:RegisterEvent('COMBAT_LOG_EVENT_UNFILTERED')
+killFrame:RegisterEvent('LOOT_OPENED')
+killFrame:SetScript('OnEvent', function(_, event, ...)
+    if event == 'LOOT_OPENED' then lootSequence = lootSequence + 1; return end
+    -- Original 3.3.5a combat log arguments (no modern hideCaster/raidFlags).
+    local timestamp, subevent, sourceGUID, sourceName, sourceFlags, destGUID, destName = ...
+    if subevent == 'PARTY_KILL' and sourceGUID == UnitGUID('player') and
+            type(destGUID) == 'string' and string.match(destGUID, '^0x[Ff]130%x%x%x%x%x%x%x%x%x%x%x%x$') then
+        killSequence = killSequence + 1
+        table.insert(recentKills, {seq=killSequence, guid=destGUID, name=destName or '', time=GetTime()})
+        while #recentKills > 12 do table.remove(recentKills, 1) end
+    end
+end)
+
 local function tickData()
     local lines = {}
     local isTruncated = false
@@ -357,6 +375,13 @@ local function tickData()
         safe(UnitName('target'), 50),
     }, '\t')
     appendLine(playerLine)
+    appendLine('LK\t' .. tostring(lootSequence))
+    for i = #recentKills, 1, -1 do
+        local k = recentKills[i]
+        if GetTime()-k.time <= 90 then
+            appendLine(table.concat({'KD',tostring(k.seq),safe(k.guid,32),safe(k.name,50)}, '\t'))
+        end
+    end
     -- Ghost is distinct from an unreleased corpse; only expose UI state.
     local ghost = UnitIsGhost('player') and 1 or 0
     local release = 0

@@ -310,6 +310,11 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     def resolve_aggro(snapshot):
         from wotlkbuddy.horde.sustain import maintain_mage_supplies
         state = defend_against_aggro(initial=snapshot, capture=cap, driver=driver, log=log)
+        drain=getattr(driver,'drain_encounter_loot',None)
+        if callable(drain) and not getattr(driver,'looting_encounter',False):
+            state=drain(state)
+            if state.player.in_combat:
+                state=defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
         # No new pull or travel at critical HP after surviving an encounter.
         if not state.player.in_combat and (state.player.health/max(1,state.player.max_health) < .70 or
                 state.resources.mana/max(1,state.resources.max_mana) < .45):
@@ -431,6 +436,14 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                     raise LiveControlError('WoW PID changed between NPC actions')
                 return state, coords
 
+            from wotlkbuddy.horde.encounter_loot import loot_encounter
+            from wotlkbuddy.live.world_position import observe_target_position
+            from wotlkbuddy.game.win32 import ProcessMemory
+            def corpse_position(state, corpse_guid):
+                with ProcessMemory(pid,writable=False) as memory:
+                    return observe_target_position(memory,player_guid=state.player.guid,target_guid=corpse_guid)
+            driver.drain_encounter_loot=lambda state: loot_encounter(initial=state,
+                sample=location,driver=driver,nav=nav,corpse_position=corpse_position,log=log)
             if needs_recovery:
                 from wotlkbuddy.horde.recovery_rest import recover_and_buff
                 from wotlkbuddy.live.world_position import verified_nearby_creatures

@@ -374,6 +374,8 @@ class ClientTelemetry:
     mouse_world_name: str | None = None
     spell_targeting: bool | None = None
     death_state: DeathState | None = None
+    recent_kills: tuple[tuple[int,str,str], ...] = ()
+    loot_sequence: int | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -383,6 +385,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     obj: dict[int, list[QuestObjective]] = {}
     truncated = False
     death_state = None
+    recent_kills = {}
+    loot_sequence = None
     resources = None
     dialog = None
     completion_states: dict[int, bool] = {}
@@ -433,7 +437,27 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     spell_targeting = None
     for line in content.splitlines():
         parts = line.split('\t')
-        if parts[0] == 'P':
+        if parts[0] == 'KD':
+            if len(parts)!=4:
+                raise TelemetryError('Malformed kill event')
+            try:
+                serial=int(parts[1])
+                guid=parts[2]
+                if serial<=0 or serial in recent_kills or len(guid)!=18 or not guid.lower().startswith('0xf130'):
+                    raise ValueError('Invalid kill event')
+                int(guid,16)
+                recent_kills[serial]=(serial,guid,parts[3])
+            except ValueError as exc:
+                raise TelemetryError('Malformed kill event') from exc
+        elif parts[0] == 'LK':
+            if len(parts)!=2 or loot_sequence is not None:
+                raise TelemetryError('Malformed loot event counter')
+            try:
+                loot_sequence=int(parts[1])
+                if loot_sequence<0: raise ValueError('negative loot counter')
+            except ValueError as exc:
+                raise TelemetryError('Malformed loot event counter') from exc
+        elif parts[0] == 'P':
             if len(parts) != 15 or player is not None:
                 raise TelemetryError('Invalid or repeated player record')
             try:
@@ -1136,4 +1160,6 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            fireball_cast_remaining_ms=fireball_cast_remaining_ms,
                            mouse_world_name=mouse_world_name,
                            spell_targeting=spell_targeting,
-                           death_state=death_state)
+                           death_state=death_state,
+                           recent_kills=tuple(recent_kills[i] for i in sorted(recent_kills)),
+                           loot_sequence=loot_sequence)

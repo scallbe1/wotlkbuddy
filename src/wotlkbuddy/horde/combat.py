@@ -233,6 +233,10 @@ def hunt_kill_objectives(
     unhittable_positions: list[Vec3] = []
     unhittable_count = 0
     logged_live_kill_totals: set[int] = set()
+    from wotlkbuddy.horde.hunt_routes import recoverable_hunt_failure, remember_pack, alternate_hunt_routes
+    route_replans = 0
+    refresh_rounds = 0
+    force_spawn_search = False
 
     def guard(s: ClientTelemetry) -> None:
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()):
@@ -350,6 +354,11 @@ def hunt_kill_objectives(
             out = fresh(s)
             if report.stopped_reason == 'complete':
                 return out
+            if ('fresh Detour replan' in report.stopped_reason or 'fresh Detour route required' in report.stopped_reason) and height_replans<1 and not out.player.in_combat:
+                height_replans+=1
+                log('Encounter displaced player while looting; recalculating route from actual XYZ')
+                s=out
+                continue
             if 'Aggro/combat detected' in report.stopped_reason and out.player.in_combat:
                 log('Interrupted by combat; checking creature identity before fighting')
                 return out
@@ -569,9 +578,11 @@ def hunt_kill_objectives(
                     driver.chat('/targetlasttarget')
                     snapshot = fresh(snapshot)
                 corpse = snapshot.combat_target
-                confirmed = (snapshot.player.target_guid == target_guid and
+                confirmed = (target_guid in getattr(driver,'finished_corpses',set()) or
+                             any(g==target_guid for _,g,_ in snapshot.recent_kills) or
+                             (snapshot.player.target_guid == target_guid and
                              corpse is not None and corpse.entry_id == expected
-                             and corpse.dead is True)
+                             and corpse.dead is True))
             else:
                 confirmed = quest_credit_advanced(snapshot)
             if confirmed:
@@ -983,6 +994,9 @@ def hunt_kill_objectives(
         return s
 
     def drain_travel_corpses(s):
+        drain=getattr(driver,'drain_encounter_loot',None)
+        if callable(drain):
+            return drain(s)
         pending=getattr(driver,'defeated_corpses',None)
         if not isinstance(pending,dict) or s.player.in_combat:
             return s
@@ -1121,7 +1135,7 @@ def hunt_kill_objectives(
 
         # Find a live target already on screen first. If none can be selected,
         # navigate near a verified nearby spawn constrained to profile hotspots.
-        if not s.player.in_combat:
+        if not s.player.in_combat and not force_spawn_search:
             # Profile names can avoid cycling unrelated neutral units. The
             # selected target must still pass the exact entry and GUID checks.
             select_name = getattr(driver, 'target_objective_name', None)
@@ -1164,7 +1178,7 @@ def hunt_kill_objectives(
             s = clear_remaining_aggro(s)
             continue
         t = s.combat_target
-        if (t and t.entry_id in allowed_sources and t.attackable
+        if (not force_spawn_search and t and t.entry_id in allowed_sources and t.attackable
                 and not t.dead and
                 s.player.target_guid not in unhittable_guids):
             expected = t.entry_id
@@ -1185,7 +1199,20 @@ def hunt_kill_objectives(
                     # Stand off about 12 yards, leaving time for ranged Mage casts.
                     staging = Vec3(corpse_xyz.x+dx/d*12,
                                    corpse_xyz.y+dy/d*12, corpse_xyz.z)
-                    s = navigate(s, staging)
+                    try:
+                        s = navigate(s, staging)
+                    except LiveControlError as exc:
+                        if not recoverable_hunt_failure(exc):
+                            raise
+                        s=capture()
+                        guard(s)
+                        if s.player.in_combat:
+                            s=clear_remaining_aggro(s)
+                        unhittable_positions.append(corpse_xyz)
+                        force_spawn_search=True
+                        route_replans+=1
+                        log('Unsafe live-target approach; planning alternate quest hunting route: '+str(exc))
+                        continue
                     if s.player.in_combat:
                         s = clear_remaining_aggro(s)
                         continue
@@ -1207,7 +1234,10 @@ def hunt_kill_objectives(
                         unhittable_guids.add(selected_guid)
                         if corpse_xyz is not None:
                             unhittable_positions.append(corpse_xyz)
-                        log('Avoiding linked encounter; selecting another quest target')
+                        if plan is not None:
+                            remember_pack(driver,[m.position for m in plan.enemies],now())
+                        force_spawn_search=True
+                        log('Avoiding linked encounter; selecting another quest hunting location')
                         if s.player.target_guid:
                             driver.chat('/cleartarget')
                             s=fresh(s)
@@ -1258,10 +1288,16 @@ def hunt_kill_objectives(
                 if s.player.in_combat:
                     log('Combat persists after target death; clearing additional attackers before loot')
                     s = clear_remaining_aggro(s)
+                drain=getattr(driver,'drain_encounter_loot',None)
+                if callable(drain):
+                    driver.remember_defeated(s)
+                    s=drain(s)
                 # Loot selected verified add first, while it is still targetable,
                 # then try the original objective corpse and other observed dead GUIDs.
                 pending = getattr(driver, 'defeated_corpses', None)
-                if isinstance(pending, dict):
+                if callable(drain):
+                    pass  # Unified encounter queue already processed all known kills.
+                elif isinstance(pending, dict):
                     selected = s.player.target_guid
                     ordered = ([selected] if selected in pending and selected != dead_guid else [])
                     ordered += [dead_guid]
@@ -1319,12 +1355,14 @@ def hunt_kill_objectives(
 
         # No eligible target ready. Locate next *static* spawn near profile
         # hotspots and move there; do not pick mobs from the whole continent.
+        force_spawn_search=False
         _pid, world = world_position(s)
         nearby = []
         for source_entry in allowed_sources:
             nearby.extend(nearest_objective_spawns(
                 spawns, entry=source_entry, map_id=world.map_id,
-                origin=world.position, hotspots=spec.hotspots))
+                origin=world.position, hotspots=spec.hotspots,
+                radius=360 if refresh_rounds==0 else 600,limit=40))
         nearby=[
             spawn for spawn in nearby
             if all(spawn.position.distance_to(blocked)>5.0
@@ -1372,6 +1410,15 @@ def hunt_kill_objectives(
                     '(max 600y from player, within 100y of XML hotspot); '
                     + (', '.join(offsets) if offsets else 'no matching NPC entry'))
         nearby.sort(key=lambda p: p.position.distance_to(world.position))
+        if not nearby and refresh_rounds<2:
+            refresh_rounds+=1
+            log('Local hunting sites exhausted; resting and expanding the profile-constrained search')
+            s=rest(s)
+            sleep(8)
+            recently_visited.clear()
+            unhittable_guids.clear()
+            unhittable_positions.clear()
+            continue
         if not nearby:
             raise LiveControlError(
                 f'No verified nearby creature spawns or bounded reference '
@@ -1382,14 +1429,35 @@ def hunt_kill_objectives(
         places = [(p, (round(p.x),round(p.y),round(p.z))) for p in nearby]
         goal = next((p for p,key in places if recently_visited.get(key,0)<2),None)
         if goal is None:
-            raise LiveControlError('No new spawn positions within safe search radius')
+            if refresh_rounds<2:
+                refresh_rounds+=1
+                log('All nearby spawn approaches tried; waiting for patrol changes and expanding search')
+                s=rest(s)
+                sleep(8)
+                recently_visited.clear()
+                unhittable_guids.clear()
+                unhittable_positions.clear()
+                continue
+            raise LiveControlError('No new spawn positions within safe search radius after alternate searches')
         key = (round(goal.x), round(goal.y), round(goal.z))
         recently_visited[key] = recently_visited.get(key,0)+1
         dx,dy = world.x-goal.x,world.y-goal.y
         d = hypot(dx,dy)
         if d < 0.1:
-            raise LiveControlError('Already at spawn but no target could be acquired')
+            recently_visited[key]=2
+            continue
         staging = Vec3(goal.x+dx/d*10,goal.y+dy/d*10,goal.z)
+        hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if now()-t<90]
+        if hazards or route_replans:
+            alternatives=alternate_hunt_routes(nav,world.map_id,world.position,nearby,hazards,recently_visited)
+            if not alternatives:
+                recently_visited[key]=2
+                log('No safe approach to this spawn cluster; searching remaining quest locations')
+                continue
+            goal,staging=alternatives[0]
+            key=(round(goal.x),round(goal.y),round(goal.z))
+            recently_visited[key]=recently_visited.get(key,0)+1
+            log(f'Alternate hunting plan: entry {goal.entry}, ranged staging {staging.distance_to(goal.position):.1f}y from spawn; avoiding {len(hazards)} recent danger points')
         try:
             s = navigate(s, staging)
         except LiveControlError as exc:
@@ -1400,8 +1468,8 @@ def hunt_kill_objectives(
             # search other verified, navmesh-routed spawn candidates.
             height_failure = ('height/floor' in str(exc) or
                               'different heights/floors' in str(exc))
-            unsafe_encounter=('Unsafe encounter:' in str(exc) or 'possible pack' in str(exc) or 'Possible pack' in str(exc))
-            if not height_failure and not unsafe_encounter and 'Measured movement disagrees with client facing' not in str(exc):
+            unsafe_encounter=('unsafe encounter:' in str(exc).lower() or 'possible pack' in str(exc).lower())
+            if not recoverable_hunt_failure(exc):
                 raise
             s = capture()
             guard(s)
@@ -1414,7 +1482,9 @@ def hunt_kill_objectives(
                 ) from exc
             recently_visited[key] = 2
             if unsafe_encounter:
-                log(f'Unsafe pack near spawn {key}; choosing another quest route')
+                route_replans+=1
+                force_spawn_search=True
+                log(f'Unsafe pack near spawn {key}; planning another quest route from live position')
                 continue
             if height_failure:
                 log(f'Excluding wrong-floor spawn {key}; selecting another verified candidate')

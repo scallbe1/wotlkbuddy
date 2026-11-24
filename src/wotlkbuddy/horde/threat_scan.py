@@ -112,6 +112,9 @@ def scan_and_clear_hostiles(
     seen: set[str]=set()
     candidates: list[tuple[float,str,int]]=[]
     blocked_nearby = []
+    pack_positions = []
+    from wotlkbuddy.horde.hunt_routes import remember_pack
+    from time import monotonic
     for _ in range(max_targets):
         if state.player.in_combat:
             return defend(state)
@@ -122,8 +125,7 @@ def scan_and_clear_hostiles(
         if not current_guid or current_guid in seen:
             break
         seen.add(current_guid)
-        if current_guid in blocked:
-            continue  # Previously failed verified attack; do not repeat here.
+        previously_blocked = current_guid in blocked
         if not target or not target.attackable or target.dead or target.health<=0:
             continue
         if target.reaction is None:
@@ -144,6 +146,10 @@ def scan_and_clear_hostiles(
                 distance_to_corridor(position,player_position.position,
                                      path_ahead)>corridor_yards):
             continue
+        pack_positions.append(position)
+        if previously_blocked:
+            blocked_nearby.append((distance,current_guid))
+            continue  # Still a hazard, even when excluded as a pull target.
         # Range is not line of sight. In a cave the navmesh can verify
         # whether a short direct route is blocked by rock. If so, defer
         # the pull while Detour walks around the corner; no wall-casts.
@@ -162,13 +168,15 @@ def scan_and_clear_hostiles(
         candidates.append((distance,current_guid,target.entry_id))
         if len(candidates)>crowd_limit:
             break
-    if len(candidates)>crowd_limit:
+    if len(candidates)>crowd_limit or len(candidates)+sum(d<=18 for d,_ in blocked_nearby)>crowd_limit:
+        remember_pack(driver,pack_positions,monotonic())
         raise LiveControlError(
             f'{len(candidates)} verified hostile mobs within '
             f'{detection_yards:g}y of travel corridor; possible pack, '
             'stopping before pulling into group')
     if not candidates:
         if sum(distance <= 18 for distance, _ in blocked_nearby) >= 2:
+            remember_pack(driver,pack_positions,monotonic())
             raise LiveControlError('Possible pack behind cave bend; holding position rather than walking into multiple hostiles')
         # Restore a neutral target state, so subsequent quest drivers always
         # reacquire their own exact GUID. The scan never attacks a neutral mob.
@@ -259,6 +267,7 @@ def scan_and_clear_hostiles(
         if state.player.in_combat:
             return defend(state)
         if plan is None or not plan.allowed:
+            remember_pack(driver,[m.position for m in plan.enemies] if plan else pack_positions,monotonic())
             raise LiveControlError('Unsafe encounter: '+(plan.reason if plan else 'assessment interrupted'))
         target=state.combat_target
         if (state.player.target_guid!=chosen_guid or not target or target.dead or
@@ -332,6 +341,9 @@ def scan_and_clear_hostiles(
         remember=getattr(driver,'remember_defeated',None)
         if callable(remember):
             remember(state)
+        drain=getattr(driver,'drain_encounter_loot',None)
+        if callable(drain):
+            return drain(state)
         return state
     if state.player.target_guid == chosen_guid and target and (
             target.health < before_hp):
