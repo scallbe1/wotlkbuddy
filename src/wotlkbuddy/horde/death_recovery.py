@@ -11,9 +11,12 @@ from time import monotonic, sleep as real_sleep
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
+from wotlkbuddy.horde.resurrection_site import (
+    acceptable_site, clearance, plan_resurrection_sites)
 
 
 def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
+                   read_hazards=None, restore=None,
                    sleep=real_sleep, now=monotonic, log=lambda _: None):
     first, origin = sample()
     guid = first.player.guid
@@ -78,45 +81,80 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
             lambda s, p: s.player.dead and s.death_state.ghost, 30)
     if origin.map_id != corpse_map:
         raise LiveControlError('Graveyard and verified corpse are on different world maps')
-    log(f'Ghost verified; navigating to own corpse on map {corpse_map}: '
-        f'({corpse.x:.2f},{corpse.y:.2f},{corpse.z:.2f})')
-
-    # Do not route toward arbitrary spirit healers or perform combat as a ghost.
-    if not first.death_state.retrieve_ready and origin.position.distance_to(corpse) > 2:
-        path = nav.find_path(corpse_map, origin.position, corpse)
-        validate_nav_path(path, origin.position, corpse, max_step=9)
-        set_status = getattr(driver, 'set_navigation_status', None)
-        if callable(set_status):
-            set_status('deathrun')
-        try:
-            travel = follow_world_path(
-                path, sample=observe, keyboard=driver.keyboard,
-                stop_requested=driver.emergency_stop_requested,
-                expected_quest_id=None, expected_map_id=corpse_map,
-                max_seconds=600, progress=log, ghost_only=True,
-                can_traverse=lambda a, b: nav.segment_clear(corpse_map, a, b))
-            if travel.stopped_reason != 'complete':
-                raise LiveControlError('Corpse navigation stopped: ' + travel.stopped_reason)
-        finally:
-            if (callable(set_status) and driver.wow_is_foreground() and
-                    not driver.emergency_stop_requested()):
-                set_status('clear')
-    # The server-driven, enabled Retrieve Corpse popup is required even after
-    # path arrival. Never substitute an arbitrary distance for corpse range.
-    def ready(s, p):
-        return (s.player.dead and s.death_state.ghost and
-                s.death_state.retrieve_ready and p.map_id == corpse_map and
-                p.position.distance_to(corpse) <= 40)
-
+    if read_hazards is None:
+        raise LiveControlError('Resurrection-site creature observations unavailable; staying a ghost')
+    log(f'Ghost verified; searching for secluded reclaim site near corpse '
+        f'on map {corpse_map}: ({corpse.x:.2f},{corpse.y:.2f},{corpse.z:.2f})')
     state, position = observe()
-    if not ready(state, position):
-        log('Waiting for enabled Retrieve Corpse button')
-        state, position = wait_for(ready, 180)
+    hazards = tuple(read_hazards(state, corpse))
+    sites = plan_resurrection_sites(nav, corpse_map, position.position, corpse, hazards)
+    if not sites:
+        raise LiveControlError('No secluded reachable resurrection site; staying a ghost')
+    set_status = getattr(driver, 'set_navigation_status', None)
+    chosen = None
+    for point, _ in sites:
+        state, position = observe()
+        hazards = tuple(read_hazards(state, corpse))
+        if not acceptable_site(point,corpse,hazards):
+            continue
+        log(f'Ghost route to resurrection site {point.distance_to(corpse):.1f}y '
+            f'from corpse; creature clearance {clearance(point,hazards):.1f}y')
+        if position.position.distance_to(point) > 1.5:
+            path = nav.find_path(corpse_map,position.position,point)
+            if not path or path[-1].distance_to(point)>2:
+                continue
+            validate_nav_path(path,position.position,point,max_step=9)
+            if callable(set_status):
+                set_status('deathrun')
+            try:
+                travel = follow_world_path(
+                    path, sample=observe, keyboard=driver.keyboard,
+                    stop_requested=driver.emergency_stop_requested,
+                    expected_quest_id=None, expected_map_id=corpse_map,
+                    max_seconds=600, progress=log, ghost_only=True,
+                    can_traverse=lambda a,b:nav.segment_clear(corpse_map,a,b))
+                if travel.stopped_reason != 'complete':
+                    raise LiveControlError('Resurrection-site navigation stopped: '+travel.stopped_reason)
+            finally:
+                if (callable(set_status) and driver.wow_is_foreground() and
+                        not driver.emergency_stop_requested()):
+                    set_status('clear')
+        state, position = observe()
+        if not acceptable_site(position.position,corpse,tuple(read_hazards(state,corpse))):
+            log('Creature moved near proposed site; rejecting resurrection here')
+            continue
+        # The real reclaim popup is authoritative. Never move closer to the
+        # corpse merely to make the popup appear at a dangerous location.
+        log('Holding at offset site for enabled Retrieve Corpse button')
+        deadline = now()+180
+        for _ in range(361):
+            if not state.player.dead or not state.death_state.ghost:
+                raise LiveControlError('Ghost state changed before resurrection')
+            if state.death_state.retrieve_ready:
+                fresh_hazards = tuple(read_hazards(state,corpse))
+                if acceptable_site(position.position,corpse,fresh_hazards):
+                    chosen = position.position
+                break
+            if now() >= deadline:
+                break
+            sleep(.5)
+            state, position = observe()
+        if chosen is not None:
+            break
+        log('Reclaim site unavailable or creature clearance lost; trying next site')
+    if chosen is None:
+        raise LiveControlError('No verified secluded reclaim site with enabled resurrection; staying a ghost')
+    log(f'Resurrecting {chosen.distance_to(corpse):.1f}y from corpse, away from death location')
     guard()
     driver.chat('/run RetrieveCorpse()')
     state, position = wait_for(
         lambda s, p: not s.player.dead and not s.death_state.ghost and
         s.player.health > 0 and p.map_id == corpse_map, 30)
-    log('Resurrection verified; ready to refresh quest journal and sustain')
+    log('Resurrection verified at offset site; restoring resources before questing')
+    if restore is not None:
+        state = restore(state)
+        if state.player.dead or state.player.in_combat:
+            raise LiveControlError('Post-resurrection recovery did not restore a living out-of-combat character')
     return {'status': 'resurrected', 'character_guid': guid,
-            'corpse_world': [corpse_map, corpse.x, corpse.y, corpse.z]}
+            'corpse_world': [corpse_map, corpse.x, corpse.y, corpse.z],
+            'resurrection_world': [corpse_map, chosen.x, chosen.y, chosen.z]}

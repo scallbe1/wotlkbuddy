@@ -741,7 +741,10 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.live.capture import capture_monitor
     from wotlkbuddy.live.control import LiveControlError
-    from wotlkbuddy.live.world_position import verified_live_position
+    from wotlkbuddy.live.world_position import verified_live_position, verified_nearby_creatures
+    from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
+    from wotlkbuddy.horde.defense import defend_against_aggro
+    from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.navigation.proxy import NavigationProxy
     from pathlib import Path
     cap = lambda: capture_monitor(args.monitor)
@@ -769,12 +772,40 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
         state = cap()
         pid, pos = verified_live_position(state, pid=pid)
         return state, pos
-    with NavigationProxy(py32, dll) as nav:
+    log = lambda line: print(line, file=sys.stderr, flush=True)
+
+    def restore(state):
+        guid = state.player.guid
+        for attempt in range(40):
+            if (state.truncated or state.player.dead or state.player.guid != guid or
+                    state.resources is None or driver.emergency_stop_requested() or
+                    not driver.wow_is_foreground()):
+                raise LiveControlError('Post-resurrection recovery interrupted')
+            if state.player.in_combat:
+                state = defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
+            elif (state.player.health/max(1,state.player.max_health) >= .90 and
+                  state.resources.mana/max(1,state.resources.max_mana) >= .85):
+                log('Resurrection recovery complete: health and mana restored before questing')
+                return state
+            elif attempt == 0:
+                state = maintain_mage_supplies(capture=cap,driver=driver,log=log)
+            else:
+                time.sleep(2)
+                state = cap()
+        raise LiveControlError('Post-resurrection resources not restored; holding position')
+
+    with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, NavigationProxy(py32, dll) as nav:
+        def hazards(state, corpse):
+            _, where = verified_live_position(state,pid=pid)
+            static = tuple(spawn.position for spawn in db.nearby(where.map_id,corpse))
+            live = verified_nearby_creatures(state,pid=pid,center=corpse)
+            return static+live
+
         return recover_corpse(
             sample=sample, driver=driver, nav=nav,
             known_corpse=getattr(args, 'corpse_world', None),
             read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav),
-            log=lambda line: print(line, file=sys.stderr, flush=True))
+            read_hazards=hazards, restore=restore, log=log)
 
 
 def _horde_continuous(args: argparse.Namespace) -> dict:
