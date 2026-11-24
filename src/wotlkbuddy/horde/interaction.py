@@ -182,6 +182,8 @@ class KeyboardQuestInput:
         This is presentation-only. Never changes targeting, key bindings,
         Detour geometry, combat, or RGB telemetry.
         """
+        if not getattr(self, 'native_hud_enabled', True):
+            return
         if kind in ('clear', 'enemies', 'corpse', 'firing'):
             if target is not None:
                 raise ValueError('Fixed navigation status takes no target')
