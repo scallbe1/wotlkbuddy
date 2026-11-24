@@ -305,14 +305,21 @@ local function visibleBarIdentity(button)
     if not GetActionBarPage or GetActionBarPage() ~= 1 then return nil end
     local frame = _G['ActionButton' .. button]
     if not frame or not frame:IsShown() or not GetActionInfo then return nil end
-    local actual = frame.action
-    if ActionButton_GetPagedID then
-        local ok, value = pcall(ActionButton_GetPagedID, frame)
-        if not ok or value ~= button then return nil end
-        if actual and actual ~= value then return nil end
-        actual = value
+    local actual = tonumber(frame.action)
+    if frame.GetAttribute then
+        local value=tonumber(frame:GetAttribute('action'))
+        if value and actual and value~=actual then return nil end
+        actual=actual or value
     end
-    if actual ~= button then return nil end
+    if ActionButton_GetPagedID then
+        local ok,value=pcall(ActionButton_GetPagedID,frame)
+        value=ok and tonumber(value) or nil
+        if value and actual and actual~=value then return nil end
+        actual=actual or value
+    end
+    if not actual and frame.GetID and frame:GetID()==button and
+            (not GetBonusBarOffset or GetBonusBarOffset()==0) then actual=button end
+    if actual~=button then return nil end
     local kind, rawId = GetActionInfo(actual)
     if not kind then return 'empty', 0, '' end
     if kind ~= 'spell' then return kind, 0, '' end
@@ -327,10 +334,25 @@ local function visibleBarIdentity(button)
     local ok = pcall(barTooltip.SetAction,barTooltip,actual)
     local line = _G['WotLKBuddyBarIdentityTooltipTextLeft1']
     local shown = ok and line and line:GetText() or nil
+    local right=_G['WotLKBuddyBarIdentityTooltipTextRight1']
+    local rank=right and right:GetText() or nil
     barTooltip:Hide()
-    local spellId, resolved = resolveActionSpell(actual,rawId)
-    if not shown or shown == '' or not spellId or shown ~= resolved then return nil end
-    return 'spell',spellId,resolved
+    if not shown or shown=='' then return nil end
+    -- The tooltip is independent of the raw DB-ID vs book-slot ambiguity.
+    -- Match its name and (when available) rank against both icon-audited IDs.
+    local dbName,bookName,bookId,dbOK,bookOK=auditActionIdentity(actual,rawId)
+    local ids={}
+    local function candidate(id,name,iconOK)
+        if type(id)~='number' or id<=0 or name~=shown or iconOK~='1' then return end
+        local n,r=GetSpellInfo(id)
+        if n==shown and (not rank or rank=='' or not string.find(rank,'Rank',1,true) or r==rank) then ids[id]=true end
+    end
+    candidate(rawId,dbName,dbOK)
+    candidate(bookId,bookName,bookOK)
+    local chosen,count=nil,0
+    for id in pairs(ids) do chosen=id;count=count+1 end
+    if count~=1 then return nil end
+    return 'spell',chosen,shown
 end
 local barEditEnabled = false
 SLASH_WOTLKBUDDYBAR1 = '/wbtbar'
@@ -338,7 +360,8 @@ SlashCmdList['WOTLKBUDDYBAR'] = function(message)
     -- Commands come from the explicitly enabled keyboard controller.
     if UnitAffectingCombat('player') or UnitIsDeadOrGhost('player') then return end
     if message == 'inspect' then barEditEnabled = true; return end
-    local op, b, sid = string.match(message,'^(%a+) (%d+) (%d+)$')
+    local op,b,sid,newId=string.match(message,'^(%a+) (%d+) (%d+) (%d+)$')
+    if not op then op,b,sid=string.match(message,'^(%a+) (%d+) (%d+)$') end
     local button, spellId = tonumber(b), tonumber(sid)
     if not barEditEnabled or not button or button<1 or button>10 or not spellId
             or spellId<1 or not GetCursorInfo or GetCursorInfo() then return end
@@ -355,6 +378,19 @@ SlashCmdList['WOTLKBUDDYBAR'] = function(message)
         if (not managedMageSpells[name] or duplicate) and PickupAction and ClearCursor then
             PickupAction(button)
             ClearCursor()
+        end
+    elseif op=='upgrade' and kind=='spell' and observedId==spellId and managedMageSpells[name] and slotHasDigitBinding(button) then
+        local index,id=resolveSpellbook(name)
+        if index>0 and id==tonumber(newId) and id~=observedId and PickupSpell and PlaceAction and ClearCursor then
+            local _,oldRank=GetSpellInfo(observedId)
+            local _,newRank=GetSpellInfo(id)
+            local oldN=tonumber(string.match(oldRank or '', '%d+')) or 0
+            local newN=tonumber(string.match(newRank or '', '%d+')) or 0
+            if newN>oldN then
+                PickupSpell(index,BOOKTYPE_SPELL or 'spell')
+                if GetCursorInfo()=='spell' then PlaceAction(button) end
+                ClearCursor()
+            end
         end
     elseif op == 'put' and kind == 'empty' and slotHasDigitBinding(button) then
         local wanted = GetSpellInfo and GetSpellInfo(spellId)

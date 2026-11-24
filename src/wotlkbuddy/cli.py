@@ -603,6 +603,9 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                             report['equipped_item_ids'] = tuple(upgraded)
                     hud.set(goal=f'Learn available Mage spells at {trainer.name}',
                             action='Inspecting trainer services')
+                    budget_after=[]
+                    def capture_budget(s,pending):
+                        budget_after.append((s,pending))
                     def record_budget(s,pending):
                         g=TrainingGoal(s.player.level,s.resources.money_copper,
                             s.resources.free_bag_slots,pending,trainer.name,trainer.entry,
@@ -612,7 +615,16 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                         log(g.describe(s.resources.money_copper))
                     report['trained_spells'] = train_available_mage_spells(
                         npc_name=trainer.name, npc_id=trainer.entry,
-                        capture=cap, driver=driver, log=log,on_budget=record_budget)
+                        capture=cap, driver=driver, log=log,on_budget=capture_budget)
+                    if budget_after:
+                        s,pending=budget_after[-1]
+                        bought=set(report['trained_spells'])
+                        merged={(n,r):c for n,r,c in pending}
+                        if training_goal is not None:
+                            for n,r,c in training_goal.pending:
+                                if (n+' '+r).strip() not in bought:
+                                    merged.setdefault((n,r),c)
+                        record_budget(s,tuple((n,r,c) for (n,r),c in merged.items()))
                     report['training_checked_level']=cap().player.level
                     report['hotbar_changes']=reconcile_mage_hotbar(capture=cap,driver=driver,log=log)
                     maintain_mage_supplies(capture=cap,driver=driver,log=log)

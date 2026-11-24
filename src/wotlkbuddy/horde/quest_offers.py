@@ -15,24 +15,38 @@ from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 from wotlkbuddy.horde.profile import HordeProfile, condition_value
 
 
-def matching_direct_offer(profile, state, npc_id, npc_name):
-    """Identify an already displayed detail by exact NPC and XML title/ID."""
+def matching_direct_offer(profile, state, npc_id, npc_name, confirmed_completed=()):
+    """Resolve repeated titles using explicit ID or verified profile chain order."""
     d=state.dialog
     if (profile is None or d is None or d.kind!='detail' or not d.title or
             state.player.target_name!=npc_name or
             creature_entry_from_guid(state.player.target_guid)!=npc_id):
         return None
-    matches={step.quest_id:step for step in profile.steps if
-             step.kind=='pickup' and step.supported and step.entry==npc_id and
-             step.npc_name in ('',npc_name) and step.name==d.title and
-             step.quest_id>0 and d.quest_id in (0,step.quest_id)}
-    if len(matches)!=1:
-        return None
-    step=next(iter(matches.values()))
-    if (any(q.quest_id==step.quest_id for q in state.quests) or
-            dict(state.quest_completions).get(step.quest_id) is True):
-        return None
-    return step
+    active={q.quest_id for q in state.quests}
+    done={qid for qid,complete in state.quest_completions if complete}|set(confirmed_completed)
+    matching=[(index,step) for index,step in enumerate(profile.steps)
+              if step.kind=='pickup' and step.supported and step.entry==npc_id and
+              step.npc_name in ('',npc_name) and step.name==d.title and
+              step.quest_id>0 and d.quest_id in (0,step.quest_id)]
+    candidates={}
+    for index,step in matching:
+        if step.quest_id in active or step.quest_id in done:
+            continue
+        if any(condition_value(expr,level=state.player.level,race='Undead',
+                active_quests=active,completed_quests=done) is not True for expr in step.conditions):
+            continue
+        if not d.quest_id and len({s.quest_id for _,s in matching})>1:
+            # Only a previous same-title chain hand-in is evidence of chain
+            # progression. Do not block independent quests at this giver.
+            previous_ids={s.quest_id for i,s in matching if i<index}
+            prerequisites={s.quest_id for s in profile.steps[:index]
+                           if s.kind=='turnin' and s.quest_id in previous_ids}
+            # If the XML lists repeated titles without intervening turn-ins,
+            # leave the ambiguity unresolved instead of choosing by order.
+            if previous_ids-prerequisites or not prerequisites.issubset(done) or prerequisites&active:
+                continue
+        candidates[step.quest_id]=step
+    return next(iter(candidates.values())) if len(candidates)==1 else None
 
 
 def accept_npc_offers(
@@ -100,7 +114,7 @@ def accept_npc_offers(
             break
         opened_by_us = False
         verified_existing = (accept_existing_detail and not accepted and
-                             matching_direct_offer(profile,state,npc_id,npc_name) is not None)
+                             matching_direct_offer(profile,state,npc_id,npc_name,confirmed_completed) is not None)
         baseline_journal = {q.quest_id: q.title for q in state.quests}
         if state.dialog is None:
             raise LiveControlError('Quest menu telemetry missing')
@@ -143,21 +157,11 @@ def accept_npc_offers(
                 raise LiveControlError(
                     f'{npc_name}: direct quest detail has no visible title; '
                     'no quest accepted')
-            matching = [step for step in profile.steps
-                        if (step.kind == 'pickup' and step.supported and
-                            step.entry == npc_id and
-                            step.npc_name in ('', npc_name) and
-                            step.name == observed_title and step.quest_id > 0 and
-                            state.dialog.quest_id in (0,step.quest_id))]
-            if len(matching) != 1:
-                known_titles = [step.name for step in profile.steps
-                                if (step.kind == 'pickup' and step.entry == npc_id
-                                    and step.npc_name in ('', npc_name))]
+            step=matching_direct_offer(profile,state,npc_id,npc_name,confirmed_completed)
+            if step is None:
                 raise LiveControlError(
-                    f'{npc_name}: unverified direct offer {observed_title!r}; '
-                    f'profile pickup titles for NPC {npc_id} are '
-                    f'{known_titles!r}; no quest accepted')
-            step = matching[0]
+                    f'{npc_name}: unverified direct offer {observed_title!r} '
+                    f'id={state.dialog.quest_id}; no unique eligible profile chain step; no quest accepted')
             if (state.dialog.quest_id not in (0, step.quest_id) or
                     step.quest_id in baseline_journal or
                     (state.dialog.quest_id==0 and any(title == observed_title for title in baseline_journal.values())) or
@@ -180,9 +184,7 @@ def accept_npc_offers(
             confirmed = fresh(state)
             if (confirmed.dialog is None or confirmed.dialog.kind != 'detail' or
                     confirmed.dialog.title != observed_title or
-                    confirmed.dialog.quest_id not in (0, step.quest_id) or
-                    any(q.quest_id == step.quest_id or q.title == observed_title
-                        for q in confirmed.quests)):
+                    matching_direct_offer(profile,confirmed,npc_id,npc_name,confirmed_completed)!=step):
                 raise LiveControlError(
                     f'{npc_name}: direct quest detail changed before accepting '
                     f'{observed_title!r}; no acceptance')

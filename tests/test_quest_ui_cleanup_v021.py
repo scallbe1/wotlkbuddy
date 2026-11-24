@@ -272,3 +272,26 @@ def test_silent_npc_after_confirmed_menu_pickups_is_success():
     game.driver.on_interact=interact
     assert game.collect()==(3098,3901)
     assert game.dialog=='none'
+
+
+def test_repeated_quest_title_resolves_by_confirmed_chain_progress():
+    from wotlkbuddy.horde.quest_offers import matching_direct_offer
+    game=Sim()
+    game.npc='Apothecary Johaan'
+    game.ids=dict(game.ids,**{'Apothecary Johaan':1518})
+    game.offers=dict(game.offers,**{'Apothecary Johaan':((367,'A New Plague'),)})
+    game.direct_npcs.add(game.npc)
+    game.dialog='none'
+    profile=HordeProfile('Undead starter','test.xml',(),(),(
+        OrderStep('pickup',quest_id=367,name='A New Plague',entry=1518,npc_name=game.npc),
+        OrderStep('turnin',quest_id=367,name='A New Plague',entry=1518,npc_name=game.npc),
+        OrderStep('pickup',quest_id=368,name='A New Plague',entry=1518,npc_name=game.npc),
+    ),.2,2,())
+    assert game.collect(profile=profile)==(367,)
+    game.dialog='detail'
+    game.selected=(368,'A New Plague')
+    state=replace(game.capture(),quests=(),quest_completions=((367,True),))
+    assert matching_direct_offer(profile,state,1518,game.npc).quest_id==368
+    ambiguous=replace(profile,steps=(profile.steps[0],profile.steps[2]))
+    state=replace(state,quest_completions=())
+    assert matching_direct_offer(ambiguous,state,1518,game.npc) is None
