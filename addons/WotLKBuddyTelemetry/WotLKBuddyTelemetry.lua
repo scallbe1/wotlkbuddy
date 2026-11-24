@@ -284,6 +284,42 @@ end
 
 -- END ACTION SPELL IDENTITY AUDIT
 
+-- HD clients can expose a separate starting-area map (DeathknellStart)
+-- whose yard dimensions differ from the standard Tirisfal map. Select
+-- the actual parent map before reading *either* normalized position.
+local tirisfalMapIndex = nil
+local function selectGhostMap()
+    SetMapToCurrentZone()
+    if not GetMapInfo or GetMapInfo() ~= 'DeathknellStart' then return end
+    if not SetMapZoom or not GetMapZones then return end
+    -- WotLK Eastern Kingdoms is continent index 2. Verify the actual
+    -- texture token rather than assuming the localized name or zone index.
+    if tirisfalMapIndex then
+        SetMapZoom(2, tirisfalMapIndex)
+        if GetMapInfo() == 'Tirisfal' then return end
+        tirisfalMapIndex = nil
+    end
+    local names = {GetMapZones(2)}
+    for index = 1, #names do
+        if names[index] == 'Tirisfal Glades' then
+            SetMapZoom(2, index)
+            if GetMapInfo() == 'Tirisfal' then
+                tirisfalMapIndex = index
+                return
+            end
+        end
+    end
+    -- Localized or custom zone names: discover the canonical texture once.
+    for index = 1, #names do
+        SetMapZoom(2, index)
+        if GetMapInfo() == 'Tirisfal' then
+            tirisfalMapIndex = index
+            return
+        end
+    end
+    SetMapToCurrentZone()
+end
+
 local function tickData()
     local lines = {}
     local isTruncated = false
@@ -304,7 +340,7 @@ local function tickData()
     -- a world map the player is currently inspecting.
     local ghostMap = UnitIsGhost('player') and SetMapToCurrentZone and
         not (WorldMapFrame and WorldMapFrame:IsShown())
-    if ghostMap then SetMapToCurrentZone() end
+    if ghostMap then selectGhostMap() end
     local px, py = GetPlayerMapPosition('player')
     local guid = UnitGUID('player') or ''
     local zone = GetZoneText() or ''

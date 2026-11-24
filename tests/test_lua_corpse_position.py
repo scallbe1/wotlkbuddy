@@ -62,3 +62,21 @@ def test_lua_extended_death_row():
     state = parse_payload(prefix+b'DS\t1\t0\t0\tTirisfal\t.22\t.31\n', 2)
     assert state.death_state == DeathState(True, False, False, 'Tirisfal', .22, .31)
     assert parse_payload(prefix+b'DS\t1\t0\t0\n', 3).death_state.corpse_map_name is None
+
+
+def test_deathknell_parent_selected_before_player_and_corpse_samples():
+    from pathlib import Path
+    addon = (Path(__file__).resolve().parents[1] / 'addons' /
+             'WotLKBuddyTelemetry' / 'WotLKBuddyTelemetry.lua')
+    text = addon.read_text(encoding='utf-8')
+    helper = text[text.index('local function selectGhostMap()'):
+                  text.index('local function tickData()')]
+    assert "GetMapInfo() ~= 'DeathknellStart'" in helper
+    assert "GetMapInfo() == 'Tirisfal'" in helper
+    assert 'SetMapZoom(2, index)' in helper
+    tick = text[text.index('local function tickData()'):]
+    assert (tick.index('if ghostMap then selectGhostMap() end') <
+            tick.index("local px, py = GetPlayerMapPosition('player')") <
+            tick.index('local cx, cy = GetCorpseMapPosition()'))
+    # Never alias DeathknellStart coordinates to Tirisfal's scale.
+    assert 'DeathknellStart' not in ZONE_SPANS
