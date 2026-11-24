@@ -3,7 +3,7 @@ from dataclasses import replace
 import unittest
 
 from wotlkbuddy.horde.profile import HordeProfile, OrderStep
-from wotlkbuddy.horde.turnin import select_mage_reward, turnin_profile_quest
+from wotlkbuddy.horde.turnin import select_mage_reward, select_vendor_reward, turnin_profile_quest
 from wotlkbuddy.horde.interaction import KeyboardQuestInput
 from wotlkbuddy.live.codec import (
     ClientTelemetry, QuestRecord, QuestRewardChoice, QuestDialog,
@@ -148,3 +148,37 @@ class ChoiceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class VendorRewardTests(unittest.TestCase):
+    def test_no_usable_gear_chooses_highest_total_vendor_value(self):
+        options=(replace(GLOVES,usable=None,vendor_price=50,quantity=2),
+                 replace(CLOAK,usable=False,vendor_price=80))
+        self.assertIsNone(select_mage_reward(options,2))
+        self.assertEqual(select_vendor_reward(options,2),options[0])
+
+    def test_vendor_fallback_submits_reward_and_confirms_completion(self):
+        game=RewardGame()
+        game.options=(replace(GLOVES,usable=None,vendor_price=100),
+                      replace(CLOAK,usable=False,vendor_price=60))
+        result=run(game)
+        self.assertEqual(result.status,'turned_in',result)
+        self.assertIn('/run GetQuestReward(1)',game.commands)
+
+    def test_missing_price_is_not_assumed_zero(self):
+        options=(replace(GLOVES,usable=False,vendor_price=100),
+                 replace(CLOAK,usable=False))
+        self.assertIsNone(select_vendor_reward(options,2))
+
+    def test_equal_vendor_value_uses_first_displayed_index(self):
+        options=(replace(GLOVES,usable=False,vendor_price=100),
+                 replace(CLOAK,usable=False,vendor_price=100))
+        self.assertEqual(select_vendor_reward(options,2),options[0])
+
+    def test_new_price_telemetry(self):
+        raw=(b'P\tAarr\t0x000000000000025F\t5\t51\t51\t0\t0\t0.5\t0.6\t2\t12\tDeathknell\t\t\n'
+             b'I\treward\t381\tThe Scarlet Crusade\t1\t0\n'
+             b'R\t1\tForsaken Maul\t-1\tINVTYPE_WEAPONMAINHAND\t5\t12345\t125\t1\n')
+        parsed=parse_payload(raw,3)
+        self.assertEqual(parsed.reward_choices[0].vendor_price,125)
+        self.assertEqual(parsed.reward_choices[0].quantity,1)

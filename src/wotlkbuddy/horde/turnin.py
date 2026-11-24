@@ -69,6 +69,21 @@ def select_mage_reward(options: tuple[QuestRewardChoice, ...],
     return ranked[0]
 
 
+def select_vendor_reward(options: tuple[QuestRewardChoice, ...],
+                         count: int) -> QuestRewardChoice | None:
+    """Select the greatest verified total copper value, regardless of usability.
+
+    Equal values use the first displayed index. Missing prices or item IDs
+    must not be mistaken for zero-value items.
+    """
+    if (not 1 <= count <= 12 or len(options) != count or
+            {o.index for o in options} != set(range(1,count+1)) or
+            any(not o.name or o.item_id<=0 or o.vendor_price is None or
+                o.vendor_price<0 or o.quantity<=0 for o in options)):
+        return None
+    return max(options,key=lambda o:(o.vendor_price*o.quantity,-o.index))
+
+
 def turnin_profile_quest(
     profile: HordeProfile, *, quest_id: int,
     capture: Callable[[], ClientTelemetry],
@@ -81,8 +96,8 @@ def turnin_profile_quest(
     """Verify, open, and turn in *one* quest. NPC must be within interact range.
 
     3.3.5 QuestFrame: progress -> CompleteQuest() -> reward -> GetQuestReward(0).
-    Only a no-choice and no-payment reward may be auto-submitted. A server
-    completion-history flag is required to report success.
+    Prefer verified Mage equipment; otherwise choose the highest verified
+    vendor value. No required payment. Verify server completion history.
     """
     if not isfinite(timeout) or not 2 <= timeout <= 20:
         raise ValueError('timeout must be 2..20 seconds')
@@ -302,12 +317,32 @@ def turnin_profile_quest(
     choice = 0
     if dialog.reward_choices:
         selected = select_mage_reward(reward.reward_choices, dialog.reward_choices)
-        if selected is None:
-            offered = [(o.index, o.name, o.usable, o.equip_slot, o.item_level)
-                       for o in reward.reward_choices]
-            return report('reward_requires_choice_or_unknown',
-                          f'Cannot uniquely select a suitable Mage reward from {offered!r}; '
-                          'no reward submitted', target=True, dialog=True)
+        vendor_fallback = selected is None
+        if vendor_fallback:
+            selected = select_vendor_reward(reward.reward_choices, dialog.reward_choices)
+            if selected is None and reward.reward_choices:
+                # GetItemInfo can populate its cache after the panel first opens.
+                # Re-evaluate gear suitability as well as prices on fresh frames.
+                expected_count = dialog.reward_choices
+                def ready(s):
+                    return (dialog_ok(s,'reward') and s.dialog.reward_choices==expected_count and
+                            s.dialog.required_money==0 and active(s) and
+                            (select_mage_reward(s.reward_choices,expected_count) is not None or
+                             select_vendor_reward(s.reward_choices,expected_count) is not None))
+                newer = wait_for(ready)
+                if newer is not None:
+                    reward = newer
+                    dialog = newer.dialog
+                    selected = select_mage_reward(reward.reward_choices,dialog.reward_choices)
+                    vendor_fallback = selected is None
+                    if vendor_fallback:
+                        selected = select_vendor_reward(reward.reward_choices,dialog.reward_choices)
+            if selected is None:
+                offered = [(o.index,o.name,o.usable,o.equip_slot,o.item_level,o.vendor_price)
+                           for o in reward.reward_choices]
+                return report('reward_requires_choice_or_unknown',
+                              f'No suitable Mage reward and vendor prices not fully verified: {offered!r}; '
+                              'no reward submitted', target=True, dialog=True)
         # Require *two* fresh, matching frames of actual reward item identities
         # before choosing. A changed/missing option cannot carry authorization.
         # Inspect the *very next* fresh frame. Waiting until any later
@@ -322,9 +357,14 @@ def turnin_profile_quest(
                           'Reward option list changed or vanished before selection',
                           target=True, dialog=True)
         choice = selected.index
-        notify(f'Choosing verified Mage reward {selected.name!r} '
-               f'(item {selected.item_id or "unknown"}, option {choice}/'
-               f'{dialog.reward_choices}, equip {selected.equip_slot or "unknown"})')
+        if vendor_fallback:
+            notify(f'No preferred Mage reward; choosing highest vendor value: '
+                   f'{selected.name!r}, {selected.vendor_price * selected.quantity} copper '
+                   f'(item {selected.item_id}, option {choice}/{dialog.reward_choices})')
+        else:
+            notify(f'Choosing verified Mage reward {selected.name!r} '
+                   f'(item {selected.item_id or "unknown"}, option {choice}/'
+                   f'{dialog.reward_choices}, equip {selected.equip_slot or "unknown"})')
     guard()
     if dialog.quest_id == 0 and not dialog.title:
         notify('Verified reward by fresh transition from the uniquely matched '
