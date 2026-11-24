@@ -41,6 +41,11 @@ def test_npc_and_enemies_travel_labels_use_allowlisted_slash_commands():
         with pytest.raises(ValueError):
             d.set_navigation_status(*invalid)
         assert keys==[]
+    keys.clear()
+    d.native_hud_enabled=False
+    d.set_navigation_status('enemies')
+    assert keys==[], '--no-hud must not type a destination slash'
+    d.native_hud_enabled=True
     for command in (
         '/wbttravel enemies;print(1)',
         '/wbttravel npc Executor Arren\n/run CastSpellByName("Fireball")',
