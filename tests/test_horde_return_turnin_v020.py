@@ -197,3 +197,43 @@ def test_remote_delivery_rejects_uncorroborated_map_location():
             capture=snapshot,driver=FakeDriver(),nav=nav,spawns=FakeDb(),
             world_position=position)
     assert nav.calls==0
+
+
+def test_delivery_replans_from_live_lower_terrain_after_height_mismatch():
+    far=Vec3(START.x+1200,START.y,START.z)
+    lower=Vec3(START.x+210,START.y,START.z-5.26)
+    state={'xyz':START,'travel':0,'turnin':0,'starts':[]}
+    class ReplanNav(FakeNav):
+        def find_path(self,map_id,start,end):
+            state['starts'].append(start)
+            return super().find_path(map_id,start,end)
+    def position(s):
+        v=state['xyz']
+        return 77,SimpleNamespace(map_id=0,player_guid=s.player.guid,position=v,x=v.x,y=v.y,z=v.z)
+    def travel(points,**kwargs):
+        state['travel']+=1
+        if state['travel']==1:
+            state['xyz']=lower
+            return SimpleNamespace(stopped_reason='Waypoint 18 is on another height/floor: delta=-5.26y')
+        assert points[0].distance_to(state['xyz'])<=3
+        state['xyz']=points[-1]
+        return SimpleNamespace(stopped_reason='complete')
+    def handin(*args,**kwargs):
+        assert state['xyz']==far
+        state['turnin']+=1
+        return SimpleNamespace(status='turned_in')
+    result=return_and_turnin(profile=profile(turnin_xyz=far),quest_id=364,pid=77,
+        capture=snapshot,driver=FakeDriver(),nav=ReplanNav(),spawns=FakeDb((far,)),
+        world_position=position,travel=travel,turnin=handin)
+    assert result.status=='turned_in'
+    assert state['starts']==[START,lower]
+    assert state['turnin']==1
+
+
+def test_delivery_recovery_refuses_route_projected_to_old_floor():
+    from wotlkbuddy.horde.return_turnin import fresh_delivery_route
+    class WrongFloor(FakeNav):
+        def find_path(self,map_id,start,end):
+            return (Vec3(start.x,start.y,start.z+5.26),end)
+    with unittest.TestCase().assertRaisesRegex(LiveControlError,'measured floor'):
+        fresh_delivery_route(WrongFloor(),0,START,SARVIS)

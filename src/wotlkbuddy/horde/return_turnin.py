@@ -24,6 +24,8 @@ from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 MAX_DELIVERY_RADIUS = 4000
 MAX_DELIVERY_PATH = 6000
 DELIVERY_LEG_YARDS = 450
+MAX_HEIGHT_REPLANS = 3
+MAX_REPLAN_START_Z = 2.5
 
 
 def delivery_legs(path, *, limit=DELIVERY_LEG_YARDS):
@@ -42,6 +44,23 @@ def delivery_legs(path, *, limit=DELIVERY_LEG_YARDS):
     if len(segment)>1:
         legs.append(tuple(segment))
     return tuple(legs)
+
+
+def height_route_failure(reason):
+    """Only explicit terrain-height failures permit this recovery."""
+    text=str(reason).lower()
+    return 'height/floor' in text or 'wrong height/floor' in text
+
+
+def fresh_delivery_route(nav, map_id, origin, destination):
+    """Re-anchor a route on the measured floor, not the old projected XYZ."""
+    raw=nav.find_path(map_id,origin,destination)
+    if not raw or abs(raw[0].z-origin.z)>MAX_REPLAN_START_Z:
+        raise LiveControlError(
+            'Fresh Detour route does not start on the measured floor; '
+            'refusing to walk toward a different elevation')
+    return validate_nav_path(raw,origin,destination,max_step=18.,
+                             max_distance=MAX_DELIVERY_PATH)
 
 
 def turnin_destination(profile: HordeProfile, db: CreatureSpawnDatabase,
@@ -158,7 +177,12 @@ def return_and_turnin(
 
         def execute_delivery():
             status=getattr(driver,'set_navigation_destination',None)
-            for index,leg in enumerate(legs,1):
+            pending=list(legs)
+            index=0
+            height_failures=[]
+            while pending:
+                leg=pending.pop(0)
+                index+=1
                 state,measured=sample()
                 if state.player.dead or state.player.in_combat or driver.emergency_stop_requested() or not driver.wow_is_foreground():
                     raise LiveControlError('Unsafe player state before delivery segment')
@@ -173,7 +197,7 @@ def return_and_turnin(
                         measured.position,leg[-1],max_step=18.,max_distance=800)
                 else:
                     segment=validate_nav_path(leg,measured.position,leg[-1],max_step=18.)
-                log(f'Delivery segment {index}/{len(legs)} toward XYZ '
+                log(f'Delivery segment {index}/{index+len(pending)} toward XYZ '
                     f'({leg[-1].x:.2f},{leg[-1].y:.2f},{leg[-1].z:.2f}); '
                     f'final NPC {step.npc_name}')
                 result=travel(
@@ -189,7 +213,36 @@ def return_and_turnin(
                     waypoint_spacing=18.,continuous_forward=True,
                     threat_check_yards=14.)
                 if result.stopped_reason!='complete':
-                    raise LiveControlError('Return-to-NPC navigation stopped: '+result.stopped_reason)
+                    reason=result.stopped_reason
+                    if not height_route_failure(reason):
+                        raise LiveControlError('Return-to-NPC navigation stopped: '+reason)
+                    state,measured=sample()
+                    if (state.player.dead or state.player.in_combat or
+                            driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+                        raise LiveControlError('Unsafe player state after delivery height mismatch')
+                    if (len(height_failures)>=MAX_HEIGHT_REPLANS or
+                            any(measured.position.distance_to(pos)<8 for pos in height_failures)):
+                        raise LiveControlError('Repeated delivery height/floor mismatch near the same location or replan budget exhausted: '+reason)
+                    height_failures.append(measured.position)
+                    log(f'Delivery height recovery {len(height_failures)}/{MAX_HEIGHT_REPLANS}: '
+                        f'replanning from actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}) '
+                        f'to original NPC {step.npc_name}; {reason}')
+                    # Never steer toward the old failed waypoint or just
+                    # increase the acceptable height difference. Replace
+                    # every untravelled segment using fresh floor geometry.
+                    if max_seconds-(monotonic()-start_time)<15:
+                        raise LiveControlError('Return-to-NPC time budget exhausted during height recovery')
+                    try:
+                        rebuilt=fresh_delivery_route(nav,world.map_id,measured.position,destination)
+                    except (RuntimeError,OSError,ValueError,TimeoutError) as exc:
+                        raise LiveControlError(f'Cannot re-anchor delivery on measured floor: {exc}') from exc
+                    pending=list(delivery_legs(rebuilt))
+                    if not pending:
+                        raise LiveControlError('No verified remaining delivery route')
+                    index=0
+                    log(f'Fresh delivery route verified: {len(rebuilt)-1} waypoints, '
+                        f'{len(pending)} remaining segment(s)')
+                    continue
                 state,at=sample()
                 if at.position.distance_to(leg[-1])>7:
                     raise LiveControlError('Delivery segment endpoint not confirmed')
