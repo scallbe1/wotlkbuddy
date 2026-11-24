@@ -179,11 +179,10 @@ def decode_bgra_frame(buffer: bytes, width: int, height: int) -> ClientTelemetry
 
 def capture_monitor(monitor_index: int = 0, *,
                     sleep: Callable[[float], None] = real_sleep) -> ClientTelemetry:
-    """Read a fresh RGB frame; tolerate only a brief missing-marker dropout.
+    """Read a fresh checksum-valid frame, tolerating transient render faults.
 
-    The native HUD, game UI, or a brief rendering transition can obscure a
-    marker in a single screenshot. Never reuse stale telemetry, retry corrupt
-    payloads, or proceed if three consecutive *new* grabs cannot find it.
+    Missing markers or mixed-frame checksums permit two fresh grabs only.
+    Never reuse stale telemetry or retry checksum-valid malformed payloads.
     """
     try:
         import mss
@@ -197,14 +196,13 @@ def capture_monitor(monitor_index: int = 0, *,
             try:
                 return decode_bgra_frame(frame.raw, frame.width, frame.height)
             except TelemetryError as exc:
-                # Missing header only: retry 2 fresh screenshots. Never
-                # convert checksum-valid bad telemetry into movement input.
-                if str(exc) != (
-                        'Telemetry marker not visible; keep WoW unobstructed'):
+                missing=str(exc)=='Telemetry marker not visible; keep WoW unobstructed'
+                mixed=str(exc).startswith('Telemetry marker found but no valid checksum;')
+                if isinstance(exc,_ValidChecksumPayloadError) or not (missing or mixed):
                     raise
                 if attempt == 2:
                     raise TelemetryError(
-                        'Telemetry marker not visible in 3 consecutive frames; '
+                        'Telemetry marker not visible or checksum invalid in 3 consecutive frames; '
                         'keep WoW unobstructed and /wbt show') from exc
                 sleep(0.12)
     raise AssertionError('Unreachable screenshot retry state')

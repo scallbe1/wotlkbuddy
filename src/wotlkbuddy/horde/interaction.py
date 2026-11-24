@@ -32,7 +32,8 @@ _SPECIAL = {' ': (0x39, False), '/': (0x35, False), ',': (0x33, False),
             '(': (0x0a, True), ')': (0x0b, True),
             "'": (0x28, False), ';': (0x27, False),
             ':': (0x27, True), '_': (0x0c, True),
-            '-': (0x0c, False)}
+            '-': (0x0c, False), '[': (0x1a, False),
+            ']': (0x1b, False), '=': (0x0d, False)}
 _INTERACT_KEYS = {'f': 0x21, 'g': 0x22}
 _ENTER = 0x1c
 _TAB = 0x0f  # WoW default: target nearest enemy (binding must remain Tab)
@@ -199,7 +200,9 @@ class KeyboardQuestInput:
                      _NPC_NAME.fullmatch(command[len('/targetexact '):]))):
             raise ValueError('Only verified quest-targeting and fixed quest API commands are allowed')
         # Keyboard scan codes assume an English/US layout and chat not already open.
-        self._tap(_ENTER)
+        # Validate the complete sequence before opening chat. A malformed
+        # command must never leave a partially typed slash command behind.
+        keys=[]
         for letter in command:
             if letter.isalpha() and letter.isascii():
                 code, shifted = _LETTERS[letter.lower()], letter.isupper()
@@ -209,6 +212,9 @@ class KeyboardQuestInput:
                 if letter not in _SPECIAL:
                     raise ValueError('Unsupported ASCII chat character')
                 code, shifted = _SPECIAL[letter]
+            keys.append((code,shifted))
+        self._tap(_ENTER)
+        for code,shifted in keys:
             self._tap(code, shifted=shifted, typing=True)
         self._tap(_ENTER)
 
