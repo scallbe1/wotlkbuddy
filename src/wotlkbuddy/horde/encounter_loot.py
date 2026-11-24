@@ -100,7 +100,7 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
             if actual is None or where.position.distance_to(actual)>4.4:
                 continue
             baseline=state.loot_sequence
-            before=(state.tracked_item_count,state.resources.money,state.resources.free_bag_slots)
+            before=(state.tracked_item_count,state.resources.money_copper,state.resources.free_bag_slots)
             driver.interact()
             state,where=fresh(state)
             for _ in range(4):
@@ -118,9 +118,9 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                     old_count=state.loot_count
                     driver.chat(f'/run LootSlot({min(16,old_count)})')
                     state,where=fresh(state)
-                    if state.player.in_combat or (state.loot_open and state.loot_count>=old_count):
+                    if state.player.in_combat or (state.loot_open and (state.loot_count is None or state.loot_count>=old_count)):
                         break
-            after=(state.tracked_item_count,state.resources.money,state.resources.free_bag_slots)
+            after=(state.tracked_item_count,state.resources.money_copper,state.resources.free_bag_slots)
             if not state.player.in_combat and (not state.loot_open or state.loot_count==0) and (opened or before!=after):
                 driver.finished_corpses.add(cg)
                 driver.defeated_corpses.pop(cg,None)
