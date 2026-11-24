@@ -13,6 +13,7 @@ from time import monotonic, sleep as real_sleep
 from typing import Callable
 
 from wotlkbuddy.game.types import Vec3
+from wotlkbuddy.horde.interaction import navigate_with_status
 from wotlkbuddy.horde.profile import HordeProfile, QuestSpec
 from wotlkbuddy.horde.worlddata import (
     CreatureSpawnDatabase, Spawn, nearest_objective_spawns)
@@ -334,7 +335,8 @@ def hunt_kill_objectives(
                 guard(snap)
                 _, pos = world_position(snap)
                 return snap, pos
-            report = travel(legs, sample=sample, keyboard=kb,
+            report = navigate_with_status(
+                driver, 'enemies', lambda: travel(legs, sample=sample, keyboard=kb,
                             stop_requested=driver.emergency_stop_requested,
                             expected_quest_id=quest_id,
                             expected_map_id=world.map_id,
@@ -343,7 +345,7 @@ def hunt_kill_objectives(
                             progress=log, on_aggro=getattr(driver, 'on_aggro', None),
                             on_threat=getattr(driver, 'scan_hostiles', None),
                             waypoint_spacing=18.0, continuous_forward=True,
-                            threat_check_yards=14.0)
+                            threat_check_yards=14.0))
             out = fresh(s)
             if report.stopped_reason == 'complete':
                 return out
