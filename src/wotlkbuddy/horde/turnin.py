@@ -28,6 +28,8 @@ class QuestTurninReport:
     dialog_confirmed: bool = False
     reward_submitted: bool = False
     history_confirmed: bool = False
+    followup_quest_ids: tuple[int,...] = ()
+    completion_evidence: str = ''
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -123,9 +125,9 @@ def turnin_profile_quest(
         raise LiveControlError('Quest UI telemetry missing; reinstall updated addon')
 
     def report(status: str, explanation: str, *, target=False, dialog=False,
-               submitted=False, history=False) -> QuestTurninReport:
+               submitted=False, history=False, followup=(), evidence='') -> QuestTurninReport:
         return QuestTurninReport(player.name, quest_id, npc_name, npc_id, status,
-                                 explanation, target, dialog, submitted, history)
+                                 explanation, target, dialog, submitted, history,followup,evidence)
 
     def guard() -> None:
         if driver.emergency_stop_requested() or not driver.wow_is_foreground():
@@ -371,13 +373,47 @@ def turnin_profile_quest(
                f'{expected_title} selection (client omitted ID/title)')
     notify(f'Reward panel verified; submitting GetQuestReward({choice})')
     driver.chat(f'/run GetQuestReward({choice})')
-    confirmed = wait_for(lambda s: history(s) is True and not active(s))
+    from wotlkbuddy.horde.quest_offers import matching_direct_offer, accept_npc_offers
+    def chained_evidence(s):
+        # XP/level increase after the verified reward, journal removal,
+        # and a new exact profile offer from the same NPC are independent
+        # observations. Journal disappearance alone remains insufficient.
+        gained = (s.player.level > reward.player.level or
+                  (s.player.level == reward.player.level and
+                   s.player_xp is not None and reward.player_xp is not None and
+                   s.player_xp > reward.player_xp))
+        offer = matching_direct_offer(profile,s,npc_id,npc_name)
+        return bool(not active(s) and gained and offer and offer.quest_id!=quest_id)
+
+    confirmed = wait_for(lambda s: not active(s) and
+                         (history(s) is True or chained_evidence(s)))
     if confirmed is not None:
-        return report('turned_in', f'Quest {quest_id} confirmed in server completion history',
-                      target=True, dialog=True, submitted=True, history=True)
+        # Require another fresh matching frame when relying on the chain
+        # instead of the authoritative server history.
+        if history(confirmed) is not True:
+            again=wait_for(lambda s: not active(s) and
+                           (history(s) is True or chained_evidence(s)))
+            if again is None:
+                return report('completion_unverified','Chained reward evidence did not remain stable',
+                              target=True,dialog=True,submitted=True)
+            confirmed=again
+        server_confirmed=history(confirmed) is True
+        evidence='server_history' if server_confirmed else 'xp_and_verified_followup'
+        notify(f'Quest {quest_id} completion verified by {evidence}')
+        followup=()
+        offer=matching_direct_offer(profile,confirmed,npc_id,npc_name)
+        if offer is not None and offer.quest_id!=quest_id:
+            notify(f'Follow-up quest opened automatically: {offer.name!r} ({offer.quest_id})')
+            followup=accept_npc_offers(npc_name=npc_name,npc_id=npc_id,
+                capture=capture,driver=driver,profile=profile,max_quests=1,
+                accept_existing_detail=True,confirmed_completed=(quest_id,),
+                sleep=sleep,now=now,log=notify)
+        return report('turned_in', f'Quest {quest_id} confirmed by {evidence}',
+                      target=True, dialog=True, submitted=True, history=server_confirmed,
+                      followup=followup,evidence=evidence)
     return report('completion_unverified',
-                  'Reward submission attempted, but completed quest history was not verified; '
-                  'journal disappearance alone is insufficient',
+                  'Reward submission attempted, but neither server history nor '
+                  'XP/level gain plus verified follow-up was confirmed; no reward retry',
                   target=True, dialog=True, submitted=True)
 
 

@@ -378,6 +378,8 @@ class ClientTelemetry:
     death_state: DeathState | None = None
     recent_kills: tuple[tuple[int,str,str], ...] = ()
     loot_sequence: int | None = None
+    player_xp: int | None = None
+    player_xp_max: int | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -389,6 +391,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     death_state = None
     recent_kills = {}
     loot_sequence = None
+    player_xp = player_xp_max = None
     resources = None
     dialog = None
     completion_states: dict[int, bool] = {}
@@ -439,7 +442,16 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     spell_targeting = None
     for line in content.splitlines():
         parts = line.split('\t')
-        if parts[0] == 'KD':
+        if parts[0] == 'PX':
+            if len(parts)!=3 or player_xp is not None:
+                raise TelemetryError('Invalid or repeated player XP')
+            try:
+                player_xp,player_xp_max=map(int,parts[1:])
+                if not 0<=player_xp<=player_xp_max:
+                    raise ValueError('invalid XP')
+            except ValueError as exc:
+                raise TelemetryError('Malformed player XP') from exc
+        elif parts[0] == 'KD':
             if len(parts)!=4:
                 raise TelemetryError('Malformed kill event')
             try:
@@ -1168,4 +1180,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            spell_targeting=spell_targeting,
                            death_state=death_state,
                            recent_kills=tuple(recent_kills[i] for i in sorted(recent_kills)),
-                           loot_sequence=loot_sequence)
+                           loot_sequence=loot_sequence,
+                           player_xp=player_xp,player_xp_max=player_xp_max)
