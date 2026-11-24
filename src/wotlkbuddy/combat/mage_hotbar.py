@@ -40,16 +40,17 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
     if not first.resources or first.resources.class_token.upper()!='MAGE':
         return ()
     driver.chat('/wbtbar inspect')
-    state=fresh(first,full)
+    state=fresh(first,lambda s:s.actionbar_page==1 and bool(s.visible_hotbar))
     if state is None:
-        log('Hotbar visible identity incomplete; preserving current buttons rather than guessing')
+        log('Hotbar: no verified visible slots on page 1; no edits')
         return ()
-    stable=fresh(state,lambda s:full(s) and s.visible_hotbar==state.visible_hotbar)
+    stable=fresh(state,lambda s:s.actionbar_page==1 and s.visible_hotbar==state.visible_hotbar)
     if stable is None:
         log('Hotbar observations unstable; no changes sent')
         return ()
     state=stable
     changed=[]
+    log('Hotbar verified buttons: '+str([(b,n or k,sid) for b,k,sid,n in state.visible_hotbar]))
     def bound(s):
         return {r.button for r in s.raw_action_slots if r.view=='base' and r.digit_bound}
     for _ in range(10):
@@ -58,7 +59,7 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
             break
         b,sid,name=removals[0]
         driver.chat(f'/wbtbar clear {b} {sid}')
-        after=fresh(state,lambda s:full(s) and any(r[:3]==(b,'empty',0) for r in s.visible_hotbar))
+        after=fresh(state,lambda s:s.actionbar_page==1 and any(r[:3]==(b,'empty',0) for r in s.visible_hotbar))
         if after is None:
             log(f'Could not verify removal of {name} from button {b}; no further edits')
             return tuple(changed)
@@ -66,13 +67,12 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
         log(f'Hotbar: removed {name} from button {b}')
         state=after
     for name in MAGE_ACTIONS:
-        if any(r[1]=='spell' and r[3]==name for r in state.visible_hotbar):
-            continue
+        existing=next((r for r in state.visible_hotbar if r[1]=='spell' and r[3]==name and r[0] in bound(state)),None)
         empty=next((r[0] for r in state.visible_hotbar if r[1]=='empty' and r[0] in bound(state)),None)
-        if empty is None:
-            break
+        if existing is None and (not full(state) or empty is None):
+            continue
         driver.chat('/wbtability '+name)
-        observed=fresh(state,lambda s:full(s) and (
+        observed=fresh(state,lambda s:s.actionbar_page==1 and (
             (s.spellbook_probe is not None and s.spellbook_probe.name==name) or
             (s.spellbook_diagnostic is not None and s.spellbook_diagnostic.name==name)))
         if observed is None:
@@ -82,7 +82,19 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
         probe=state.spellbook_probe
         if not probe or probe.name!=name:
             continue
-        if not any(r[:3]==(empty,'empty',0) for r in state.visible_hotbar):
+        if existing is not None:
+            if existing[2]==probe.spell_id or existing not in state.visible_hotbar:
+                continue
+            driver.chat(f'/wbtbar upgrade {existing[0]} {existing[2]} {probe.spell_id}')
+            after=fresh(state,lambda s:s.actionbar_page==1 and (existing[0],'spell',probe.spell_id,name) in s.visible_hotbar)
+            if after is None:
+                log(f'Upgrade of {name} not confirmed; preserving remaining buttons')
+                continue
+            state=after
+            changed.append('upgraded '+name)
+            log(f'Hotbar: upgraded {name} to spell {probe.spell_id} on button {existing[0]}')
+            continue
+        if not full(state) or not any(r[:3]==(empty,'empty',0) for r in state.visible_hotbar):
             break
         driver.chat(f'/wbtbar put {empty} {probe.spell_id}')
         after=fresh(state,lambda s:full(s) and
