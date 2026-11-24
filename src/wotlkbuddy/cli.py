@@ -296,6 +296,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
             first.resources.race_token.lower() not in ('scourge', 'undead')):
         raise LiveControlError('Only a verified living Undead Mage is supported')
     driver = KeyboardQuestInput(interact_key=args.interact_key)
+    driver.native_hud_enabled = not args.no_hud
     from wotlkbuddy.horde.defense import defend_against_aggro
     driver.on_aggro = lambda snapshot: defend_against_aggro(
         initial=snapshot, capture=cap, driver=driver, log=log)
