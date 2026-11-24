@@ -430,30 +430,29 @@ def follow_world_path(
         the actual slide. Keep reactive defense, defer proactive pulls until
         the new route is known, and always release keys before sampling.
         """
-        nonlocal current, world, moves, turns, recoveries, waypoints, cautious
+        nonlocal current, world, moves, turns, recoveries, waypoints, cautious, strafes
         nonlocal next_waypoint_index
         if replan_path is None or can_traverse is None or recoveries>=max_recoveries:
             return False
         guard()
         origin=world.position
-        if any(_distance_xy(origin,p)<1.5 for p in recovery_locations):
-            return False
+        repeated=any(_distance_xy(origin,p)<3.0 for p in recovery_locations)
         recovery_locations.append(origin)
         recoveries+=1
         nearby=[p for p in reversed(breadcrumbs)
-                if 1.0<=_distance_xy(origin,p)<=6.0 and abs(origin.z-p.z)<=2.5]
+                if 1.0<=_distance_xy(origin,p)<=(10.0 if repeated else 6.0) and abs(origin.z-p.z)<=2.5]
         # Prefer a recently walked point about 2–4 yards behind us.
-        nearby.sort(key=lambda p:abs(_distance_xy(origin,p)-3.0))
+        nearby.sort(key=lambda p:abs(_distance_xy(origin,p)-(6.0 if repeated else 3.0)))
         target=nearby[0] if nearby else None
         if target is None:
             target=Vec3(world.x-cos(world.facing_rad)*2.0,
                         world.y-sin(world.facing_rad)*2.0,world.z)
         notify(f'Wall/collision recovery {recoveries}/{max_recoveries}: {reason}; '
                'backing toward previously measured terrain')
-        for _ in range(12):
+        for _ in range(24 if repeated else 12):
             guard()
             distance=_distance_xy(world.position,target)
-            if distance<=.65 or _distance_xy(world.position,origin)>=3.5:
+            if distance<=.65 or _distance_xy(world.position,origin)>=(6.5 if repeated else 3.5):
                 break
             heading=atan2(target.y-world.y,target.x-world.x)
             forward_delta=_angle(heading-world.facing_rad)
@@ -500,9 +499,44 @@ def follow_world_path(
                 break
             if abs(_angle(atan2(actual.y-before.y,actual.x-before.x)-angle))>.85:
                 break
-        if _distance_xy(world.position,origin)<.35:
-            notify('Backtrack blocked; retaining existing obstacle guard')
-            return False
+        if repeated or _distance_xy(world.position,origin)<.35:
+            notify('Backtrack blocked or repeated collision; testing measured lateral clearance')
+            lateral=False
+            # Same recovery attempt: do not reject it merely because the
+            # blocked retreat just recorded this location in the history.
+            for direction,key in ((-1,'strafe-right'),(1,'strafe-left')):
+                for _ in range(3):
+                    guard()
+                    before=world
+                    angle=before.facing_rad+direction*pi/2
+                    end=Vec3(before.x+cos(angle)*1.5,before.y+sin(angle)*1.5,before.z)
+                    try:
+                        if not can_traverse(before.position,end):
+                            notify(f'  {key}: navmesh blocks lateral step')
+                            break
+                    except (RuntimeError,OSError,ValueError,TimeoutError) as exc:
+                        raise LiveControlError(f'Navmesh clearance unavailable during wall recovery: {exc}') from exc
+                    pulse(key,.18)
+                    strafes+=1
+                    released=sample()
+                    current,world=checked(observation=released,suppress_scan=True)
+                    actual=released[1]
+                    d=_distance_xy(before.position,actual.position)
+                    if d>3 or abs(actual.z-before.z)>2 or abs(_angle(actual.facing_rad-before.facing_rad))>.24:
+                        raise LiveControlError('Unexpected movement during wall sidestep')
+                    if d<.25:
+                        notify(f'  {key}: physically blocked')
+                        break
+                    if abs(_angle(atan2(actual.y-before.y,actual.x-before.x)-angle))>.72:
+                        notify(f'  {key}: lateral wall slide; trying other clearance')
+                        break
+                    lateral=True
+                    notify(f'  {key}: measured clearance {d:.2f}y')
+                if lateral:
+                    break
+            if not lateral:
+                notify('No verified lateral clearance; stopping rather than repeating blocked route')
+                return False
         if _distance_xy(world.position,destination)<=arrival_yards and abs(world.z-destination.z)<=5:
             waypoints=(world.position,destination)
         else:
@@ -514,7 +548,7 @@ def follow_world_path(
         cautious=True
         breadcrumbs[:]=[world.position]
         next_waypoint_index=1
-        notify(f'Backtracked {_distance_xy(origin,world.position):.2f}y; '
+        notify(f'Obstacle recovery displaced {_distance_xy(origin,world.position):.2f}y; '
                f'fresh Detour route from measured XYZ '
                f'({world.x:.2f},{world.y:.2f},{world.z:.2f}), {len(waypoints)-1} short legs')
         current,world=checked(force_scan=True)
@@ -604,7 +638,7 @@ def follow_world_path(
                         if backtrack_and_replan('no forward progress'):
                             rerouted=True
                             break
-                        if recover_around_wall(waypoint):
+                        if replan_path is None and recover_around_wall(waypoint):
                             stalls = 0
                             prev_distance = _distance_xy(world.position, waypoint)
                             count += 1

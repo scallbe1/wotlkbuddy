@@ -304,7 +304,21 @@ local managedMageSpells = {
 local function visibleBarIdentity(button)
     if not GetActionBarPage or GetActionBarPage() ~= 1 then return nil end
     local frame = _G['ActionButton' .. button]
-    if not frame or not frame:IsShown() or not GetActionInfo then return nil end
+    if not frame or not GetActionInfo then return nil end
+    if GetBonusBarOffset and GetBonusBarOffset()~=0 then return nil end
+    -- Empty HD buttons can be hidden and have action=0/nil after PickupAction.
+    -- Verify the logical page-one slot independently before requiring a visible icon.
+    local baseKind,baseId=GetActionInfo(button)
+    if (not baseKind or baseKind=='empty') and (not baseId or baseId==0) and
+            (not HasAction or not HasAction(button)) and frame.GetID and frame:GetID()==button then
+        local assigned=tonumber(frame.action)
+        local attribute=frame.GetAttribute and tonumber(frame:GetAttribute('action'))
+        if (not assigned or assigned==0 or assigned==button) and
+                (not attribute or attribute==0 or attribute==button) then
+            return 'empty',0,''
+        end
+    end
+    if not frame:IsShown() then return nil end
     local actual = tonumber(frame.action)
     if frame.GetAttribute then
         local value=tonumber(frame:GetAttribute('action'))
@@ -628,6 +642,7 @@ local function tickData()
             for view = 1, (page > 1 and 2 or 1) do
                 local index = view == 1 and button or ((page-1)*12+button)
                 local kind, id = GetActionInfo(index)
+                if (not kind or kind=='empty') and (not HasAction or not HasAction(index)) then kind,id='empty',0 end
                 local name = ''
                 if kind == 'spell' and type(id) == 'number' then
                     local _, resolvedName = resolveActionSpell(index, id)
