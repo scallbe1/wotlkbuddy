@@ -237,6 +237,8 @@ def hunt_kill_objectives(
     route_replans = 0
     refresh_rounds = 0
     force_spawn_search = False
+    staging_visited=[]
+    required_waits=0
 
     def guard(s: ClientTelemetry) -> None:
         if (driver.emergency_stop_requested() or not driver.wow_is_foreground()):
@@ -266,20 +268,22 @@ def hunt_kill_objectives(
             raise LiveControlError('Hunting quest disappeared from journal')
         return q
 
-    def rest(s: ClientTelemetry) -> ClientTelemetry:
+    def rest(s: ClientTelemetry, full=False) -> ClientTelemetry:
         if s.player.in_combat:
             return s
         # Conjure/use only verified supply IDs and exact observed bag slots.
         # Older addon versions fall back to natural regeneration below.
         from wotlkbuddy.horde.sustain import maintain_mage_supplies
         s = maintain_mage_supplies(
-            capture=capture, driver=driver, sleep=sleep, log=log)
+            capture=capture, driver=driver, sleep=sleep, log=log,
+            health_goal=.98 if full else .70,mana_goal=.95 if full else .45)
+        health_goal,mana_goal=(.98,.95) if full else (.70,.45)
         # Low-level Mage may not yet have Conjure Food trained.
         if s.resources is None:
             return s
         until = min(started+max_seconds, now()+40)
-        while not s.player.in_combat and now() < until and (s.player.health/s.player.max_health < .70 or
-                                 s.resources.mana/max(1,s.resources.max_mana) < .45):
+        while not s.player.in_combat and now() < until and (s.player.health/s.player.max_health < health_goal or
+                                 s.resources.mana/max(1,s.resources.max_mana) < mana_goal):
             log('Resting for natural health/mana regeneration')
             s = fresh(s, 3)
         if s.player.in_combat:
@@ -1120,7 +1124,7 @@ def hunt_kill_objectives(
                 else:
                     log(f'KillMob entry {spec.entry}: live journal progress '
                         f'{live_credit[0]}/{live_credit[1]}')
-        s = rest(s)
+        s = rest(s,full=bool(route_replans and len(allowed_sources)==1))
         s = buffs(s)
         if (s.player.health/max(1,s.player.max_health) < .70 or
                 s.resources.mana/max(1,s.resources.max_mana) < .45):
@@ -1208,7 +1212,11 @@ def hunt_kill_objectives(
                         guard(s)
                         if s.player.in_combat:
                             s=clear_remaining_aggro(s)
-                        unhittable_positions.append(corpse_xyz)
+                        if len(allowed_sources)>1:
+                            unhittable_positions.append(corpse_xyz)
+                        else:
+                            _,measured=world_position(s)
+                            staging_visited.append(measured.position)
                         force_spawn_search=True
                         route_replans+=1
                         log('Unsafe live-target approach; planning alternate quest hunting route: '+str(exc))
@@ -1231,9 +1239,16 @@ def hunt_kill_objectives(
                         s=clear_remaining_aggro(s)
                         continue
                     if plan is None or not plan.allowed:
-                        unhittable_guids.add(selected_guid)
-                        if corpse_xyz is not None:
-                            unhittable_positions.append(corpse_xyz)
+                        # A unique quest mob is not interchangeable with its escorts.
+                        # Preserve its spawn for a different firing position.
+                        if len(allowed_sources)>1:
+                            unhittable_guids.add(selected_guid)
+                            if corpse_xyz is not None:
+                                unhittable_positions.append(corpse_xyz)
+                        else:
+                            route_replans+=1
+                            _,measured=world_position(s)
+                            staging_visited.append(measured.position)
                         if plan is not None:
                             remember_pack(driver,[m.position for m in plan.enemies],now())
                         force_spawn_search=True
@@ -1440,7 +1455,6 @@ def hunt_kill_objectives(
                 continue
             raise LiveControlError('No new spawn positions within safe search radius after alternate searches')
         key = (round(goal.x), round(goal.y), round(goal.z))
-        recently_visited[key] = recently_visited.get(key,0)+1
         dx,dy = world.x-goal.x,world.y-goal.y
         d = hypot(dx,dy)
         if d < 0.1:
@@ -1449,15 +1463,30 @@ def hunt_kill_objectives(
         staging = Vec3(goal.x+dx/d*10,goal.y+dy/d*10,goal.z)
         hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if now()-t<90]
         if hazards or route_replans:
-            alternatives=alternate_hunt_routes(nav,world.map_id,world.position,nearby,hazards,recently_visited)
+            alternatives=alternate_hunt_routes(nav,world.map_id,world.position,nearby,hazards,recently_visited,
+                excluded_staging=staging_visited)
             if not alternatives:
+                if len(allowed_sources)==1 and required_waits<4:
+                    required_waits+=1
+                    log('Required target has no safe firing position yet; observing patrol movement and recovering before retry')
+                    s=rest(s,full=True)
+                    for _ in range(6):
+                        s=fresh(s,3)
+                        if s.player.in_combat:
+                            s=clear_remaining_aggro(s)
+                            break
+                    staging_visited.clear()
+                    recently_visited.clear()
+                    driver.dangerous_hunt_positions=[]  # live scanner must re-observe, not trust stale patrols
+                    continue
                 recently_visited[key]=2
                 log('No safe approach to this spawn cluster; searching remaining quest locations')
                 continue
             goal,staging=alternatives[0]
             key=(round(goal.x),round(goal.y),round(goal.z))
-            recently_visited[key]=recently_visited.get(key,0)+1
             log(f'Alternate hunting plan: entry {goal.entry}, ranged staging {staging.distance_to(goal.position):.1f}y from spawn; avoiding {len(hazards)} recent danger points')
+        recently_visited[key]=recently_visited.get(key,0)+1
+        staging_visited.append(staging)
         try:
             s = navigate(s, staging)
         except LiveControlError as exc:
@@ -1480,7 +1509,7 @@ def hunt_kill_objectives(
                 raise LiveControlError(
                     'Combat began during off-axis navigation; refusing alternate routing'
                 ) from exc
-            recently_visited[key] = 2
+            recently_visited[key] = 0 if unsafe_encounter and len(allowed_sources)==1 else 2
             if unsafe_encounter:
                 route_replans+=1
                 force_spawn_search=True

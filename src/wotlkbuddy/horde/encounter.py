@@ -56,10 +56,11 @@ def assess_encounter(player, resources, position, chosen, enemies, quest_entries
         return PullPlan(True,pack,'isolated target')
     if unknown:
         return PullPlan(False,pack,'unknown enemy level in multi-pull')
-    if len(pack)==2 and hp>=.95 and mana>=.90 and all(m.level<=player.level-1 for m in pack) and offquest==0:
-        return PullPlan(True,pack,'two weaker quest enemies; high resources')
-    if len(pack)==3 and hp>=.98 and mana>=.95 and all(m.level<=player.level-3 for m in pack) and offquest==0:
-        return PullPlan(True,pack,'three substantially weaker quest enemies; full resources')
+    if len(pack)==2 and hp>=.95 and mana>=.90 and all(m.level<=player.level-1 for m in pack):
+        if sum(m.health for m in pack)<=2.5*player.max_health:
+            return PullPlan(True,pack,'two weaker enemies including escorts; high resources')
+    if len(pack)==3 and hp>=.98 and mana>=.95 and all(m.level<=player.level-3 for m in pack) and sum(m.health for m in pack)<=2*player.max_health:
+        return PullPlan(True,pack,'three substantially weaker enemies; full resources')
     return PullPlan(False,pack,'linked group exceeds conservative Mage combat budget')
 
 

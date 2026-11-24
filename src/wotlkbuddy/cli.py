@@ -342,14 +342,9 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     # CopilotBuddy-style character management runs before quest actions:
     # refresh learned spells and populate only verified empty bound bar slots.
     from wotlkbuddy.combat.character import progress_dps_talents
-    # Automatic actionbar writes are suspended. Live 3.3.5a clients have
-    # repeatedly accepted PlaceAction but failed to report the resulting
-    # visible icons, causing duplicate Fireballs in slots 2, 6 and 7.
-    # Keep combat read-only during setup until the visible bar's page and
-    # slot identities can be reconciled independently.
+    from wotlkbuddy.combat.mage_hotbar import reconcile_mage_hotbar
     progress_dps_talents(capture=cap, driver=driver, log=log, max_points=1)
-    log('Automatic spell placement DISABLED: existing action-bar icons will '
-        'not be changed. Run live-status for read-only slot diagnostics.')
+    reconcile_mage_hotbar(capture=cap,driver=driver,log=log)
     first = cap()
     if args.only in ('all', 'objectives', 'collect', 'continuous'):
         from wotlkbuddy.combat.runtime import require_verified_combat_key
@@ -515,7 +510,12 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                         profile=quest_profile, log=log)
                 report['accepted_quests'] = quests
 
-            if args.only in ('all', 'train'):
+            training_due = (getattr(args,'_continuous_training_check',False) and
+                            first.player.level>=4 and
+                            first.player.level!=getattr(args,'_last_training_level',-1))
+            if args.only in ('all', 'train') or training_due:
+                if training_due:
+                    log(f'Level {first.player.level}: checking actual trainer spells before questing')
                 state, current = location()
                 trainers = nearby_service_npcs(
                     profile=quest_profile, spawns=db,
@@ -554,6 +554,9 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 report['trained_spells'] = train_available_mage_spells(
                     npc_name=trainer.name, npc_id=trainer.entry,
                     capture=cap, driver=driver, log=log)
+                report['training_checked_level']=cap().player.level
+                report['hotbar_changes']=reconcile_mage_hotbar(capture=cap,driver=driver,log=log)
+                maintain_mage_supplies(capture=cap,driver=driver,log=log)
                 # An independent post-training snapshot makes the quest
                 # status visible even when a turn-in happened in an earlier
                 # run (and must NOT be submitted again). Only quests explicitly
@@ -891,6 +894,8 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
     def phase(mode: str) -> dict:
         child = argparse.Namespace(**vars(args))
         child.only = mode
+        child._continuous_training_check = mode=='objectives'
+        child._last_training_level = train_level
         return _horde_progress(child, _skip_countdown=True, _emit_report=False)
 
     for cycle in range(args.max_cycles):
@@ -909,6 +914,11 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
             steps.append({'cycle': cycle+1, 'action': 'death_recovery',
                           'recovery': recovery})
             continue
+        checked=report.get('training_checked_level')
+        if isinstance(checked,int):
+            train_level=checked
+            steps.append({'cycle':cycle+1,'action':'training_check','level':checked,
+                          'trained_spells':report.get('trained_spells',())})
         completion = report.get('quest_turnin', {})
         chained=tuple(report.get('chained_quests',()))+tuple(completion.get('followup_quest_ids',()))
         if chained:
@@ -979,6 +989,8 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
             steps.append({'cycle': cycle+1, 'action': 'death_recovery',
                           'recovery': recovery})
             continue
+        if isinstance(offers.get('training_checked_level'),int):
+            train_level=offers['training_checked_level']
         newly_accepted = sorted({
             qid for ids in offers.get('accepted_quests', {}).values()
             for qid in ids if isinstance(qid, int) and qid > 0
