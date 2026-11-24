@@ -114,6 +114,7 @@ def follow_world_path(
     waypoint_spacing: float = 9.0,
     continuous_forward: bool = False,
     ghost_only: bool = False,
+    replan_path: Callable[[Vec3, Vec3], Sequence[Vec3]] | None = None,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -164,6 +165,9 @@ def follow_world_path(
     next_waypoint_index = 1
     last_threat_scan_xyz = world0.position
     last_threat_scan_time = now()
+    breadcrumbs = [world0.position]
+    destination = waypoints[-1]
+    cautious = False
 
     def guard() -> None:
         if stop_requested() or not keyboard.wow_is_foreground():
@@ -171,7 +175,7 @@ def follow_world_path(
         if now() - start_time > max_seconds:
             raise LiveControlError('World navigation time limit reached')
 
-    def checked(*, force_scan: bool = False,
+    def checked(*, force_scan: bool = False, suppress_scan: bool = False,
                 observation: tuple[ClientTelemetry, WorldPosition] | None = None
                 ) -> tuple[ClientTelemetry, WorldPosition]:
         nonlocal aggro_fights, last_threat_scan_xyz, last_threat_scan_time
@@ -210,7 +214,7 @@ def follow_world_path(
                     'Defensive combat displaced Mage away from original '
                     'navmesh path; fresh Detour route required')
             notify('Verified combat ended; resuming existing Detour waypoints')
-        if on_threat is not None and not snap.player.in_combat and (
+        if not suppress_scan and on_threat is not None and not snap.player.in_combat and (
                 force_scan or
                 _distance_xy(pos.position,last_threat_scan_xyz) >= threat_check_yards or
                 now()-last_threat_scan_time >= (8. if continuous_forward else 5.)):
@@ -415,10 +419,111 @@ def follow_world_path(
                 break
         return False
 
+    def backtrack_and_replan(reason: str) -> bool:
+        """Retreat toward a recently measured clear position, then reroute.
+
+        No guessed large reverse move. If the collision slid the character
+        sideways, face the recorded breadcrumb rather than assume S retraces
+        the actual slide. Keep reactive defense, defer proactive pulls until
+        the new route is known, and always release keys before sampling.
+        """
+        nonlocal current, world, moves, turns, recoveries, waypoints, cautious
+        nonlocal next_waypoint_index
+        if replan_path is None or can_traverse is None or recoveries>=max_recoveries:
+            return False
+        guard()
+        origin=world.position
+        if any(_distance_xy(origin,p)<1.5 for p in recovery_locations):
+            return False
+        recovery_locations.append(origin)
+        recoveries+=1
+        nearby=[p for p in reversed(breadcrumbs)
+                if 1.0<=_distance_xy(origin,p)<=6.0 and abs(origin.z-p.z)<=2.5]
+        # Prefer a recently walked point about 2–4 yards behind us.
+        nearby.sort(key=lambda p:abs(_distance_xy(origin,p)-3.0))
+        target=nearby[0] if nearby else None
+        if target is None:
+            target=Vec3(world.x-cos(world.facing_rad)*2.0,
+                        world.y-sin(world.facing_rad)*2.0,world.z)
+        notify(f'Wall/collision recovery {recoveries}/{max_recoveries}: {reason}; '
+               'backing toward previously measured terrain')
+        for _ in range(12):
+            guard()
+            distance=_distance_xy(world.position,target)
+            if distance<=.65 or _distance_xy(world.position,origin)>=3.5:
+                break
+            heading=atan2(target.y-world.y,target.x-world.x)
+            forward_delta=_angle(heading-world.facing_rad)
+            reverse_delta=_angle(heading-world.facing_rad-pi)
+            backward=abs(reverse_delta)<abs(forward_delta)
+            delta=reverse_delta if backward else forward_delta
+            before=world
+            if abs(delta)>.24:
+                pulse('turn-right' if delta*right_sign>0 else 'turn-left',
+                      min(.22,max(.06,abs(delta)/turn_rate*.75)))
+                turns+=1
+                released=sample()
+                current,world=checked(observation=released,suppress_scan=True)
+                actual=_angle(released[1].facing_rad-before.facing_rad)
+                if abs(actual)<.035 or actual*delta<-.025 or _distance_xy(before.position,released[1].position)>1.2:
+                    return False
+                continue
+            # Check the proposed short reverse segment, not the full distance
+            # to the breadcrumb (Detour segment_clear is intentionally local).
+            step=min(1.0,distance)
+            angle=world.facing_rad+(pi if backward else 0)
+            endpoint=Vec3(world.x+cos(angle)*step,world.y+sin(angle)*step,world.z)
+            try:
+                if not can_traverse(world.position,endpoint):
+                    # A wall slide may be slightly outside the mesh. A very
+                    # short retrace of an actually observed movement segment
+                    # is permissible only toward a nearby measured breadcrumb.
+                    if not nearby or _distance_xy(world.position,target)>2 or abs(world.z-target.z)>1.5:
+                        break
+            except (RuntimeError,OSError,ValueError,TimeoutError):
+                break
+            held=pulse('backward' if backward else 'forward',.18 if backward else .12)
+            moves+=1
+            released=sample()
+            current,world=checked(observation=released,suppress_scan=True)
+            actual=released[1]
+            moved=_distance_xy(before.position,actual.position)
+            if (moved>max(2.,11*held+1.) or abs(actual.z-before.z)>2 or
+                    abs(_angle(actual.facing_rad-before.facing_rad))>.24):
+                raise LiveControlError('Unexpected movement during wall backtrack')
+            if moved<.12:
+                break
+            if _distance_xy(actual.position,target)>=distance+.15:
+                break
+            if abs(_angle(atan2(actual.y-before.y,actual.x-before.x)-angle))>.85:
+                break
+        if _distance_xy(world.position,origin)<.35:
+            notify('Backtrack blocked; retaining existing obstacle guard')
+            return False
+        if _distance_xy(world.position,destination)<=arrival_yards and abs(world.z-destination.z)<=5:
+            waypoints=(world.position,destination)
+        else:
+            try:
+                raw=replan_path(world.position,destination)
+                waypoints=validate_nav_path(raw,world.position,destination,max_step=5.)
+            except (RuntimeError,OSError,ValueError,TimeoutError) as exc:
+                raise LiveControlError(f'Backtracked but fresh Detour route unavailable: {exc}') from exc
+        cautious=True
+        breadcrumbs[:]=[world.position]
+        next_waypoint_index=1
+        notify(f'Backtracked {_distance_xy(origin,world.position):.2f}y; '
+               f'fresh Detour route from measured XYZ '
+               f'({world.x:.2f},{world.y:.2f},{world.z:.2f}), {len(waypoints)-1} short legs')
+        current,world=checked(force_scan=True)
+        return True
+
     try:
         if on_threat is not None:
             current, world = checked(force_scan=True)
-        for index, waypoint in enumerate(waypoints[1:], 1):
+        index=1
+        while index<len(waypoints):
+            waypoint=waypoints[index]
+            rerouted=False
             next_waypoint_index = index
             count = 0
             stalls = 0
@@ -459,7 +564,7 @@ def follow_world_path(
                     # 8 yards/s and stop with a safety margin; this does NOT
                     # assume the player will move exactly that far.
                     forward_duration = min(
-                        (0.60 if on_threat is not None else 1.20) if continuous_forward else 0.45,
+                        0.25 if cautious else ((0.60 if on_threat is not None else 1.20) if continuous_forward else 0.45),
                         max(0.10 if ghost_only else 0.18,
                              0.75*(dxy-arrival_yards)/(11.0 if ghost_only else 8.0)))
                     held = pulse('forward', forward_duration)
@@ -487,6 +592,9 @@ def follow_world_path(
                             f'waypoint {index}/{len(waypoints)-1})')
                     stalls = stalls + 1 if displacement < 0.15 else 0
                     if stalls >= 4:
+                        if backtrack_and_replan('no forward progress'):
+                            rerouted=True
+                            break
                         if recover_around_wall(waypoint):
                             stalls = 0
                             prev_distance = _distance_xy(world.position, waypoint)
@@ -497,12 +605,25 @@ def follow_world_path(
                         forward_angle = atan2(moved_to.y-before.y,
                                               moved_to.x-before.x)
                         if abs(_angle(forward_angle - before.facing_rad)) > 0.85:
+                            if backtrack_and_replan('wall slide: measured movement disagrees with facing'):
+                                rerouted=True
+                                break
                             raise LiveControlError('Measured movement disagrees with client facing')
+                        if _distance_xy(world.position,breadcrumbs[-1])>=.5:
+                            breadcrumbs.append(world.position)
+                            del breadcrumbs[:-24]
                 count += 1
                 distance = _distance_xy(world.position, waypoint)
                 if distance > prev_distance + 1.0:
+                    if backtrack_and_replan(f'movement diverged from waypoint {index}'):
+                        rerouted=True
+                        break
                     raise LiveControlError(f'Movement diverged from waypoint {index}')
                 prev_distance = distance
+            if rerouted:
+                index=1
+                reached=0
+                continue
             if abs(world.z - waypoint.z) > 5:
                 # Include the live-vs-mesh height disagreement so a failed
                 # route can be diagnosed without guessing a different floor.
@@ -515,6 +636,7 @@ def follow_world_path(
             if index == len(waypoints)-1 or index % 4 == 0:
                 notify(f'World waypoint {index}/{len(waypoints)-1} reached; '
                        f'position=({world.x:.2f},{world.y:.2f},{world.z:.2f})')
+            index+=1
     except LiveControlError as exc:
         # Nothing is retried automatically. Caller may use the reported live
         # position to regenerate a new mesh path on the next invocation.

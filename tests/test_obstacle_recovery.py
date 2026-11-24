@@ -158,3 +158,43 @@ class NativeSegmentValidationTests(unittest.TestCase):
             0,start,Vec3(12,14,140)))
         self.assertFalse(self._make().segment_clear(
             0,start,Vec3(12,16.3,150)))
+
+
+def test_wall_slide_retraces_and_replans_from_measured_position():
+    game=SimGame()
+    original=game.sleep
+    slide=False
+    slid_this_hold=False
+    original_down=game.key_down
+    def down(code):
+        nonlocal slid_this_hold
+        slid_this_hold=False
+        original_down(code)
+    game.key_down=down
+    def sleep(sec):
+        nonlocal slide,slid_this_hold
+        if game.key==_MOVEMENT_SCANCODES['forward'] and (slid_this_hold or (not slide and game.x>15)):
+            game.time+=sec
+            game.y+=8*sec
+            slide=True
+            slid_this_hold=True
+        elif game.key==_MOVEMENT_SCANCODES['backward']:
+            game.time+=sec
+            game.x-=4*sec*cos(game.facing)
+            game.y-=4*sec*sin(game.facing)
+        else:
+            original(sec)
+    game.sleep=sleep
+    replans=[]
+    def replan(start,end):
+        replans.append(start)
+        return [start,end]
+    report=follow_world_path([Vec3(12,18,140),Vec3(30,18,140)],
+        sample=game.sample,keyboard=game,stop_requested=game.emergency_stop_requested,
+        sleep=game.sleep,now=lambda:game.time,can_traverse=lambda a,b:True,
+        replan_path=replan)
+    assert slide
+    assert replans
+    assert report.stopped_reason=='complete',report
+    assert game.key is None
+    assert report.recovery_attempts==1

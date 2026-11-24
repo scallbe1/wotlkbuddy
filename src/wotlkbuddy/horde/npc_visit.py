@@ -92,6 +92,7 @@ def visit_npc(
             expected_quest_id=None, expected_map_id=world.map_id,
             max_seconds=450,
             can_traverse=lambda a,b: nav.segment_clear(world.map_id,a,b),
+            replan_path=lambda a,b:nav.find_path(world.map_id,a,b),
             progress=log, on_aggro=getattr(driver, 'on_aggro', None),
             on_threat=getattr(driver, 'scan_hostiles', None),
             waypoint_spacing=18.0, continuous_forward=True,
