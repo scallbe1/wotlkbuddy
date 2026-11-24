@@ -159,3 +159,41 @@ class ReturnTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_remote_delivery_uses_bounded_segments_and_turns_in_once():
+    from wotlkbuddy.horde.return_turnin import delivery_legs
+    from wotlkbuddy.live.world_travel import validate_nav_path
+    far=Vec3(START.x+1200,START.y,START.z)
+    route=validate_nav_path([START,far],START,far,max_distance=6000,max_step=18)
+    assert len(delivery_legs(route))==3
+    state={'xyz':START,'travel':0,'turnin':0}
+    def position(s):
+        v=state['xyz']
+        return 77,SimpleNamespace(map_id=0,player_guid=s.player.guid,position=v,x=v.x,y=v.y,z=v.z)
+    def travel(points,**kwargs):
+        assert sum(a.distance_to(b) for a,b in zip(points,points[1:]))<=450.01
+        assert kwargs['expected_quest_id']==364
+        state['travel']+=1
+        state['xyz']=points[-1]
+        return SimpleNamespace(stopped_reason='complete')
+    def handin(*args,**kwargs):
+        assert state['xyz']==far
+        state['turnin']+=1
+        return SimpleNamespace(status='turned_in')
+    result=return_and_turnin(profile=profile(turnin_xyz=far),quest_id=364,pid=77,
+        capture=snapshot,driver=FakeDriver(),nav=FakeNav(),spawns=FakeDb((far,)),
+        world_position=position,travel=travel,turnin=handin)
+    assert result.status=='turned_in'
+    assert state['travel']==3 and state['turnin']==1
+
+def test_remote_delivery_rejects_uncorroborated_map_location():
+    far=Vec3(START.x+1200,START.y,START.z)
+    def position(s):
+        return 77,SimpleNamespace(map_id=0,player_guid=s.player.guid,position=START,x=START.x,y=START.y,z=START.z)
+    nav=FakeNav()
+    with unittest.TestCase().assertRaisesRegex(LiveControlError,'not corroborated'):
+        return_and_turnin(profile=profile(turnin_xyz=far),quest_id=364,pid=77,
+            capture=snapshot,driver=FakeDriver(),nav=nav,spawns=FakeDb(),
+            world_position=position)
+    assert nav.calls==0
