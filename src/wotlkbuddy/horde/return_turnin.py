@@ -144,10 +144,14 @@ def return_and_turnin(
     if monotonic() - start_time > max_seconds:
         raise LiveControlError('Return-to-NPC time budget exhausted')
     log(f'Arrived near {step.npc_name}; verifying quest dialogue and reward')
+    # The guarded quest-dialogue turn-in accepts identity/UI verification
+    # callbacks, not navigation combat callbacks. The latter belong only
+    # to follow_world_path above; passing them here caused a TypeError
+    # after successfully reaching the NPC.
     result = turnin(
         profile, quest_id=quest_id, capture=capture, driver=driver,
         character=player.name, expected_guid=player.guid,
-        timeout=10, progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None))
+        timeout=10, progress=log)
     if result.status not in ('turned_in', 'already_turned_in'):
         raise LiveControlError(
             f'Quest {quest_id} turn-in not confirmed: {result.status}: '
