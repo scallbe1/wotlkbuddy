@@ -233,10 +233,12 @@ def follow_world_path(
             snap,pos=sample()
             if (snap.truncated or snap.player.guid != guid or
                     pos.player_guid.lower()!=guid.lower() or
-                    pos.map_id!=expected_map_id or not valid_life_state(snap) or
-                    snap.player.in_combat):
+                    pos.map_id!=expected_map_id or not valid_life_state(snap)):
                 raise LiveControlError('Proactive threat scan failed to restore '
                                        'safe live player/map state')
+            if snap.player.in_combat:
+                notify('Aggro began during threat scan; switching to reactive defense')
+                snap,pos=checked(suppress_scan=True,observation=(snap,pos))
             if (_distance_xy(pos.position,origin.position)>2.0 or
                     abs(pos.z-origin.z)>2.):
                 raise LiveControlError('Threat scan changed player position; '

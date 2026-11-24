@@ -1262,12 +1262,13 @@ local function tickData()
                                      (itemType=='Weapon' and (subtype=='Wands' or
                                        (weaponSkills[subtype] and equipLoc=='INVTYPE_WEAPONOFFHAND')))) and
                                 (quality == 0 or
-                                 (quality <= 2 and equipTypes[equipLoc]))) then
+                                 (quality <= 2 and equipTypes[equipLoc]) or
+                                 (quality == 1 and itemType=='Miscellaneous' and subtype=='Junk'))) then
                             table.insert(rows, table.concat({
                                 'D', tostring(bag), tostring(slot),
                                 tostring(id), tostring(qty), tostring(quality),
                                 tostring(price), '0', tostring(locked and 1 or 0),
-                                safe(equipLoc, 27)}, '\t'))
+                                safe((quality==1 and itemType=='Miscellaneous' and subtype=='Junk' and equipLoc=='') and 'VENDOR_JUNK' or equipLoc, 27)}, '\t'))
                         end
                     end
                 end
