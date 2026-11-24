@@ -235,3 +235,40 @@ class QuestUiCleanupTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_arrens_last_direct_offer_returns_without_reopening():
+    game=Sim()
+    game.npc='Executor Arren'
+    game.ids=dict(game.ids,**{'Executor Arren':1570})
+    game.offers=dict(game.offers,**{'Executor Arren':((383,'Vital Intelligence'),)})
+    game.direct_npcs.add(game.npc)
+    game.dialog='none'
+    calls=[]
+    original=game.interact
+    def interact():
+        calls.append(True)
+        if len(calls)==1:
+            original()
+        else:
+            game.dialog='none'
+    game.driver.on_interact=interact
+    profile=HordeProfile('Undead starter','test.xml',(),(),(
+        OrderStep('pickup',quest_id=383,name='Vital Intelligence',entry=1570,npc_name='Executor Arren'),
+        OrderStep('turnin',quest_id=383,name='Vital Intelligence',entry=1515,npc_name='Executor Zygand'),
+    ),.2,2,())
+    assert game.collect(profile=profile)==(383,)
+    assert len(calls)==1
+    assert game.dialog=='none'
+
+def test_silent_npc_after_confirmed_menu_pickups_is_success():
+    game=Sim()
+    original=game.interact
+    def interact():
+        if game.remaining():
+            original()
+        else:
+            game.dialog='none'
+    game.driver.on_interact=interact
+    assert game.collect()==(3098,3901)
+    assert game.dialog=='none'
