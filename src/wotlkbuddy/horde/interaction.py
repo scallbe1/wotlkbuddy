@@ -158,7 +158,7 @@ class KeyboardQuestInput:
             '/wbttravel clear', '/wbttravel enemies',
             '/wbttravel corpse', '/wbttravel firing', '/wbttravel deathrun',
             '/run RepopMe()', '/run RetrieveCorpse()',
-            '/cast Arcane Intellect',
+            '/cast Arcane Intellect', '/cast [target=player] Arcane Intellect',
             '/cast Frost Armor', '/cast Fireball', '/cast Frostbolt',
             '/cast Conjure Food', '/cast Conjure Water',
         ) or re.fullmatch(r'/run LootSlot\(([1-9]|1[0-6])\)', command) is not None

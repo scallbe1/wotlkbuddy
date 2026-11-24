@@ -7,6 +7,36 @@ from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import follow_world_path
 
 
+def restore_self_buff(*,state,capture,driver,name,field,sleep=real_sleep):
+    """Use a fixed self-target cast, then confirm aura on advancing frames."""
+    if (name,field) not in (('Arcane Intellect','intellect_active'),
+                            ('Frost Armor','armor_active')):
+        raise ValueError('Unsupported recovery buff')
+    guid=state.player.guid
+    def check(s):
+        if (s.truncated or s.player.dead or s.player.guid!=guid or
+                s.resources is None or s.mage_buffs is None or
+                driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+            raise LiveControlError('Self-buff verification interrupted')
+        return s
+    # A previous instant spell can still be on the global cooldown.
+    sleep(1.6)
+    state=check(capture())
+    if state.player.in_combat or getattr(state.mage_buffs,field):
+        return state
+    command='/cast [target=player] Arcane Intellect' if name=='Arcane Intellect' else '/cast Frost Armor'
+    previous=state.sequence
+    driver.chat(command)
+    for _ in range(20):
+        sleep(.25)
+        state=check(capture())
+        if state.player.in_combat:
+            return state
+        if state.sequence!=previous and getattr(state.mage_buffs,field):
+            return state
+    return state
+
+
 def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
                      route_hints=(), log=lambda _:None, sleep=real_sleep):
     guid=initial.player.guid
@@ -22,6 +52,7 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
                                      driver=driver,log=log,sleep=sleep)
     retreat_attempts=0
     supply_rounds=0
+    buff_attempts={}
     for attempt in range(45):
         state=capture()
         if state.player.in_combat:
@@ -64,9 +95,9 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
         missing=[]
         if buffs:
             if buffs.knows_frost_armor and not buffs.armor_active:
-                missing.append(('/cast Frost Armor','armor_active'))
+                missing.append(('Frost Armor','armor_active'))
             if buffs.knows_intellect and not buffs.intellect_active:
-                missing.append(('/cast Arcane Intellect','intellect_active'))
+                missing.append(('Arcane Intellect','intellect_active'))
         supply=state.mage_supplies
         low_stock=bool(supply and state.resources.free_bag_slots>0 and (
             (supply.knows_conjure_food and supply.food_count<4) or
@@ -90,16 +121,16 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
             sleep(1)
             continue
         if missing and mana>=.45:
-            command,field=missing[0]
-            log('Restoring buff: '+command[6:])
-            driver.chat(command)
-            for _ in range(12):
-                sleep(.20)
-                state=capture()
-                if state.player.in_combat or getattr(state.mage_buffs,field,False):
-                    break
-            else:
-                raise LiveControlError('Could not verify recovery buff '+command[6:])
+            name,field=missing[0]
+            buff_attempts[field]=buff_attempts.get(field,0)+1
+            if buff_attempts[field]>3:
+                raise LiveControlError(f'Could not verify self-buff {name} after three attempts; '
+                    f'mana {state.resources.mana}/{state.resources.max_mana}; holding position')
+            log(f'Restoring buff: {name} (attempt {buff_attempts[field]}/3)')
+            state=restore_self_buff(state=state,capture=capture,driver=driver,
+                                    name=name,field=field,sleep=sleep)
+            if not state.player.in_combat and not getattr(state.mage_buffs,field,False):
+                log(f'{name} not yet verified on player; reassessing mana, cooldown and nearby threats')
             # Buff mana cost requires another sustain pass.
             supply_rounds=0
             continue

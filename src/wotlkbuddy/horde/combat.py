@@ -298,7 +298,7 @@ def hunt_kill_objectives(
             return s
         for known, active, command, label in (
                 (s.mage_buffs.knows_intellect, s.mage_buffs.intellect_active,
-                 '/cast Arcane Intellect', 'Arcane Intellect'),
+                 '/cast [target=player] Arcane Intellect', 'Arcane Intellect'),
                 (s.mage_buffs.knows_frost_armor, s.mage_buffs.armor_active,
                  '/cast Frost Armor', 'Frost Armor')):
             if not known or active:
