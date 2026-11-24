@@ -237,3 +237,38 @@ def test_delivery_recovery_refuses_route_projected_to_old_floor():
             return (Vec3(start.x,start.y,start.z+5.26),end)
     with unittest.TestCase().assertRaisesRegex(LiveControlError,'measured floor'):
         fresh_delivery_route(WrongFloor(),0,START,SARVIS)
+
+
+def test_npc_service_replans_after_loot_displacement():
+    from wotlkbuddy.horde.npc_visit import visit_npc
+    state={'xyz':START,'paths':[],'target':False,'calls':0}
+    displaced=Vec3(START.x-10,START.y,START.z)
+    class Nav(FakeNav):
+        def find_path(self,map_id,start,end):
+            state['paths'].append((start,end))
+            return super().find_path(map_id,start,end)
+    class Driver(FakeDriver):
+        def chat(self,command):
+            assert command=='/targetexact Shadow Priest Sarvis'
+            state['target']=True
+    def capture():
+        s=snapshot()
+        if state['target']:
+            return replace(s,player=replace(s.player,target_name='Shadow Priest Sarvis',
+                target_guid='0xF130000621000001'))
+        return s
+    def position(s):
+        v=state['xyz']
+        return 77,SimpleNamespace(map_id=0,player_guid=s.player.guid,position=v,x=v.x,y=v.y,z=v.z)
+    def travel(points,**kwargs):
+        state['calls']+=1
+        if state['calls']==1:
+            state['xyz']=displaced
+            return SimpleNamespace(stopped_reason='Threat scan changed player position; fresh Detour replan is required')
+        assert points[0]==displaced
+        state['xyz']=points[-1]
+        return SimpleNamespace(stopped_reason='complete')
+    visit_npc(npc_name='Shadow Priest Sarvis',npc_id=1569,pid=77,capture=capture,
+        driver=Driver(),nav=Nav(),spawns=FakeDb(),world_position=position,travel=travel,sleep=lambda _:None)
+    assert state['paths']==[(START,SARVIS),(displaced,SARVIS)]
+    assert state['target']

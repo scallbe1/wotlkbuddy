@@ -1,18 +1,22 @@
 """Drain the combat-log corpse queue at encounter boundaries, regardless of quest."""
 from math import hypot
-from time import sleep as real_sleep
+from time import monotonic, sleep as real_sleep
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 
 
 def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda _:None,
-                   sleep=real_sleep, max_corpses=12):
+                   sleep=real_sleep, max_corpses=12, now=monotonic):
     if getattr(driver,'looting_encounter',False):
         return initial
     driver.looting_encounter=True
     guid=initial.player.guid
     state=initial
+    retry_after=getattr(driver,'corpse_retry_after',None)
+    if retry_after is None:
+        retry_after={}
+        driver.corpse_retry_after=retry_after
     def observe():
         s,p=sample()
         if (s.truncated or s.player.dead or s.player.guid!=guid or
@@ -42,7 +46,7 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                 break
             candidates=[]
             for cg,(entry,name) in driver.defeated_corpses.items():
-                if cg in attempted:
+                if cg in attempted or retry_after.get(cg,0)>now():
                     continue
                 try:
                     point=corpse_position(state,cg)
@@ -52,12 +56,28 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                     candidates.append((where.position.distance_to(point),cg,entry,name,point))
             if not candidates:
                 break
-            distance,cg,entry,name,point=min(candidates,key=lambda x:x[0])
+            distance,cg,entry,name,point=min(candidates,key=lambda x:(x[1]!=state.player.target_guid,x[0]))
             attempted.add(cg)
             log(f'Encounter loot: {name or entry} {cg}, {distance:.1f}y')
+            # A failed attempt should not drag the character repeatedly off
+            # the current quest/service route. Retain it for a later pass.
+            retry_after[cg]=now()+45
             if distance>4:
                 if distance>25 or abs(point.z-where.z)>4:
                     log('Corpse too far or on different floor; retaining for later')
+                    continue
+                # First try to establish the actual dead target while still
+                # on the original route. Do not travel to a name-only guess.
+                if not exact(state,cg,entry):
+                    driver.chat('/targetlasttarget')
+                    state,where=fresh(state)
+                if not exact(state,cg,entry) and not state.player.in_combat and name:
+                    if driver.target_objective_name(name):
+                        state,where=fresh(state)
+                if state.player.in_combat:
+                    break
+                if not exact(state,cg,entry):
+                    log('Exact corpse not selectable before detour; deferring 45s')
                     continue
                 dx,dy=point.x-where.x,point.y-where.y
                 d=hypot(dx,dy)
@@ -124,6 +144,7 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
             if not state.player.in_combat and (not state.loot_open or state.loot_count==0) and (opened or before!=after):
                 driver.finished_corpses.add(cg)
                 driver.defeated_corpses.pop(cg,None)
+                retry_after.pop(cg,None)
                 log(f'Encounter corpse processed: {cg}')
             else:
                 log('Loot not confirmed; corpse remains pending')

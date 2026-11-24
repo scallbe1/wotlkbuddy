@@ -133,6 +133,7 @@ class KeyboardQuestInput:
             self.seen_kill_events.add(key)
             # A respawn may reuse a GUID; a new combat-log kill supersedes it.
             self.finished_corpses.discard(guid)
+            getattr(self,'corpse_retry_after',{}).pop(guid,None)
             entry=creature_entry_from_guid(guid)
             if entry:
                 self.defeated_corpses[guid]=(entry,name)

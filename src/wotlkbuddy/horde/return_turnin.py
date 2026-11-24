@@ -46,6 +46,14 @@ def delivery_legs(path, *, limit=DELIVERY_LEG_YARDS):
     return tuple(legs)
 
 
+def encounter_route_failure(reason):
+    """Only known verified combat/loot displacement requests a route refresh."""
+    return str(reason) in (
+        'Threat scan changed player position; fresh Detour replan is required',
+        'Defensive combat displaced Mage away from original navmesh path; fresh Detour route required',
+    )
+
+
 def height_route_failure(reason):
     """Only explicit terrain-height failures permit this recovery."""
     text=str(reason).lower()
@@ -180,6 +188,7 @@ def return_and_turnin(
             pending=list(legs)
             index=0
             height_failures=[]
+            encounter_replans=0
             while pending:
                 leg=pending.pop(0)
                 index+=1
@@ -214,17 +223,25 @@ def return_and_turnin(
                     threat_check_yards=14.)
                 if result.stopped_reason!='complete':
                     reason=result.stopped_reason
-                    if not height_route_failure(reason):
+                    encounter=encounter_route_failure(reason)
+                    if not encounter and not height_route_failure(reason):
                         raise LiveControlError('Return-to-NPC navigation stopped: '+reason)
                     state,measured=sample()
                     if (state.player.dead or state.player.in_combat or
                             driver.emergency_stop_requested() or not driver.wow_is_foreground()):
                         raise LiveControlError('Unsafe player state after delivery height mismatch')
-                    if (len(height_failures)>=MAX_HEIGHT_REPLANS or
-                            any(measured.position.distance_to(pos)<8 for pos in height_failures)):
-                        raise LiveControlError('Repeated delivery height/floor mismatch near the same location or replan budget exhausted: '+reason)
-                    height_failures.append(measured.position)
-                    log(f'Delivery height recovery {len(height_failures)}/{MAX_HEIGHT_REPLANS}: '
+                    if encounter:
+                        encounter_replans+=1
+                        if encounter_replans>12:
+                            raise LiveControlError('Delivery encounter replan budget exhausted')
+                        label=f'Delivery encounter displacement recovery {encounter_replans}/12'
+                    else:
+                        if (len(height_failures)>=MAX_HEIGHT_REPLANS or
+                                any(measured.position.distance_to(pos)<8 for pos in height_failures)):
+                            raise LiveControlError('Repeated delivery height/floor mismatch near the same location or replan budget exhausted: '+reason)
+                        height_failures.append(measured.position)
+                        label=f'Delivery height recovery {len(height_failures)}/{MAX_HEIGHT_REPLANS}'
+                    log(f'{label}: '
                         f'replanning from actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}) '
                         f'to original NPC {step.npc_name}; {reason}')
                     # Never steer toward the old failed waypoint or just
