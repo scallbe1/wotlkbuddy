@@ -198,3 +198,48 @@ def test_wall_slide_retraces_and_replans_from_measured_position():
     assert report.stopped_reason=='complete',report
     assert game.key is None
     assert report.recovery_attempts==1
+
+
+def test_slide_with_blocked_retreat_uses_measured_lateral_replan():
+    game=SimGame()
+    original=game.sleep
+    slid=False
+    sliding=False
+    original_down=game.key_down
+    def down(code):
+        nonlocal sliding
+        sliding=False
+        original_down(code)
+    game.key_down=down
+    def sleep(sec):
+        nonlocal slid,sliding
+        if game.key==_MOVEMENT_SCANCODES['forward'] and (sliding or (not slid and game.x>15)):
+            slid=True
+            sliding=True
+            game.time+=sec
+            game.y+=8*sec
+        elif game.key==_MOVEMENT_SCANCODES['backward']:
+            game.time+=sec  # physically blocked
+        elif game.key in (_MOVEMENT_SCANCODES['strafe-right'],_MOVEMENT_SCANCODES['strafe-left']):
+            game.time+=sec
+            angle=game.facing+(-pi/2 if game.key==_MOVEMENT_SCANCODES['strafe-right'] else pi/2)
+            game.x+=8*sec*cos(angle)
+            game.y+=8*sec*sin(angle)
+        else:
+            original(sec)
+    game.sleep=sleep
+    replans=[]
+    def replan(start,end):
+        replans.append(start)
+        return [start,end]
+    # Block proposed retreat paths, but permit lateral movement.
+    def clear(a,b):
+        dx,dy=b.x-a.x,b.y-a.y
+        return abs(dx*cos(game.facing)+dy*sin(game.facing))<.2
+    report=follow_world_path([Vec3(12,18,140),Vec3(30,18,140)],
+        sample=game.sample,keyboard=game,stop_requested=game.emergency_stop_requested,
+        sleep=game.sleep,now=lambda:game.time,can_traverse=clear,replan_path=replan)
+    assert slid and replans
+    assert report.recovery_strafes>=1
+    assert report.stopped_reason=='complete',report
+    assert game.key is None

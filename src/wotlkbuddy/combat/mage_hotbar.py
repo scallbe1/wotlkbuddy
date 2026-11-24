@@ -18,6 +18,17 @@ def cleanup_plan(rows,bound):
                 (keep.get(name)!=b and keep.get(name) in bound))]
 
 
+def verified_empty(state,button):
+    """An absent tooltip row is not proof; an explicit raw empty row is."""
+    if state.actionbar_page!=1:
+        return False
+    visible=[r for r in state.visible_hotbar if r[0]==button]
+    if visible:
+        return visible==[(button,'empty',0,'')]
+    raw=[r for r in state.raw_action_slots if r.view=='base' and r.button==button and r.action_index==button]
+    return len(raw)==1 and raw[0].kind=='empty' and raw[0].action_id==0
+
+
 def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
     first=capture()
     guid=first.player.guid
@@ -59,12 +70,14 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
             break
         b,sid,name=removals[0]
         driver.chat(f'/wbtbar clear {b} {sid}')
-        after=fresh(state,lambda s:s.actionbar_page==1 and any(r[:3]==(b,'empty',0) for r in s.visible_hotbar))
+        after=fresh(state,lambda s:verified_empty(s,b))
+        if after is not None:
+            after=fresh(after,lambda s:verified_empty(s,b))
         if after is None:
             log(f'Could not verify removal of {name} from button {b}; no further edits')
             return tuple(changed)
         changed.append('removed '+name)
-        log(f'Hotbar: removed {name} from button {b}')
+        log(f'Hotbar: removed {name} from button {b}; empty slot confirmed in two frames')
         state=after
     for name in MAGE_ACTIONS:
         existing=next((r for r in state.visible_hotbar if r[1]=='spell' and r[3]==name and r[0] in bound(state)),None)

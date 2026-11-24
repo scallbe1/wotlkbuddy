@@ -16,3 +16,17 @@ def test_two_weaker_enemies_including_escort_can_be_approved():
     assert assess_encounter(p,r,Vec3(0,0,0),a,(a,b),(1667,)).allowed
     p.health=60
     assert not assess_encounter(p,r,Vec3(0,0,0),a,(a,b),(1667,)).allowed
+
+
+def test_hidden_empty_button_can_be_confirmed_without_tooltip():
+    from wotlkbuddy.combat.mage_hotbar import verified_empty
+    from wotlkbuddy.live.codec import ActionBarRawSlot
+    raw=ActionBarRawSlot('base',4,4,'empty',0,'',True)
+    state=SimpleNamespace(actionbar_page=1,visible_hotbar=(),raw_action_slots=(raw,))
+    assert verified_empty(state,4)
+    assert not verified_empty(state,6)
+    state.visible_hotbar=((4,'spell',20577,'Cannibalize'),)
+    assert not verified_empty(state,4)
+    state.visible_hotbar=()
+    state.actionbar_page=2
+    assert not verified_empty(state,4)
