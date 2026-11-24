@@ -797,15 +797,17 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
     with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, NavigationProxy(py32, dll) as nav:
         def hazards(state, corpse):
             _, where = verified_live_position(state,pid=pid)
-            static = tuple(spawn.position for spawn in db.nearby(where.map_id,corpse))
-            live = verified_nearby_creatures(state,pid=pid,center=corpse)
-            return static+live
+            return verified_nearby_creatures(state,pid=pid,center=corpse)
+
+        def spawn_hints(state, corpse):
+            _, where = verified_live_position(state,pid=pid)
+            return tuple(spawn.position for spawn in db.nearby(where.map_id,corpse))
 
         return recover_corpse(
             sample=sample, driver=driver, nav=nav,
             known_corpse=getattr(args, 'corpse_world', None),
             read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav),
-            read_hazards=hazards, restore=restore, log=log)
+            read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore, log=log)
 
 
 def _horde_continuous(args: argparse.Namespace) -> dict:

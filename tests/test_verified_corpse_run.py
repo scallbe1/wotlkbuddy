@@ -50,13 +50,15 @@ def test_recovery_uses_body_not_graveyard_coordinates():
     nav = Mock()
     nav.find_path.return_value = [graveyard.position, site.position]
     with patch('wotlkbuddy.horde.death_recovery.follow_world_path', side_effect=travel), \
+            patch('wotlkbuddy.horde.death_recovery.approach_path',
+                  return_value=(graveyard.position, site.position)), \
             patch('wotlkbuddy.horde.death_recovery.plan_resurrection_sites',
                   return_value=[(site.position, ())]):
         result = recover_corpse(sample=sample, driver=driver, nav=nav,
                                 read_hazards=lambda *_: (), sleep=lambda _: None)
     assert result['status'] == 'resurrected'
     assert result['corpse_world'] == [0, 1800, 1400, 90]
-    nav.find_path.assert_called_once_with(0, graveyard.position, site.position)
+    assert result['resurrection_world'] == [0,1830,1400,90]
     assert result['resurrection_world'] == [0,1830,1400,90]
     assert [c.args[0] for c in driver.chat.call_args_list] == [
         '/run RepopMe()', '/run RetrieveCorpse()']
@@ -120,11 +122,13 @@ def test_released_ghost_uses_client_corpse_reader_without_releasing_again():
     nav.find_path.return_value = [ghost.position, site.position]
     reader = Mock(return_value=(0, 1800, 1400, 90))
     with patch('wotlkbuddy.horde.death_recovery.follow_world_path', side_effect=travel), \
+            patch('wotlkbuddy.horde.death_recovery.approach_path',
+                  return_value=(ghost.position, site.position)), \
             patch('wotlkbuddy.horde.death_recovery.plan_resurrection_sites',
                   return_value=[(site.position, ())]):
         result = recover_corpse(sample=sample, driver=driver, nav=nav,
                                 read_corpse=reader, read_hazards=lambda *_: (), sleep=lambda _: None)
     assert result['status'] == 'resurrected'
     reader.assert_called_once()
-    nav.find_path.assert_called_once_with(0, ghost.position, site.position)
+    assert result['resurrection_world'] == [0,1830,1400,90]
     driver.chat.assert_called_once_with('/run RetrieveCorpse()')

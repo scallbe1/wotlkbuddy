@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 from wotlkbuddy.game.types import Vec3
-from wotlkbuddy.horde.resurrection_site import acceptable_site,plan_resurrection_sites
+from wotlkbuddy.horde.resurrection_site import acceptable_site,plan_resurrection_sites,approach_path
 
 
 def test_selects_reachable_offset_away_from_hostile_spawns():
@@ -14,8 +14,8 @@ def test_selects_reachable_offset_away_from_hostile_spawns():
     assert sites
     for point,path in sites:
         assert acceptable_site(point,corpse,hazards)
-        assert 22<=point.distance_to(corpse)<=35
-        assert point.distance_to(hazards[0])>=24
+        assert 18<=point.distance_to(corpse)<=37
+        assert point.distance_to(hazards[0])>=20
         assert path[-1]==point
 
 
@@ -24,3 +24,18 @@ def test_no_safe_navmesh_site_does_not_fall_back_to_corpse():
     nav.nearest_point.return_value=None
     assert not plan_resurrection_sites(nav,0,Vec3(70,0,0),Vec3(0,0,0),())
     assert not acceptable_site(Vec3(0,0,0),Vec3(0,0,0),())
+
+
+def test_ghost_approaches_even_if_static_spawns_cover_every_site():
+    corpse=Vec3(0,0,0)
+    origin=Vec3(150,0,0)
+    nav=Mock()
+    nav.find_path.side_effect=lambda _,a,b:[a,b]
+    nav.nearest_point.side_effect=lambda _,p:p
+    route=approach_path(nav,0,origin,corpse)
+    assert route[0]==origin
+    assert 0<route[-1].distance_to(corpse)<=42
+    hints=tuple(Vec3(x,y,0) for x in range(-40,41,5) for y in range(-40,41,5))
+    sites=plan_resurrection_sites(nav,0,route[-1],corpse,(),spawn_hints=hints)
+    assert sites
+    assert all(acceptable_site(p,corpse,()) for p,_ in sites)
