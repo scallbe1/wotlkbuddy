@@ -66,6 +66,12 @@ def summarize_telemetry(telemetry: ClientTelemetry) -> str:
               if telemetry.resources is not None else 'Mana/bags/durability: unobserved (update addon)'),
              f'Quests: {len(telemetry.quests)}'
              + (' (TRUNCATED)' if telemetry.truncated else '')]
+    if telemetry.death_state is not None:
+        d = telemetry.death_state
+        lines.append(f'Ghost={d.ghost} | release_ready={d.release_ready} | '
+                     f'retrieve_ready={d.retrieve_ready}')
+    elif p.dead:
+        lines.append('Death-state telemetry missing (update addon)')
     for quest in observe_quests(telemetry):
         lines.append(f'  [{quest.quest_id}] {quest.title} '
                      f'(level {quest.level}, complete={quest.complete})')

@@ -113,6 +113,7 @@ def follow_world_path(
     threat_check_yards: float = 7.,
     waypoint_spacing: float = 9.0,
     continuous_forward: bool = False,
+    ghost_only: bool = False,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -140,7 +141,14 @@ def follow_world_path(
         raise LiveControlError(f'Quest {expected_quest_id} not active; refusing to navigate')
     if world0.map_id != expected_map_id or world0.player_guid.lower() != guid.lower():
         raise LiveControlError('World map/GUID inconsistent with live addon before navigation')
-    if first.player.in_combat or first.player.dead:
+    def valid_life_state(snap: ClientTelemetry) -> bool:
+        if ghost_only:
+            return bool(snap.player.dead and snap.death_state and snap.death_state.ghost)
+        return not snap.player.dead
+
+    if ghost_only and (on_aggro is not None or on_threat is not None):
+        raise ValueError('Ghost navigation cannot invoke combat or threat scans')
+    if first.player.in_combat or not valid_life_state(first):
         raise LiveControlError('Combat or death present; navigation is not a combat routine')
     if len(path) < 2:
         raise LiveControlError('No world navmesh waypoints supplied')
@@ -173,7 +181,7 @@ def follow_world_path(
         snap, pos = observation if observation is not None else sample()
         if (snap.truncated or snap.player.guid != guid or
                 pos.player_guid.lower() != guid.lower() or
-                pos.map_id != expected_map_id or snap.player.dead):
+                pos.map_id != expected_map_id or not valid_life_state(snap)):
             raise LiveControlError('Character, map, telemetry, or alive state changed')
         if snap.player.in_combat:
             if on_aggro is None or aggro_fights >= max_aggro_fights:
@@ -192,7 +200,7 @@ def follow_world_path(
             snap, pos = sample()
             if (snap.truncated or snap.player.guid != guid or
                     pos.player_guid.lower() != guid.lower() or
-                    pos.map_id != expected_map_id or snap.player.dead or
+                    pos.map_id != expected_map_id or not valid_life_state(snap) or
                     snap.player.in_combat):
                 raise LiveControlError(
                     'Defense failed to restore safe same-character navigation')
@@ -218,7 +226,7 @@ def follow_world_path(
             snap,pos=sample()
             if (snap.truncated or snap.player.guid != guid or
                     pos.player_guid.lower()!=guid.lower() or
-                    pos.map_id!=expected_map_id or snap.player.dead or
+                    pos.map_id!=expected_map_id or not valid_life_state(snap) or
                     snap.player.in_combat):
                 raise LiveControlError('Proactive threat scan failed to restore '
                                        'safe live player/map state')
@@ -451,7 +459,8 @@ def follow_world_path(
                     # assume the player will move exactly that far.
                     forward_duration = min(
                         1.20 if continuous_forward else 0.45,
-                        max(0.18, 0.75*(dxy-arrival_yards)/8.0))
+                        max(0.10 if ghost_only else 0.18,
+                             0.75*(dxy-arrival_yards)/(11.0 if ghost_only else 8.0)))
                     held = pulse('forward', forward_duration)
                     moves += 1
                     # Measure immediately after releasing W, BEFORE the
@@ -466,7 +475,7 @@ def follow_world_path(
                     # rather than a hardcoded 12 yards regardless of timing.
                     # 11 yd/s is above normal unmounted running speed; the
                     # additional 2 yards cover polling/snapshot jitter.
-                    allowed = max(4.0, 11.0 * held + 2.0)
+                    allowed = max(4.0, (14.0 if ghost_only else 11.0) * held + 2.0)
                     if displacement > allowed:
                         raise LiveControlError(
                             'Implausible world jump during forward movement: '

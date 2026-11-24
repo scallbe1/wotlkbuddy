@@ -316,6 +316,20 @@ local function tickData()
         safe(UnitName('target'), 50),
     }, '\t')
     appendLine(playerLine)
+    -- Ghost is distinct from an unreleased corpse; only expose UI state.
+    local ghost = UnitIsGhost('player') and 1 or 0
+    local release = 0
+    local retrieve = 0
+    for i = 1, (STATICPOPUP_NUMDIALOGS or 4) do
+        local popup = _G['StaticPopup' .. i]
+        local button = _G['StaticPopup' .. i .. 'Button1']
+        if popup and popup:IsShown() and button and button:IsEnabled() then
+            if popup.which == 'DEATH' then release = 1 end
+            if popup.which == 'RECOVER_CORPSE' then retrieve = 1 end
+        end
+    end
+    appendLine(table.concat({'DS', tostring(ghost), tostring(release),
+        tostring(retrieve)}, '\t'))
     -- Optional, read-only WorldFrame hover: a name is only exported if the
     -- cursor is over the 3-D world, not a bag/chat/tooltip/action bar region.
     -- Python correlates this with a double-observed GO template/GUID and
@@ -1214,6 +1228,8 @@ local function travelActionLabel(kind, target, questName)
             ((questName and questName ~= '' and questName) or 'quest') .. ' enemies'
     elseif kind == 'npc' and target and target ~= '' then
         return 'Navigating to ' .. target
+    elseif kind == 'deathrun' then
+        return 'Navigating to own corpse'
     elseif kind == 'corpse' then
         return 'Navigating to quest corpse'
     elseif kind == 'firing' then
@@ -1227,7 +1243,7 @@ SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
     if message == 'clear' then
         hudTravelKind, hudTravelName = '', ''
     elseif message == 'enemies' or message == 'corpse' or
-            message == 'firing' then
+            message == 'firing' or message == 'deathrun' then
         hudTravelKind, hudTravelName = message, ''
     else
         -- Accept only a bounded NPC name, not an arbitrary Lua expression
@@ -1254,7 +1270,9 @@ statusFrame:SetScript('OnUpdate', function(_, elapsed)
     end
     goalText:SetText('Goal: ' .. string.sub(goal, 1, 65))
     local action = phaseLabels[hudPhase] or 'Standing by'
-    if LootFrame and LootFrame:IsShown() then
+    if UnitIsDeadOrGhost('player') then
+        action = (UnitIsGhost('player') and (travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) or 'Ghost: recovering corpse')) or 'Dead: awaiting spirit release'
+    elseif LootFrame and LootFrame:IsShown() then
         action = 'Looting corpse'
     elseif ClassTrainerFrame and ClassTrainerFrame:IsShown() then
         action = 'Training Mage spells'
