@@ -124,13 +124,13 @@ class PostquestTests(unittest.TestCase):
     def test_keyboard_allowlist_only_validated_gear_and_trainer_calls(self):
         d=KeyboardQuestInput.__new__(KeyboardQuestInput)
         taps=[]
-        d._tap=lambda code, shifted=False: taps.append(code)
-        for command in ('/run EquipItemByName(3275,10)',
+        d._tap=lambda code, shifted=False, **kw: taps.append(code)
+        for command in ('/run EquipItemByName(3275,10)', '/run EquipItemByName(3277,16)',
                         '/run BuyTrainerService(1)', '/run BuyTrainerService(120)'):
             taps.clear()
             d.chat(command)
             self.assertGreater(len(taps),1)
-        for command in ('/run EquipItemByName(3275,16)',
+        for command in ('/run EquipItemByName(3275,17)',
                         '/run EquipItemByName(0,10)',
                         '/run BuyTrainerService(121)',
                         '/run BuyTrainerService(1);print(0)'):

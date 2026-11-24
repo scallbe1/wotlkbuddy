@@ -350,6 +350,8 @@ class ClientTelemetry:
     bag_armor: tuple[BagArmor, ...] = ()
     equipped_armor: tuple[EquippedArmor, ...] = ()
     gear_scan_complete: bool = False
+    weapon_swap_safe: bool | None = None
+    inventory_sale_scan: bool = False
     trainer_open: bool = False
     trainer_services: tuple[TrainerService, ...] = ()
     gossip_services: tuple[GossipServiceOption, ...] = ()
@@ -418,6 +420,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     gossip_service_total: int | None = None
     gossip_service_options: dict[int, GossipServiceOption] = {}
     merchant_seen = False
+    merchant_ui_open = False
+    inventory_sale_scan = False
+    weapon_swap_safe = None
     merchant_scan_complete = False
     merchant_count = 0
     merchant_items: dict[tuple[int, int], MerchantItem] = {}
@@ -817,9 +822,13 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             talent_probe = TalentProbe(
                 tree,index,rank,maximum,
                 None if parts[5] == '-1' else parts[5] == '1',parts[6])
+        elif parts[0] == 'WG':
+            if len(parts)!=2 or parts[1] not in ('0','1') or weapon_swap_safe is not None:
+                raise TelemetryError('Invalid or repeated weapon scan flag')
+            weapon_swap_safe=parts[1]=='1'
         elif parts[0] == 'M':
-            if (len(parts) != 3 or merchant_seen or
-                    parts[1] not in ('0', '1')):
+            if (len(parts) not in (3,4) or merchant_seen or
+                    parts[1] not in ('0', '1') or (len(parts)==4 and parts[3] not in ('0','1'))):
                 raise TelemetryError('Malformed or repeated merchant header')
             try:
                 merchant_count = int(parts[2])
@@ -829,6 +838,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                     parts[1] == '0' and merchant_count):
                 raise TelemetryError('Invalid merchant inventory count')
             merchant_seen = True
+            inventory_sale_scan = len(parts)==4
+            merchant_ui_open = len(parts)==3 or parts[3]=='1'
             merchant_scan_complete = parts[1] == '1'
         elif parts[0] == 'D':
             if (len(parts) != 10 or not merchant_seen or
@@ -972,7 +983,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             key = (bag, slot)
             if (not 0 <= bag <= 4 or not 1 <= slot <= 36 or
                     not 1 <= item_id < 2**31 or inventory_slot not in
-                    (1, 3, 5, 6, 7, 8, 9, 10, 15) or
+                    (1, 3, 5, 6, 7, 8, 9, 10, 15, 16) or
                     not 0 <= level <= 1000 or not 0 <= required <= 100 or
                     not 0 <= score <= 1000000 or parts[8] not in ('0','1') or
                     not parts[9] or len(parts[9]) > 55 or key in bag_armor):
@@ -987,7 +998,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 slot, item_id, level, score = map(int, parts[1:])
             except ValueError as exc:
                 raise TelemetryError('Malformed equipped armor record') from exc
-            if (slot not in (1, 3, 5, 6, 7, 8, 9, 10, 15) or
+            if (slot not in (1, 3, 5, 6, 7, 8, 9, 10, 15, 16) or
                     not 1 <= item_id < 2**31 or
                     not 0 <= level <= 1000 or not 0 <= score <= 1000000 or
                     slot in worn_armor):
@@ -1162,12 +1173,14 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            bag_armor=tuple(bag_armor.values()),
                            equipped_armor=tuple(worn_armor.values()),
                            gear_scan_complete=gear_scan_complete,
+                           weapon_swap_safe=weapon_swap_safe,
+                           inventory_sale_scan=inventory_sale_scan,
                            trainer_open=trainer_seen,
                            trainer_services=tuple(trainer_services.values()),
                            gossip_services=tuple(gossip_service_options[i]
                              for i in sorted(gossip_service_options)),
                            gossip_services_complete=gossip_service_total is not None,
-                           merchant_open=merchant_seen,
+                           merchant_open=merchant_ui_open,
                            merchant_scan_complete=merchant_scan_complete,
                            merchant_items=tuple(
                                merchant_items[k] for k in sorted(merchant_items)),

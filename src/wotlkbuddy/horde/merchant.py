@@ -56,18 +56,29 @@ def next_ready_profile_turnin(profile: HordeProfile, state: ClientTelemetry):
 
 def safe_sale_candidates(
     state: ClientTelemetry, *, protected_item_ids: frozenset[int],
+    require_open: bool = True, protect_upgrades: bool = False,
 ) -> tuple[MerchantItem, ...]:
     """Never sell an XML quest item, quest-flagged item or unsupported rarity.
 
     Grey vendor junk and low-rarity unused equipment are eligible; food,
     reagents, trade goods, bag containers and rare/epic items are retained.
     """
-    if (not state.merchant_open or not state.merchant_scan_complete or
+    if ((require_open and not state.merchant_open) or not state.merchant_scan_complete or
             state.resources is None or state.truncated):
         raise LiveControlError('Complete live merchant inventory scan unavailable')
     allowed = []
+    retain=set()
+    protect_upgrades=protect_upgrades or state.inventory_sale_scan
+    if protect_upgrades:
+        worn={a.inventory_slot:a for a in state.equipped_armor}
+        for a in state.bag_armor:
+            current=worn.get(a.inventory_slot)
+            if (a.inventory_slot==16 and state.weapon_swap_safe is not True) or current is None or (a.score,a.item_level)>(current.score,current.item_level):
+                retain.add(a.item_id)
     for item in state.merchant_items:
-        if item.item_id in protected_item_ids or item.quest_flag != 0 or item.locked:
+        if item.item_id in protected_item_ids or item.item_id in retain or item.quest_flag != 0 or item.locked:
+            continue
+        if protect_upgrades and item.equip_loc.startswith('INVTYPE_') and not state.gear_scan_complete:
             continue
         if item.quality == 0 or (
                 0 < item.quality <= 2 and item.equip_loc.startswith('INVTYPE_')
@@ -75,6 +86,14 @@ def safe_sale_candidates(
                                            'INVTYPE_QUIVER', 'INVTYPE_TABARD')):
             allowed.append(item)
     return tuple(allowed)
+
+
+def estimated_vendor_copper(state, profile):
+    if not state.inventory_sale_scan or not state.merchant_scan_complete or state.truncated:
+        return None
+    protected=frozenset(obj.entry for quest in profile.quests for obj in quest.objectives if obj.kind=='CollectItem')
+    items=safe_sale_candidates(state,protected_item_ids=protected,require_open=False,protect_upgrades=True)
+    return sum(i.vendor_price*i.quantity for i in items)
 
 
 def _capture_fresh(capture, first, guard, *, sleep, now, timeout=6):
@@ -171,15 +190,8 @@ def sell_at_verified_merchant(
         for _ in range(max_sales):
             guard(s)
             def eligible_items(state):
-                items=safe_sale_candidates(state,protected_item_ids=protected)
-                if not protect_mage_gear:
-                    return items
-                # Preserve Mage cloth that could improve equipped gear.
-                worn={a.inventory_slot:a for a in state.equipped_armor}
-                retain={a.item_id for a in state.bag_armor if a.equippable and (
-                    a.inventory_slot not in worn or (a.score,a.item_level)>(worn[a.inventory_slot].score,worn[a.inventory_slot].item_level))}
-                return tuple(i for i in items if i.item_id not in retain and
-                    (i.quality==0 or state.gear_scan_complete))
+                return safe_sale_candidates(state,protected_item_ids=protected,
+                    protect_upgrades=protect_mage_gear)
             eligible = eligible_items(s)
             if not eligible:
                 break
