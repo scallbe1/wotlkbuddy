@@ -109,3 +109,15 @@ def test_long_detour_reduces_local_aggro_estimate_but_unknown_path_does_not():
     assert not local_reclaim_threats(nav,0,site,(enemy,))
     nav.find_path.return_value=[]
     assert local_reclaim_threats(nav,0,site,(enemy,))==(enemy,)
+
+
+def test_rest_route_moves_away_from_single_enemy():
+    from wotlkbuddy.horde.resurrection_site import plan_rest_site
+    nav=Mock()
+    nav.nearest_point.side_effect=lambda _,p:p
+    nav.find_path.side_effect=lambda _,a,b:[a,b]
+    origin=Vec3(0,0,0)
+    enemy=Vec3(14,0,0)
+    path=plan_rest_site(nav,0,origin,(enemy,),route_hints=(Vec3(-20,0,0),))
+    assert path
+    assert path[-1].distance_to(enemy)>=20

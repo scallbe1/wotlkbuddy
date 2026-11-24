@@ -365,7 +365,10 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         target_position=lambda s: verified_target_position(s, pid=pid),
         log=log, detection_yards=args.scan_yards,
         direct_path_clear=getattr(driver, 'direct_path_clear', None))
-    maintain_mage_supplies(capture=cap, driver=driver, log=log)
+    needs_recovery = (first.player.health/max(1,first.player.max_health)<.70 or
+                      first.resources.mana/max(1,first.resources.max_mana)<.45)
+    if not needs_recovery or args.only not in ('all','quests','train','vendor','objectives','collect','objects','turnin'):
+        maintain_mage_supplies(capture=cap, driver=driver, log=log)
 
     def set_native_status(phase: str, quest_id: int = 0) -> None:
         if args.no_hud:
@@ -421,6 +424,13 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 if live_pid != pid:
                     raise LiveControlError('WoW PID changed between NPC actions')
                 return state, coords
+
+            if needs_recovery:
+                from wotlkbuddy.horde.recovery_rest import recover_and_buff
+                from wotlkbuddy.live.world_position import verified_nearby_creatures
+                log('Low resources at startup; recovering at safer terrain before quest work')
+                recover_and_buff(initial=cap(),sample=location,driver=driver,nav=nav,
+                    read_hazards=lambda s,center: verified_nearby_creatures(s,pid=pid,center=center),log=log)
 
             def ensure_reward_bag_space():
                 state, _ = location()
@@ -779,52 +789,26 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
         return state, pos
     log = lambda line: print(line, file=sys.stderr, flush=True)
 
+    from wotlkbuddy.horde.recovery_rest import recover_and_buff
+    retreat_hints = []
+
+    def prepare_retreat(state,where,breadcrumbs):
+        retreat_hints.extend(breadcrumbs)
+        path = plan_rest_site(nav,where.map_id,where.position,hazards(state,where.position),
+                             route_hints=retreat_hints)
+        if path:
+            retreat_hints.extend(path)
+            log(f'Pre-reclaim retreat planned: {where.position.distance_to(path[-1]):.1f}y to safer terrain')
+        else:
+            log('No pre-reclaim retreat confirmed; will reassess immediately after resurrection')
+
     def restore(state):
-        guid = state.player.guid
-        supplies_checked = False
-        retreat_attempts = 0
         driver.face_combat_target = lambda s: face_target_in_place(
             s,capture=cap,driver=driver,
             player_position=lambda s: verified_live_position(s,pid=pid)[1],
             target_position=lambda s: verified_target_position(s,pid=pid),log=log)
-        for attempt in range(40):
-            if (state.truncated or state.player.dead or state.player.guid != guid or
-                    state.resources is None or driver.emergency_stop_requested() or
-                    not driver.wow_is_foreground()):
-                raise LiveControlError('Post-resurrection recovery interrupted')
-            if state.player.in_combat:
-                state = defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
-                supplies_checked = False
-                continue
-            _, where = verified_live_position(state,pid=pid)
-            threats = verified_nearby_creatures(state,pid=pid,center=where.position)
-            if nearby_threats(where.position,threats) and retreat_attempts<2:
-                retreat_attempts+=1
-                path = plan_rest_site(nav,where.map_id,where.position,threats)
-                if path:
-                    log('Moving away from remaining creatures to recover and buff')
-                    report = follow_world_path(path,sample=sample,keyboard=driver.keyboard,
-                        stop_requested=driver.emergency_stop_requested,
-                        expected_quest_id=None,expected_map_id=where.map_id,
-                        max_seconds=60,progress=log,
-                        on_aggro=lambda s: defend_against_aggro(initial=s,capture=cap,driver=driver,log=log),
-                        can_traverse=lambda a,b:nav.segment_clear(where.map_id,a,b))
-                    if report.stopped_reason!='complete':
-                        raise LiveControlError('Post-reclaim retreat interrupted: '+report.stopped_reason)
-                    state=cap()
-                    continue
-                log('No safer short retreat route; holding current position to recover')
-            if (state.player.health/max(1,state.player.max_health) >= .90 and
-                  state.resources.mana/max(1,state.resources.max_mana) >= .85):
-                log('Resurrection recovery complete: health and mana restored before questing')
-                return state
-            elif not supplies_checked:
-                supplies_checked=True
-                state = maintain_mage_supplies(capture=cap,driver=driver,log=log)
-            else:
-                time.sleep(2)
-                state = cap()
-        raise LiveControlError('Post-resurrection resources not restored; holding position')
+        return recover_and_buff(initial=state,sample=sample,driver=driver,nav=nav,
+                                read_hazards=hazards,route_hints=retreat_hints,log=log)
 
     scout = GhostScout(sample=sample,driver=driver,log=log)
     with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, NavigationProxy(py32, dll) as nav:
@@ -842,7 +826,7 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
             known_corpse=getattr(args, 'corpse_world', None),
             read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav),
             read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore,
-            scout_surroundings=scout.survey, log=log)
+            scout_surroundings=scout.survey, prepare_retreat=prepare_retreat, log=log)
 
 
 def _horde_continuous(args: argparse.Namespace) -> dict:

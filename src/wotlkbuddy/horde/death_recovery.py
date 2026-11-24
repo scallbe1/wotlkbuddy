@@ -19,7 +19,7 @@ from wotlkbuddy.horde.resurrection_site import (
 
 def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                    read_hazards=None, read_spawn_hints=None, restore=None,
-                   scout_surroundings=None,
+                   scout_surroundings=None, prepare_retreat=None,
                    sleep=real_sleep, now=monotonic, log=lambda _: None):
     first, origin = sample()
     guid = first.player.guid
@@ -97,6 +97,8 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
             raise LiveControlError('Ghost/map changed during corpse navigation')
         return position
 
+    breadcrumbs = []
+
     def walk(path, label, *, toward_corpse=False):
         """Replan from measured XYZ on a bounded terrain failure.
 
@@ -123,6 +125,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                     max_seconds=min(600,remaining_time), progress=log, ghost_only=True,
                     can_traverse=lambda a,b:nav.segment_clear(corpse_map,a,b))
                 if travel.stopped_reason == 'complete':
+                    breadcrumbs.extend(path)
                     return True
                 reason = travel.stopped_reason
                 terrain_failure = any(marker in reason for marker in (
@@ -143,6 +146,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                         log('Offset site terrain route exhausted; checking another site')
                         return False
                     raise LiveControlError(label+' navigation could not find a different reachable floor: '+reason)
+                breadcrumbs.append(measured)
                 failures.append(measured)
                 log(f'{label} terrain mismatch; replanning {attempt+1}/4 from '
                     f'actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}); '
@@ -272,6 +276,16 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
     chosen = position.position
     log(f'Resurrecting {chosen.distance_to(corpse):.1f}y from corpse with '
         f'{len(local_reclaim_threats(nav,corpse_map,chosen,final_hazards))} nearby potential attackers')
+    if prepare_retreat is not None:
+        prepare_retreat(state,position,tuple(breadcrumbs))
+        state,position = observe()
+        if (not state.player.dead or not state.death_state.ghost or
+                not state.death_state.retrieve_ready or
+                not in_reclaim_ring(position.position,corpse) or
+                len(local_reclaim_threats(nav,corpse_map,position.position,
+                    tuple(read_hazards(state,corpse))))>1):
+            raise LiveControlError('Reclaim window changed during retreat planning; remaining ghost')
+        chosen = position.position
     guard()
     driver.chat('/run RetrieveCorpse()')
     state, position = wait_for(
