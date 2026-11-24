@@ -101,10 +101,16 @@ class KeyboardQuestInput:
             '/wbtphase idle', '/wbtphase hunt', '/wbtphase turnin',
             '/wbtphase quests', '/wbtphase train', '/wbtphase gear',
             '/wbtphase vendor',
+            '/wbttravel clear', '/wbttravel enemies',
+            '/wbttravel corpse', '/wbttravel firing',
             '/cast Arcane Intellect',
             '/cast Frost Armor', '/cast Fireball', '/cast Frostbolt',
             '/cast Conjure Food', '/cast Conjure Water',
         ) or re.fullmatch(r'/run LootSlot\(([1-9]|1[0-6])\)', command) is not None
+        allowed_npc_travel = (
+            command.startswith('/wbttravel npc ') and
+            len(command) <= len('/wbttravel npc ') + 64 and
+            _NPC_NAME.fullmatch(command[len('/wbttravel npc '):]) is not None)
         allowed_goal = re.fullmatch(
             r'/wbtgoal (0|[1-9][0-9]{0,5})', command) is not None
         allowed_consumable = re.fullmatch(
@@ -112,7 +118,8 @@ class KeyboardQuestInput:
         allowed_item_track = re.fullmatch(
             r'/wbttrack (0|[1-9][0-9]{0,5})', command) is not None
         if (not allowed_combat and not allowed_goal and
-                not allowed_item_track and not allowed_consumable and
+                not allowed_npc_travel and not allowed_item_track and
+                not allowed_consumable and
                 command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/click QuestFrameCloseButton', '/click ClassTrainerFrameCloseButton', '/click MerchantFrameCloseButton', '/run CloseGossip()') and
                 not re.fullmatch(r'/run GetQuestReward\((0|[1-9]|1[0-2])\)', command) and
                 not re.fullmatch(r'/run EquipItemByName\(([1-9][0-9]{0,7}),(1|3|5|6|7|8|9|10|15)\)', command) and
@@ -145,6 +152,25 @@ class KeyboardQuestInput:
                 code, shifted = _SPECIAL[letter]
             self._tap(code, shifted=shifted)
         self._tap(_ENTER)
+
+    def set_navigation_status(self, kind: str,
+                              target: str | None = None) -> None:
+        """Update the addon HUD from a sourced travel destination.
+
+        This is presentation-only. Never changes targeting, key bindings,
+        Detour geometry, combat, or RGB telemetry.
+        """
+        if kind in ('clear', 'enemies', 'corpse', 'firing'):
+            if target is not None:
+                raise ValueError('Fixed navigation status takes no target')
+            self.chat('/wbttravel ' + kind)
+        elif kind == 'npc':
+            if (not isinstance(target, str) or len(target) > 64
+                    or _NPC_NAME.fullmatch(target) is None):
+                raise ValueError('Invalid sourced NPC display name')
+            self.chat('/wbttravel npc ' + target)
+        else:
+            raise ValueError('Unrecognized navigation HUD context')
 
     def learn_verified_talent(self, tree: int, index: int) -> None:
         """Spend exactly one previously verified class-specific talent point."""
