@@ -79,6 +79,8 @@ class KeyboardQuestInput:
         self.keyboard = WindowsKeyboard()
         self.interact_key = interact_key
         self.native_hud_enabled = True
+        # Exact names from profile data are an acquisition hint, not authorization.
+        self.defeated_corpses = {}
 
     def wow_is_foreground(self) -> bool:
         return self.keyboard.wow_is_foreground()
@@ -90,20 +92,20 @@ class KeyboardQuestInput:
         if self.emergency_stop_requested() or not self.wow_is_foreground():
             raise LiveControlError('Escape pressed or WoW lost focus; input aborted')
 
-    def _tap(self, code: int, *, shifted: bool = False) -> None:
+    def _tap(self, code: int, *, shifted: bool = False, typing: bool = False) -> None:
         self._guard()
         if shifted:
             self.keyboard.key_down(_SHIFT)
         try:
             self.keyboard.key_down(code)
             try:
-                real_sleep(0.018)
+                real_sleep(0.005 if typing else 0.018)
             finally:
                 self.keyboard.key_up(code)
         finally:
             if shifted:
                 self.keyboard.key_up(_SHIFT)
-        real_sleep(0.012)
+        real_sleep(0.004 if typing else 0.012)
 
     def target_nearest_enemy(self) -> None:
         """One ordinary Tab press, never a typed /targetenemy macro.
@@ -112,6 +114,20 @@ class KeyboardQuestInput:
         through fresh telemetry rather than assuming Tab chose a safe mob.
         """
         self._tap(_TAB)
+
+    def target_objective_name(self, name: str) -> bool:
+        if not isinstance(name, str) or not _NPC_NAME.fullmatch(name):
+            return False
+        self.chat('/targetexact ' + name)
+        return True
+
+    def remember_defeated(self, state: ClientTelemetry) -> None:
+        target = state.combat_target
+        guid = state.player.target_guid
+        if guid and target and target.entry_id > 0 and target.dead:
+            self.defeated_corpses[guid] = (target.entry_id, state.player.target_name)
+            if len(self.defeated_corpses) > 16:
+                self.defeated_corpses.pop(next(iter(self.defeated_corpses)))
 
     def chat(self, command: str) -> None:
         if command == '/targetenemy':
@@ -173,7 +189,7 @@ class KeyboardQuestInput:
                 if letter not in _SPECIAL:
                     raise ValueError('Unsupported ASCII chat character')
                 code, shifted = _SPECIAL[letter]
-            self._tap(code, shifted=shifted)
+            self._tap(code, shifted=shifted, typing=True)
         self._tap(_ENTER)
 
     def set_navigation_status(self, kind: str,

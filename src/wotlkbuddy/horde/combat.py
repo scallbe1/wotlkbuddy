@@ -245,16 +245,16 @@ def hunt_kill_objectives(
         if s.player.max_health and s.player.health/s.player.max_health < .25:
             raise LiveControlError('Mage health below 25%; cannot safely continue fight')
 
-    def fresh(before: ClientTelemetry, delay: float = 0.55) -> ClientTelemetry:
+    def fresh(before: ClientTelemetry, delay: float = 0.15) -> ClientTelemetry:
         guard(before)
         sleep(delay)
-        # WoW updates telemetry every half-second; retry a bounded number.
-        for _ in range(6):
+        # Accept only a newer checksum-validated frame, including older addons.
+        for _ in range(10):
             current = capture()
             guard(current)
             if current.sequence != before.sequence:
                 return current
-            sleep(.20)
+            sleep(.08)
         raise LiveControlError('Telemetry stream stalled after combat input')
 
     def qlog(s: ClientTelemetry) -> QuestRecord:
@@ -579,6 +579,7 @@ def hunt_kill_objectives(
             return snapshot
 
         unchanged = 0
+        landed_damage = False
         approach_attempts = 0
         for _ in range(18):
             guard(s)
@@ -622,20 +623,29 @@ def hunt_kill_objectives(
             # finish casting long before the old fixed 2.65 s delay, and its
             # projectile may still be travelling. Resume on cast completion,
             # not projectile impact; WoW itself handles spell queue/GCD.
-            during = fresh(s, .55)
+            during = fresh(s, .15)
             observed_cast_ms = (
                 during.current_cast_remaining_ms
                 if action is not None and
                    during.current_cast_name == action.name
                 else during.fireball_cast_remaining_ms)
             if observed_cast_ms is not None:
-                wait_cast = min(2.5, max(.28,
-                    observed_cast_ms / 1000.0 + .18))
+                wait_cast = min(2.5, max(.10,
+                    observed_cast_ms / 1000.0 + .02))
             else:
                 # Old telemetry/client without cast timing: retain the
                 # conservative legacy wait, and no unverified queue input.
                 wait_cast = 2.1
             s = fresh(during, wait_cast)
+            # Never issue another cast while the observed current cast is active.
+            for _pending in range(12):
+                remaining = s.current_cast_remaining_ms or s.fireball_cast_remaining_ms or 0
+                if (remaining <= 0 or s.player.target_guid != target_guid or
+                        (s.combat_target and s.combat_target.dead)):
+                    break
+                s = fresh(s, min(.20, max(.06, remaining/1000.0)))
+            else:
+                raise LiveControlError('Cast did not complete within bounded observation')
             new = s.combat_target
             if (s.player.target_guid != target_guid or new is None
                     or new.entry_id != expected):
@@ -681,6 +691,12 @@ def hunt_kill_objectives(
                     f'{s.player.target_guid or "<none>"}) without confirmed '
                     'quest kill credit; no further spells sent')
             if not new.dead and new.health >= previous_health:
+                # Once damage is established, overlap one projectile with the next
+                # cast against the same verified living attacker. Keep the old
+                # bounded impact/LOS recovery if the second cast still shows no damage.
+                if landed_damage and s.player.in_combat and unchanged == 0 and new.health > 25:
+                    unchanged = 1
+                    continue
                 # A Fireball may finish casting before its projectile hits.
                 # Watch the SAME GUID for up to ~2.4 additional seconds
                 # before counting this as a no-damage cast.
@@ -704,6 +720,7 @@ def hunt_kill_objectives(
                         break
                 if new.dead or new.health<previous_health:
                     unchanged=0
+                    landed_damage = True
                     log(f'Fireball impact verified after cast finished: '
                         f'HP {previous_health}->{new.health}')
                     continue
@@ -730,6 +747,7 @@ def hunt_kill_objectives(
                     'recovery could not establish a firing position')
             else:
                 unchanged=0
+                landed_damage = landed_damage or new.health < previous_health
         raise LiveControlError('Exceeded bounded Fireball casts on one target')
 
     def loot(s: ClientTelemetry, corpse: Vec3 | None,
@@ -753,11 +771,6 @@ def hunt_kill_objectives(
                     target.dead is True and not current.player.in_combat)
 
         if not verified_corpse(s):
-            if s.player.target_guid and s.player.target_guid != dead_guid:
-                loot_skipped += 1
-                log('Loot skipped: another target selected after kill; '
-                    'refusing to replace it')
-                return s
             log(f'Reselecting last killed corpse: {dead_guid}')
             driver.chat('/targetlasttarget')
             s = fresh(s)
@@ -833,7 +846,8 @@ def hunt_kill_objectives(
                     arrival_yards=1.0,max_recoveries=0,
                     can_traverse=lambda a,b:nav.segment_clear(
                         player_pos.map_id,a,b),
-                    progress=log, on_aggro=getattr(driver, 'on_aggro', None), on_threat=getattr(driver, 'scan_hostiles', None),sleep=sleep,now=now)
+                    progress=log, on_aggro=getattr(driver, 'on_aggro', None),
+                    on_threat=None, sleep=sleep,now=now)
                 s=fresh(s)
                 if result.stopped_reason!='complete':
                     loot_skipped += 1
@@ -845,6 +859,9 @@ def hunt_kill_objectives(
                 loot_skipped += 1
                 log(f'Loot skipped: safe short corpse approach unavailable: {exc}')
                 return s
+            if not verified_corpse(s) and not s.player.in_combat:
+                driver.chat('/targetlasttarget')
+                s = fresh(s)
             if not verified_corpse(s):
                 loot_skipped += 1
                 log('Loot skipped: corpse GUID/dead state lost while approaching')
@@ -899,12 +916,33 @@ def hunt_kill_objectives(
                             f'{before_item_count} -> {s.tracked_item_count}; '
                             'quest journal also advanced')
                         return s
+                if s.loot_open is True:
+                    break
                 if wait < 2:
-                    s = fresh(s, .4)
-            loot_skipped += 1
-            log('Loot not confirmed: no loot frame or verified auto-loot '
-                'item/journal increase after interaction')
-            return s
+                    s = fresh(s, .25)
+            if s.loot_open is True:
+                log('Delayed loot frame observed')
+            elif verified_corpse(s) and collect_items:
+                # One retry when the exact corpse remains selected and no item
+                # credit arrived. Do not click a newly selected unit.
+                driver.interact()
+                s = fresh(s, .25)
+                if s.loot_open is not True and before_item_count is not None:
+                    for _retry in range(3):
+                        if (s.tracked_item_id == active_tracked_item and
+                                s.tracked_item_count is not None and
+                                s.tracked_item_count > before_item_count):
+                            loot_confirmed += 1
+                            log('Auto-loot inventory increased on verified corpse retry')
+                            return s
+                        if s.loot_open is True or not verified_corpse(s):
+                            break
+                        s = fresh(s, .20)
+            if s.loot_open is not True:
+                loot_skipped += 1
+                log('Loot not confirmed: no loot frame or verified auto-loot '
+                    'item/journal increase after interaction')
+                return s
         if s.loot_count is None:
             loot_skipped += 1
             log('Loot unconfirmed: item-count telemetry unavailable')
@@ -1042,7 +1080,9 @@ def hunt_kill_objectives(
                         f'{live_credit[0]}/{live_credit[1]}')
         s = rest(s)
         s = buffs(s)
-        s = rest(s)  # Buffing costs mana; do not start a pull while depleted.
+        if (s.player.health/max(1,s.player.max_health) < .70 or
+                s.resources.mana/max(1,s.resources.max_mana) < .45):
+            s = rest(s)  # Buffs can consume mana.
         if s.player.in_combat:
             s = clear_remaining_aggro(s)
             continue
@@ -1054,8 +1094,28 @@ def hunt_kill_objectives(
         # Find a live target already on screen first. If none can be selected,
         # navigate near a verified nearby spawn constrained to profile hotspots.
         if not s.player.in_combat:
+            # Profile names can avoid cycling unrelated neutral units. The
+            # selected target must still pass the exact entry and GUID checks.
+            select_name = getattr(driver, 'target_objective_name', None)
+            if callable(select_name) and not (s.combat_target and
+                    s.combat_target.entry_id in allowed_sources and
+                    s.combat_target.attackable and not s.combat_target.dead):
+                names = tuple(dict.fromkeys(source.name for source in spec.sources
+                              if source.kind == 'mob' and source.entry in allowed_sources
+                              and source.name))
+                for name in names[:4]:
+                    if not select_name(name):
+                        continue
+                    s = fresh(s)
+                    if s.player.in_combat or (s.combat_target and
+                            s.combat_target.entry_id in allowed_sources and
+                            s.combat_target.attackable and not s.combat_target.dead and
+                            creature_entry_from_guid(s.player.target_guid) == s.combat_target.entry_id):
+                        break
             visited: set[str] = set()
             for _ in range(7):
+                if s.player.in_combat:
+                    break
                 if s.player.target_guid in unhittable_guids:
                     log(f'Skipping previously blocked spider '
                         f'{s.player.target_guid}; exact GUID only')
@@ -1072,6 +1132,9 @@ def hunt_kill_objectives(
                     break
                 visited.add(s.player.target_guid)
 
+        if s.player.in_combat:
+            s = clear_remaining_aggro(s)
+            continue
         t = s.combat_target
         if (t and t.entry_id in allowed_sources and t.attackable
                 and not t.dead and
@@ -1143,11 +1206,37 @@ def hunt_kill_objectives(
                         driver.chat('/cleartarget')
                         latest=fresh(latest)
                     continue
-                s = fresh(s, 1.0)
+                s = fresh(s, .15)
                 if s.player.in_combat:
                     log('Combat persists after target death; clearing additional attackers before loot')
                     s = clear_remaining_aggro(s)
-                s = loot(s, corpse_xyz, dead_guid, expected)
+                # Loot selected verified add first, while it is still targetable,
+                # then try the original objective corpse and other observed dead GUIDs.
+                pending = getattr(driver, 'defeated_corpses', None)
+                if isinstance(pending, dict):
+                    selected = s.player.target_guid
+                    ordered = ([selected] if selected in pending and selected != dead_guid else [])
+                    ordered += [dead_guid]
+                    ordered += [g for g in pending if g not in ordered]
+                    for corpse_guid in ordered[:8]:
+                        if s.player.in_combat:
+                            break
+                        if corpse_guid == dead_guid:
+                            entry, name = expected, ''
+                        else:
+                            entry, name = pending[corpse_guid]
+                        if s.player.target_guid != corpse_guid and name:
+                            select = getattr(driver, 'target_objective_name', None)
+                            # Prefer last-target reselect; name is only a hint.
+                            driver.chat('/targetlasttarget')
+                            s = fresh(s)
+                            if s.player.target_guid != corpse_guid and callable(select) and select(name):
+                                s = fresh(s)
+                        s = loot(s, corpse_xyz if corpse_guid == dead_guid else None,
+                                 corpse_guid, entry)
+                        pending.pop(corpse_guid, None)
+                else:
+                    s = loot(s, corpse_xyz, dead_guid, expected)
                 latest = qlog(s)
                 if collect_items:
                     if (s.tracked_item_id != spec.entry or
@@ -1261,7 +1350,9 @@ def hunt_kill_objectives(
             # guard. Recheck identity, map and actual position, then exclude
             # this spawn for the remainder of the session. The outer loop can
             # search other verified, navmesh-routed spawn candidates.
-            if 'Measured movement disagrees with client facing' not in str(exc):
+            height_failure = ('height/floor' in str(exc) or
+                              'different heights/floors' in str(exc))
+            if not height_failure and 'Measured movement disagrees with client facing' not in str(exc):
                 raise
             s = capture()
             guard(s)
@@ -1272,8 +1363,11 @@ def hunt_kill_objectives(
                 raise LiveControlError(
                     'Combat began during off-axis navigation; refusing alternate routing'
                 ) from exc
-            navigation_mismatches += 1
             recently_visited[key] = 2
+            if height_failure:
+                log(f'Excluding wrong-floor spawn {key}; selecting another verified candidate')
+                continue
+            navigation_mismatches += 1
             log(f'Off-axis movement near spawn {key}; actual player position='
                 f'({current_world.x:.2f},{current_world.y:.2f},{current_world.z:.2f}). '
                 f'Excluding this spawn; alternative-route attempt '

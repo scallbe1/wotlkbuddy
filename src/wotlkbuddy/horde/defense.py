@@ -41,15 +41,15 @@ def defend_against_aggro(
         if s.player.health / max(1,s.player.max_health) < .20:
             raise LiveControlError('Mage below 20% health; defensive combat unsafe')
 
-    def fresh(before: ClientTelemetry, delay: float=.5) -> ClientTelemetry:
+    def fresh(before: ClientTelemetry, delay: float=.15) -> ClientTelemetry:
         guard(before)
         sleep(delay)
-        for _ in range(6):
+        for _ in range(10):
             state=capture()
             guard(state)
             if state.sequence != before.sequence:
                 return state
-            sleep(.2)
+            sleep(.08)
         raise LiveControlError('Defensive combat telemetry stalled')
 
     state=initial
@@ -107,16 +107,27 @@ def defend_against_aggro(
                 cast(state)
             else:
                 driver.chat('/cast Fireball')
-        mid=fresh(state,.5)
+        mid=fresh(state,.15)
         cast_ms=(mid.current_cast_remaining_ms
                  if ability is not None and mid.current_cast_name==ability.name
                  else mid.fireball_cast_remaining_ms)
-        wait=(min(2.6,max(.35,cast_ms/1000+.2))
+        wait=(min(2.6,max(.10,cast_ms/1000+.02))
               if cast_ms is not None else 2.1)
         state=fresh(mid,wait)
+        for _pending in range(12):
+            remaining = state.current_cast_remaining_ms or state.fireball_cast_remaining_ms or 0
+            if remaining <= 0 or not state.player.in_combat or state.player.target_guid != target_guid:
+                break
+            state = fresh(state, min(.20, max(.06, remaining/1000.0)))
+        else:
+            raise LiveControlError('Defensive cast did not complete')
         # Wait for the projectile (which may land after casting finishes).
         for _impact in range(3):
             new = state.combat_target
+            if (state.player.target_guid == target_guid and new and new.dead):
+                remember = getattr(driver, 'remember_defeated', None)
+                if callable(remember):
+                    remember(state)
             if not state.player.in_combat:
                 log('Incoming combat ended; verified Mage is safe to resume')
                 return state
@@ -125,7 +136,7 @@ def defend_against_aggro(
                 break
             if new.health < before_hp:
                 break
-            state = fresh(state, .7)
+            state = fresh(state, .30)
         new = state.combat_target
         if not state.player.in_combat:
             return state
