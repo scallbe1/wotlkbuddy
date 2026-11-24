@@ -43,7 +43,9 @@ def matching_direct_offer(profile, state, npc_id, npc_name, confirmed_completed=
                            if s.kind=='turnin' and s.quest_id in previous_ids}
             # If the XML lists repeated titles without intervening turn-ins,
             # leave the ambiguity unresolved instead of choosing by order.
-            if previous_ids-prerequisites or not prerequisites.issubset(done) or prerequisites&active:
+            if previous_ids-prerequisites:
+                return None  # No proven chain structure; title alone is ambiguous.
+            if not prerequisites.issubset(done) or prerequisites&active:
                 continue
         candidates[step.quest_id]=step
     return next(iter(candidates.values())) if len(candidates)==1 else None
