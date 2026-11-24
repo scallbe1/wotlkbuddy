@@ -1154,6 +1154,8 @@ actionText:SetJustifyH('LEFT')
 local hudQuestId = 0
 local hudQuestName = ''
 local hudPhase = 'idle'
+local hudTravelKind = ''
+local hudTravelName = ''
 local hudLastAction = ''
 local hudLastActive = 0
 local phaseLabels = {
@@ -1166,6 +1168,9 @@ local phaseLabels = {
     vendor='Visit merchant'
 }
 local function setQuestGoal(id)
+    if hudQuestId ~= id then
+        hudTravelKind, hudTravelName = '', ''
+    end
     hudQuestId = id
     hudQuestName = ''
     if id > 0 and GetNumQuestLogEntries and GetQuestLogTitle then
@@ -1192,10 +1197,48 @@ end
 SLASH_WOTLKBUDDYPHASE1 = '/wbtphase'
 SlashCmdList['WOTLKBUDDYPHASE'] = function(message)
     if phaseLabels[message or ''] then
+        if hudPhase ~= message then
+            hudTravelKind, hudTravelName = '', ''
+        end
         hudPhase = message
         statusFrame:Show()
     end
 end
+
+-- BEGIN HUD NAVIGATION CONTEXT
+-- These are presentation-only strings. They never influence targeting,
+-- movement, quest telemetry, combat, or spell casts.
+local function travelActionLabel(kind, target, questName)
+    if kind == 'enemies' then
+        return 'Navigating to ' ..
+            ((questName and questName ~= '' and questName) or 'quest') .. ' enemies'
+    elseif kind == 'npc' and target and target ~= '' then
+        return 'Navigating to ' .. target
+    elseif kind == 'corpse' then
+        return 'Navigating to quest corpse'
+    elseif kind == 'firing' then
+        return 'Navigating to firing position'
+    end
+    return nil
+end
+
+SLASH_WOTLKBUDDYTRAVEL1 = '/wbttravel'
+SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
+    if message == 'clear' then
+        hudTravelKind, hudTravelName = '', ''
+    elseif message == 'enemies' or message == 'corpse' or
+            message == 'firing' then
+        hudTravelKind, hudTravelName = message, ''
+    else
+        -- Accept only a bounded NPC name, not an arbitrary Lua expression
+        -- or command string. Names originate in validated quest profiles.
+        local npc = string.match(message or '', "^npc ([A-Za-z][A-Za-z '%-]*)$")
+        if not npc or string.len(npc) > 64 then return end
+        hudTravelKind, hudTravelName = 'npc', npc
+    end
+    statusFrame:Show()
+end
+-- END HUD NAVIGATION CONTEXT
 
 local statusElapsed = 0
 statusFrame:SetScript('OnUpdate', function(_, elapsed)
@@ -1223,8 +1266,15 @@ statusFrame:SetScript('OnUpdate', function(_, elapsed)
         action = 'Channeling ' .. tostring(spell)
     elseif UnitAffectingCombat('player') then
         action = 'Combat'
+    elseif travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) then
+        -- Keep the actual destination visible during paused Detour movement,
+        -- steering corrections, and proactive hostile scans. GetUnitSpeed
+        -- drops to zero during those pauses and must not hide the goal.
+        action = travelActionLabel(hudTravelKind, hudTravelName, hudQuestName)
     elseif GetUnitSpeed and (GetUnitSpeed('player') or 0) > 0.2 then
-        action = 'Navigating'
+        action = travelActionLabel(
+            hudPhase == 'hunt' and 'enemies' or '', '', hudQuestName
+        ) or 'Navigating'
     elseif hudPhase == 'hunt' then
         action = 'Searching for quest enemies'
     elseif hudPhase == 'turnin' then
