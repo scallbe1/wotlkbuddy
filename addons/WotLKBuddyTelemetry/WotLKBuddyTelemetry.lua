@@ -1336,7 +1336,7 @@ end
 -- (combat, loot, walking, casting) comes from the game itself.
 local statusFrame = CreateFrame('Frame', 'WotLKBuddyStatusHUD', UIParent)
 statusFrame:SetWidth(370)
-statusFrame:SetHeight(53)
+statusFrame:SetHeight(70)
 statusFrame:ClearAllPoints()
 -- Anchor below the RGB telemetry grid near the top center-right.
 -- Relative anchoring follows the grid across UI scales and resolutions,
@@ -1354,6 +1354,20 @@ local actionText = statusFrame:CreateFontString(nil, 'OVERLAY', 'GameFontHighlig
 actionText:SetPoint('TOPLEFT', goalText, 'BOTTOMLEFT', 0, -7)
 actionText:SetWidth(352)
 actionText:SetJustifyH('LEFT')
+
+local destinationText = statusFrame:CreateFontString(nil,'OVERLAY','GameFontHighlightSmall')
+destinationText:SetPoint('TOPLEFT',actionText,'BOTTOMLEFT',0,-4)
+destinationText:SetWidth(352)
+destinationText:SetJustifyH('LEFT')
+destinationText:SetText('')
+SLASH_WOTLKBUDDYCOORDS1='/wbtcoords'
+SlashCmdList['WOTLKBUDDYCOORDS']=function(msg)
+    local x,y,z=string.match(msg or '', '^(-?%d+) (-?%d+) (-?%d+)$')
+    x,y,z=tonumber(x),tonumber(y),tonumber(z)
+    if x and y and z and math.abs(x)<=100000 and math.abs(y)<=100000 and math.abs(z)<=100000 then
+        destinationText:SetText(string.format('Destination XYZ: %d, %d, %d',x,y,z))
+    end
+end
 
 local hudQuestId = 0
 local hudQuestName = ''
@@ -1403,6 +1417,7 @@ SlashCmdList['WOTLKBUDDYPHASE'] = function(message)
     if phaseLabels[message or ''] then
         if hudPhase ~= message then
             hudTravelKind, hudTravelName = '', ''
+            destinationText:SetText('')
         end
         hudPhase = message
         statusFrame:Show()
@@ -1432,6 +1447,7 @@ SLASH_WOTLKBUDDYTRAVEL1 = '/wbttravel'
 SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
     if message == 'clear' then
         hudTravelKind, hudTravelName = '', ''
+        destinationText:SetText('')
     elseif message == 'enemies' or message == 'corpse' or
             message == 'firing' or message == 'deathrun' then
         hudTravelKind, hudTravelName = message, ''

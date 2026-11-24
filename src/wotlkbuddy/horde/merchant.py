@@ -92,6 +92,7 @@ def sell_at_verified_merchant(
     *, npc_name: str, npc_id: int, profile: HordeProfile,
     capture: Callable[[], ClientTelemetry], driver,
     min_free_slots: int = 3, max_sales: int = 36,
+    protect_mage_gear: bool = False,
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     log: Callable[[str], None] = lambda _: None,
@@ -169,7 +170,17 @@ def sell_at_verified_merchant(
     try:
         for _ in range(max_sales):
             guard(s)
-            eligible = safe_sale_candidates(s, protected_item_ids=protected)
+            def eligible_items(state):
+                items=safe_sale_candidates(state,protected_item_ids=protected)
+                if not protect_mage_gear:
+                    return items
+                # Preserve Mage cloth that could improve equipped gear.
+                worn={a.inventory_slot:a for a in state.equipped_armor}
+                retain={a.item_id for a in state.bag_armor if a.equippable and (
+                    a.inventory_slot not in worn or (a.score,a.item_level)>(worn[a.inventory_slot].score,worn[a.inventory_slot].item_level))}
+                return tuple(i for i in items if i.item_id not in retain and
+                    (i.quality==0 or state.gear_scan_complete))
+            eligible = eligible_items(s)
             if not eligible:
                 break
             item = eligible[0]
@@ -178,8 +189,7 @@ def sell_at_verified_merchant(
             fresh = _capture_fresh(
                 capture, s, guard, sleep=sleep, now=now)
             if (not fresh.merchant_open or
-                    safe_sale_candidates(fresh, protected_item_ids=protected) !=
-                    eligible):
+                    eligible_items(fresh) != eligible):
                 raise LiveControlError(
                     'Merchant bag contents changed between sale verification frames')
             log(f'Selling verified non-quest item {item.item_id} '
@@ -259,6 +269,7 @@ def free_bag_space(
     *, profile: HordeProfile, profiles_root: str, pid: int,
     capture: Callable[[], ClientTelemetry], driver, nav, spawns,
     min_free_slots: int = 3,
+    raise_cash: bool = False,
     log: Callable[[str], None] = lambda _: None,
 ) -> VendorSaleReport | None:
     """Find a real local merchant, sell verified junk/gear, return to caller."""
@@ -267,7 +278,7 @@ def free_bag_space(
             initial.player.dead or initial.player.in_combat or
             initial.resources is None):
         raise LiveControlError('Cannot recover bags without safe player telemetry')
-    if initial.resources.free_bag_slots >= min_free_slots:
+    if not raise_cash and initial.resources.free_bag_slots >= min_free_slots:
         return None
     real_pid, world = verified_live_position(initial, pid=pid)
     if real_pid != pid:
@@ -281,8 +292,8 @@ def free_bag_space(
             'Full bags: no merchant named by Horde XML and verified in '
             'CreatureSpawns.db within 600 yards')
     target = options[0]
-    log(f'Bags low ({initial.resources.free_bag_slots} free); '
-        f'visiting profile merchant {target.name} ({target.entry}) '
+    reason=('Raising training cash' if raise_cash else f'Bags low ({initial.resources.free_bag_slots} free)')
+    log(f'{reason}; visiting profile merchant {target.name} ({target.entry}) '
         f'from {target.source}')
     visit_npc(npc_name=target.name, npc_id=target.entry,
               pid=pid, capture=capture, driver=driver,
@@ -291,4 +302,4 @@ def free_bag_space(
     return sell_at_verified_merchant(
         npc_name=target.name, npc_id=target.entry,
         profile=profile, capture=capture, driver=driver,
-        min_free_slots=min_free_slots, log=log)
+        min_free_slots=min_free_slots, protect_mage_gear=raise_cash, log=log)
