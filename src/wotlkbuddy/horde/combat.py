@@ -593,14 +593,19 @@ def hunt_kill_objectives(
                     t.entry_id != expected):
                 if s.player.in_combat:
                     return recover_encounter(s)
-                raise LiveControlError('Target GUID changed during combat; aborting')
+                raise UnhittableMobError(target_guid,'Target changed before verified kill')
             if t.dead or t.health == 0:
+                remember=getattr(driver,'remember_defeated',None)
+                if callable(remember):
+                    remember(s)
                 kills += 1
                 last_target = expected
                 log(f'Creature {expected} defeated; checking quest objective')
                 return s
             if t.fireball_in_range is not True:
-                raise LiveControlError('Enemy left Fireball range; combat pursuit unavailable')
+                if s.player.in_combat:
+                    return recover_encounter(s)
+                raise UnhittableMobError(target_guid,'Enemy moved out of Fireball range; reassess target')
             if s.resources.mana < 20:
                 raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
             previous_health = t.health
@@ -977,9 +982,26 @@ def hunt_kill_objectives(
             log(f'Loot incomplete: {s.loot_count} slots remain open')
         return s
 
+    def drain_travel_corpses(s):
+        pending=getattr(driver,'defeated_corpses',None)
+        if not isinstance(pending,dict) or s.player.in_combat:
+            return s
+        for corpse_guid,(entry,name) in list(pending.items())[:8]:
+            if s.player.in_combat:
+                break
+            if s.player.target_guid!=corpse_guid and name:
+                select=getattr(driver,'target_objective_name',None)
+                if callable(select) and select(name):
+                    s=fresh(s)
+            s=loot(s,None,corpse_guid,entry)
+            pending.pop(corpse_guid,None)
+        return s
+
     for iteration in range(max_kills * 6):
         s = capture()
         guard(s)
+        if not s.player.in_combat:
+            s=drain_travel_corpses(s)
         current_objective = (
             next_collect_objective(profile, s, quest_id,
                                    item_names=known_item_names)
@@ -1011,6 +1033,7 @@ def hunt_kill_objectives(
                 source.entry for source in spec.sources
                 if source.kind == 'mob' and 0 < source.entry < 2**24))
             if collect_items else (spec.entry,))
+        driver.active_quest_entries = allowed_sources
         if not allowed_sources:
             raise LiveControlError(
                 f'CollectItem {spec.entry} has no Mob source IDs in local '
@@ -1173,6 +1196,26 @@ def hunt_kill_objectives(
                     s.combat_target.entry_id == expected and
                     s.combat_target.attackable and not s.combat_target.dead and
                     s.combat_target.fireball_in_range is True):
+                assess=getattr(driver,'assess_pull',None)
+                if callable(assess):
+                    selected_guid=s.player.target_guid
+                    s,plan=assess(s,allowed_sources)
+                    if s.player.in_combat:
+                        s=clear_remaining_aggro(s)
+                        continue
+                    if plan is None or not plan.allowed:
+                        unhittable_guids.add(selected_guid)
+                        if corpse_xyz is not None:
+                            unhittable_positions.append(corpse_xyz)
+                        log('Avoiding linked encounter; selecting another quest target')
+                        if s.player.target_guid:
+                            driver.chat('/cleartarget')
+                            s=fresh(s)
+                        continue
+                    if (s.player.target_guid!=selected_guid or not s.combat_target or
+                            s.combat_target.fireball_in_range is not True):
+                        log('Target moved during encounter survey; reacquiring')
+                        continue
                 before = qlog(s)
                 before_text = tuple(o.description for o in before.objectives)
                 dead_guid = s.player.target_guid
@@ -1357,7 +1400,8 @@ def hunt_kill_objectives(
             # search other verified, navmesh-routed spawn candidates.
             height_failure = ('height/floor' in str(exc) or
                               'different heights/floors' in str(exc))
-            if not height_failure and 'Measured movement disagrees with client facing' not in str(exc):
+            unsafe_encounter=('Unsafe encounter:' in str(exc) or 'possible pack' in str(exc) or 'Possible pack' in str(exc))
+            if not height_failure and not unsafe_encounter and 'Measured movement disagrees with client facing' not in str(exc):
                 raise
             s = capture()
             guard(s)
@@ -1369,6 +1413,9 @@ def hunt_kill_objectives(
                     'Combat began during off-axis navigation; refusing alternate routing'
                 ) from exc
             recently_visited[key] = 2
+            if unsafe_encounter:
+                log(f'Unsafe pack near spawn {key}; choosing another quest route')
+                continue
             if height_failure:
                 log(f'Excluding wrong-floor spawn {key}; selecting another verified candidate')
                 continue
@@ -1386,6 +1433,7 @@ def hunt_kill_objectives(
         if s.player.in_combat:
             s = clear_remaining_aggro(s)
             continue
+        s=drain_travel_corpses(s)
         if reference_only:
             log(f'At source-labeled search area for creature {goal.entry}; '
                 'looking for live NPC by exact entry/GUID, '

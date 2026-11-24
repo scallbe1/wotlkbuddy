@@ -151,6 +151,10 @@ def defend_against_aggro(
                 break
             state = fresh(state, .30)
         new = state.combat_target
+        if state.player.target_guid==target_guid and new and new.dead:
+            remember=getattr(driver,'remember_defeated',None)
+            if callable(remember):
+                remember(state)
         if not state.player.in_combat:
             return state
         if (state.player.target_guid != target_guid or new is None

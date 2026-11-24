@@ -359,6 +359,12 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         state, capture=cap, driver=driver,
         player_position=lambda s: verified_live_position(s, pid=pid)[1],
         target_position=lambda s: verified_target_position(s, pid=pid), log=log)
+    from wotlkbuddy.horde.encounter import survey_pull
+    driver.assess_pull = lambda snapshot, entries=(): survey_pull(
+        initial=snapshot,capture=cap,driver=driver,
+        player_position=lambda s: verified_live_position(s,pid=pid)[1],
+        target_position=lambda s: verified_target_position(s,pid=pid),
+        quest_entries=entries,log=log)
     driver.scan_hostiles = lambda snapshot, where, ahead: scan_and_clear_hostiles(
         initial=snapshot, player_position=where, path_ahead=ahead,
         capture=cap, driver=driver,
