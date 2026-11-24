@@ -74,7 +74,30 @@ def accept_npc_offers(
             capture=capture, driver=driver, expected_guid=guid,
             sleep=sleep, now=now, log=log)
 
+    def remaining_profile_pickups(snapshot):
+        if profile is None:
+            return None  # Generic menu-only callers may still have offers.
+        active={q.quest_id for q in snapshot.quests}
+        done={qid for qid,complete in snapshot.quest_completions if complete} | set(confirmed_completed)
+        result=[]
+        for index,step in enumerate(profile.steps):
+            if (step.kind!='pickup' or not step.supported or step.entry!=npc_id or
+                    step.npc_name not in ('',npc_name) or step.quest_id<=0 or
+                    step.quest_id in active or step.quest_id in done):
+                continue
+            if any(prior.kind=='turnin' and prior.entry==npc_id and
+                   (prior.quest_id not in done or prior.quest_id in active)
+                   for prior in profile.steps[:index]):
+                continue
+            result.append(step.quest_id)
+        return result
+
     for _ in range(max_quests):
+        # A confirmed acceptance is useful progress even if the NPC has no
+        # more dialogue. Do not reopen a known exhausted profile giver.
+        if accepted and remaining_profile_pickups(state)==[]:
+            log(f'{npc_name}: all current profile pickups handled; resuming quest progression')
+            break
         opened_by_us = False
         verified_existing = (accept_existing_detail and not accepted and
                              matching_direct_offer(profile,state,npc_id,npc_name) is not None)
@@ -98,6 +121,11 @@ def accept_npc_offers(
                 if state.dialog is not None and state.dialog.kind != 'none':
                     break
             if state.dialog is None or state.dialog.kind == 'none':
+                if accepted and state.dialog is not None and state.dialog.kind=='none':
+                    # Fresh telemetry and exact NPC identity were verified by
+                    # fresh(). A silent NPC after success is not a failed pickup.
+                    log(f'{npc_name}: no further dialogue after {len(accepted)} confirmed pickup(s); continuing')
+                    break
                 raise LiveControlError(
                     f'{npc_name}: interaction opened no verifiable quest dialogue')
         if state.dialog.kind == 'detail' and (opened_by_us or verified_existing):
