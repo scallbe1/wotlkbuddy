@@ -124,7 +124,8 @@ class KeyboardQuestInput:
             '/wbtphase quests', '/wbtphase train', '/wbtphase gear',
             '/wbtphase vendor',
             '/wbttravel clear', '/wbttravel enemies',
-            '/wbttravel corpse', '/wbttravel firing',
+            '/wbttravel corpse', '/wbttravel firing', '/wbttravel deathrun',
+            '/run RepopMe()', '/run RetrieveCorpse()',
             '/cast Arcane Intellect',
             '/cast Frost Armor', '/cast Fireball', '/cast Frostbolt',
             '/cast Conjure Food', '/cast Conjure Water',
@@ -184,7 +185,7 @@ class KeyboardQuestInput:
         """
         if not getattr(self, 'native_hud_enabled', True):
             return
-        if kind in ('clear', 'enemies', 'corpse', 'firing'):
+        if kind in ('clear', 'enemies', 'corpse', 'firing', 'deathrun'):
             if target is not None:
                 raise ValueError('Fixed navigation status takes no target')
             self.chat('/wbttravel ' + kind)

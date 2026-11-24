@@ -271,6 +271,15 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     from wotlkbuddy.live.control import LiveControlError
     if args.only == 'continuous':
         return _horde_continuous(args)
+    if args.only == 'recover':
+        if not args.enable_input or not 2 <= args.countdown <= 20:
+            raise ValueError('Recovery requires armed input and 2..20s countdown')
+        print(f'Switch to WoW now; death recovery starts in {args.countdown:g}s.',
+              file=sys.stderr, flush=True)
+        time.sleep(args.countdown)
+        result = _recover_horde_death(args)
+        print(json.dumps(result, indent=2))
+        return result
     if not args.enable_input:
         raise ValueError('Post-quest input requires explicit --enable-input')
     if not 2 <= args.countdown <= 20:
@@ -700,6 +709,46 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     return report
 
 
+def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dict:
+    from wotlkbuddy.horde.death_recovery import recover_corpse
+    from wotlkbuddy.horde.interaction import KeyboardQuestInput
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.live.control import LiveControlError
+    from wotlkbuddy.live.world_position import verified_live_position
+    from wotlkbuddy.navigation.proxy import NavigationProxy
+    from pathlib import Path
+    cap = lambda: capture_monitor(args.monitor)
+    try:
+        first = cap()
+    except Exception:
+        if original_error is not None:
+            raise original_error
+        raise
+    if not first.player.dead or first.truncated:
+        if original_error is not None:
+            raise original_error
+        raise LiveControlError('Recovery requires complete dead-character telemetry')
+    if not args.nav_dll or not args.python32:
+        raise ValueError('Corpse recovery needs --nav-dll and --python32')
+    dll = Path(args.nav_dll).expanduser().resolve()
+    py32 = Path(args.python32).expanduser().resolve()
+    if not dll.is_file() or not (dll.parent / 'mmaps').is_dir() or not py32.is_file():
+        raise ValueError('Corpse recovery needs Navigation.dll, mmaps and x86 Python')
+    driver = KeyboardQuestInput(interact_key=args.interact_key)
+    driver.native_hud_enabled = not getattr(args, 'no_hud', False)
+    pid = getattr(args, 'pid', None)
+    def sample():
+        nonlocal pid
+        state = cap()
+        pid, pos = verified_live_position(state, pid=pid)
+        return state, pos
+    with NavigationProxy(py32, dll) as nav:
+        return recover_corpse(
+            sample=sample, driver=driver, nav=nav,
+            known_corpse=getattr(args, 'corpse_world', None),
+            log=lambda line: print(line, file=sys.stderr, flush=True))
+
+
 def _horde_continuous(args: argparse.Namespace) -> dict:
     """Run bounded profile stages until there is no verified next action.
 
@@ -721,6 +770,7 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
     accepted_ids = []
     reason = 'cycle_limit'
     train_level = -1
+    recoveries = 0
 
     def phase(mode: str) -> dict:
         child = argparse.Namespace(**vars(args))
@@ -733,7 +783,16 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
             break
         print(f'Continuous quest cycle {cycle+1}/{args.max_cycles}: '
               'refreshing journal and objectives', file=sys.stderr, flush=True)
-        report = phase('objectives')
+        try:
+            report = phase('objectives')
+        except LiveControlError as exc:
+            if recoveries >= 3:
+                raise
+            recovery = _recover_horde_death(args, original_error=exc)
+            recoveries += 1
+            steps.append({'cycle': cycle+1, 'action': 'death_recovery',
+                          'recovery': recovery})
+            continue
         completion = report.get('quest_turnin', {})
         if completion.get('status') in ('turned_in', 'already_turned_in'):
             quest_id = completion.get('quest_id')
@@ -776,7 +835,16 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
                 'unresolved_profile_objectives': objective.get(
                     'unresolved_profile_objectives', [])})
             break
-        offers = phase('quests')
+        try:
+            offers = phase('quests')
+        except LiveControlError as exc:
+            if recoveries >= 3:
+                raise
+            recovery = _recover_horde_death(args, original_error=exc)
+            recoveries += 1
+            steps.append({'cycle': cycle+1, 'action': 'death_recovery',
+                          'recovery': recovery})
+            continue
         newly_accepted = sorted({
             qid for ids in offers.get('accepted_quests', {}).values()
             for qid in ids if isinstance(qid, int) and qid > 0
@@ -1697,12 +1765,15 @@ def main(argv: list[str] | None = None) -> int:
     progression = sub.add_parser('horde-progress',
                        help='Attended gear upgrades, Deathknell quest offers and Mage trainer')
     progression.add_argument('--only', choices=['all','gear','quests','train','vendor',
-                                                'objectives','collect','objects','turnin','continuous'],
+                                                'objectives','collect','objects','turnin','continuous','recover'],
                              default='all')
     progression.add_argument('--profiles-root',
                              help='Horde quest profile root (defaults to ~/Questing-profiles)')
     progression.add_argument('--nav-dll', help='Navigation.dll + adjacent mmaps')
     progression.add_argument('--python32', help='Python 32-bit for nav worker')
+    progression.add_argument('--corpse-world', nargs=4, type=float,
+                             metavar=('MAP', 'X', 'Y', 'Z'),
+                             help='Verified server corpse world coordinates for an already released ghost')
     progression.add_argument('--spawns-db')
     progression.add_argument('--interact-key', choices=['f','g'], default='f')
     progression.add_argument('--enable-input', action='store_true')

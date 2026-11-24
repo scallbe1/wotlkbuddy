@@ -96,6 +96,13 @@ class PlayerRecord:
 
 
 @dataclass(frozen=True)
+class DeathState:
+    ghost: bool
+    release_ready: bool
+    retrieve_ready: bool
+
+
+@dataclass(frozen=True)
 class PlayerResources:
     """Optional v3-extension resource record (old addon frames lack this)."""
     mana: int
@@ -361,6 +368,7 @@ class ClientTelemetry:
     fireball_cast_remaining_ms: int | None = None
     mouse_world_name: str | None = None
     spell_targeting: bool | None = None
+    death_state: DeathState | None = None
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -369,6 +377,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     quests: dict[int, QuestRecord] = {}
     obj: dict[int, list[QuestObjective]] = {}
     truncated = False
+    death_state = None
     resources = None
     dialog = None
     completion_states: dict[int, bool] = {}
@@ -434,6 +443,11 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 )
             except ValueError as exc:
                 raise TelemetryError('Malformed player record') from exc
+        elif parts[0] == 'DS':
+            if (len(parts) != 4 or death_state is not None or
+                    any(value not in ('0', '1') for value in parts[1:])):
+                raise TelemetryError('Malformed or duplicate death state')
+            death_state = DeathState(*(value == '1' for value in parts[1:]))
         elif parts[0] == 'Q':
             if len(parts) != 5:
                 raise TelemetryError('Malformed quest record')
@@ -949,6 +963,12 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             raise TelemetryError('Unexpected record type: ' + parts[0])
     if player is None:
         raise TelemetryError('Missing player record')
+    if death_state is not None and (
+            (not player.dead and (death_state.ghost or death_state.release_ready or
+                                  death_state.retrieve_ready)) or
+            (death_state.ghost and death_state.release_ready) or
+            (not death_state.ghost and death_state.retrieve_ready)):
+        raise TelemetryError('Death state contradicts player state')
     if spellbook_diagnostic is not None and (
             (spellbook_diagnostic.status == 'OK') !=
             (spellbook_probe is not None) or
@@ -1093,4 +1113,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            fireball_key=fireball_key,
                            fireball_cast_remaining_ms=fireball_cast_remaining_ms,
                            mouse_world_name=mouse_world_name,
-                           spell_targeting=spell_targeting)
+                           spell_targeting=spell_targeting,
+                           death_state=death_state)
