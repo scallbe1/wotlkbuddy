@@ -596,7 +596,9 @@ local function tickData()
     end
     appendLine(table.concat({'T', tostring(targetEntry), tostring(targetHealth),
         tostring(targetMax), tostring(targetDead), tostring(canAttack),
-        tostring(targetRange), attackingPlayer, tostring(reaction)}, '\t'))
+        tostring(targetRange), attackingPlayer, tostring(reaction),
+        tostring(UnitExists('target') and UnitLevel('target') or 0),
+        tostring(UnitExists('target') and UnitClassification('target') or '')}, '\t'))
     local function known(spellId)
         if not IsSpellKnown then return -1 end
         local ok, value = pcall(IsSpellKnown, spellId)

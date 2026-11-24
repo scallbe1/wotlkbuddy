@@ -359,13 +359,22 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         state, capture=cap, driver=driver,
         player_position=lambda s: verified_live_position(s, pid=pid)[1],
         target_position=lambda s: verified_target_position(s, pid=pid), log=log)
+    from wotlkbuddy.horde.encounter import survey_pull
+    driver.assess_pull = lambda snapshot, entries=(): survey_pull(
+        initial=snapshot,capture=cap,driver=driver,
+        player_position=lambda s: verified_live_position(s,pid=pid)[1],
+        target_position=lambda s: verified_target_position(s,pid=pid),
+        quest_entries=entries,log=log)
     driver.scan_hostiles = lambda snapshot, where, ahead: scan_and_clear_hostiles(
         initial=snapshot, player_position=where, path_ahead=ahead,
         capture=cap, driver=driver,
         target_position=lambda s: verified_target_position(s, pid=pid),
         log=log, detection_yards=args.scan_yards,
         direct_path_clear=getattr(driver, 'direct_path_clear', None))
-    maintain_mage_supplies(capture=cap, driver=driver, log=log)
+    needs_recovery = (first.player.health/max(1,first.player.max_health)<.70 or
+                      first.resources.mana/max(1,first.resources.max_mana)<.45)
+    if not needs_recovery or args.only not in ('all','quests','train','vendor','objectives','collect','objects','turnin'):
+        maintain_mage_supplies(capture=cap, driver=driver, log=log)
 
     def set_native_status(phase: str, quest_id: int = 0) -> None:
         if args.no_hud:
@@ -421,6 +430,13 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 if live_pid != pid:
                     raise LiveControlError('WoW PID changed between NPC actions')
                 return state, coords
+
+            if needs_recovery:
+                from wotlkbuddy.horde.recovery_rest import recover_and_buff
+                from wotlkbuddy.live.world_position import verified_nearby_creatures
+                log('Low resources at startup; recovering at safer terrain before quest work')
+                recover_and_buff(initial=cap(),sample=location,driver=driver,nav=nav,
+                    read_hazards=lambda s,center: verified_nearby_creatures(s,pid=pid,center=center),log=log)
 
             def ensure_reward_bag_space():
                 state, _ = location()
@@ -745,6 +761,11 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
     from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
     from wotlkbuddy.horde.defense import defend_against_aggro
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
+    from wotlkbuddy.horde.resurrection_site import nearby_threats, plan_rest_site
+    from wotlkbuddy.horde.ghost_scout import GhostScout
+    from wotlkbuddy.live.world_travel import follow_world_path
+    from wotlkbuddy.horde.ranged_pull import face_target_in_place
+    from wotlkbuddy.live.world_position import verified_target_position
     from wotlkbuddy.navigation.proxy import NavigationProxy
     from pathlib import Path
     cap = lambda: capture_monitor(args.monitor)
@@ -774,30 +795,33 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
         return state, pos
     log = lambda line: print(line, file=sys.stderr, flush=True)
 
-    def restore(state):
-        guid = state.player.guid
-        for attempt in range(40):
-            if (state.truncated or state.player.dead or state.player.guid != guid or
-                    state.resources is None or driver.emergency_stop_requested() or
-                    not driver.wow_is_foreground()):
-                raise LiveControlError('Post-resurrection recovery interrupted')
-            if state.player.in_combat:
-                state = defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
-            elif (state.player.health/max(1,state.player.max_health) >= .90 and
-                  state.resources.mana/max(1,state.resources.max_mana) >= .85):
-                log('Resurrection recovery complete: health and mana restored before questing')
-                return state
-            elif attempt == 0:
-                state = maintain_mage_supplies(capture=cap,driver=driver,log=log)
-            else:
-                time.sleep(2)
-                state = cap()
-        raise LiveControlError('Post-resurrection resources not restored; holding position')
+    from wotlkbuddy.horde.recovery_rest import recover_and_buff
+    retreat_hints = []
 
+    def prepare_retreat(state,where,breadcrumbs):
+        retreat_hints.extend(breadcrumbs)
+        path = plan_rest_site(nav,where.map_id,where.position,hazards(state,where.position),
+                             route_hints=retreat_hints)
+        if path:
+            retreat_hints.extend(path)
+            log(f'Pre-reclaim retreat planned: {where.position.distance_to(path[-1]):.1f}y to safer terrain')
+        else:
+            log('No pre-reclaim retreat confirmed; will reassess immediately after resurrection')
+
+    def restore(state):
+        driver.face_combat_target = lambda s: face_target_in_place(
+            s,capture=cap,driver=driver,
+            player_position=lambda s: verified_live_position(s,pid=pid)[1],
+            target_position=lambda s: verified_target_position(s,pid=pid),log=log)
+        return recover_and_buff(initial=state,sample=sample,driver=driver,nav=nav,
+                                read_hazards=hazards,route_hints=retreat_hints,log=log)
+
+    scout = GhostScout(sample=sample,driver=driver,log=log)
     with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, NavigationProxy(py32, dll) as nav:
         def hazards(state, corpse):
             _, where = verified_live_position(state,pid=pid)
-            return verified_nearby_creatures(state,pid=pid,center=corpse)
+            return verified_nearby_creatures(state,pid=pid,center=corpse,
+                ignored_guids=scout.ignored_guids())
 
         def spawn_hints(state, corpse):
             _, where = verified_live_position(state,pid=pid)
@@ -807,7 +831,8 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
             sample=sample, driver=driver, nav=nav,
             known_corpse=getattr(args, 'corpse_world', None),
             read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav),
-            read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore, log=log)
+            read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore,
+            scout_surroundings=scout.survey, prepare_retreat=prepare_retreat, log=log)
 
 
 def _horde_continuous(args: argparse.Namespace) -> dict:

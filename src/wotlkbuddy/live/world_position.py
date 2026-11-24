@@ -215,12 +215,14 @@ def verified_target_position(snapshot: ClientTelemetry, *, pid: int) -> Vec3:
 
 
 def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
-                             center: Vec3, radius: float = 80) -> tuple[Vec3, ...]:
+                             center: Vec3, radius: float = 80,
+                             ignored_guids=()) -> tuple[Vec3, ...]:
     """Read creature positions from the existing verified object manager.
 
-    Ghost visibility may be incomplete; treat every visible creature as a
-    potential hazard, not as proven hostile or alive. Supplement with local
-    spawn data. No new memory offsets, writes or corpse-memory lookup.
+    Ghost visibility may be incomplete. Exclude descriptor-confirmed dead
+    units and same-faction-template units; other living/unknown creatures
+    remain potential hazards. Descriptor indices from CopilotBuddy's
+    WoWObject.cs and WoWUnitFields.cs (3.3.5a x86). No writes.
     """
     own = parse_unit_guid(expected_guid)
     origin = observe_world_position(memory, expected_guid=expected_guid)
@@ -229,30 +231,51 @@ def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
     current = memory.read_u32(manager + FIRST_OBJECT_OFFSET)
     seen = set()
     positions = []
+    own_faction = None
+    creatures = []
     while current and not current & 1:
         if current in seen or len(seen) >= MAX_OBJECTS or not 0x10000 <= current < 0xFFFF0000:
             raise WorldPositionError('Corrupt creature object list')
         seen.add(current)
         object_guid = _u64(memory, current + OBJECT_GUID_OFFSET)
-        if object_guid >> 48 == 0xF130:
+        if object_guid == own:
+            descriptor = memory.read_u32(current+0x08)
+            if 0x10000 <= descriptor < 0xFFFF0000:
+                if _u64(memory,descriptor)==own:
+                    own_faction = memory.read_u32(descriptor+4*0x37)
+        if object_guid >> 48 == 0xF130 and object_guid not in ignored_guids:
             xyz = tuple(memory.read_f32(current + WORLD_POSITION_OFFSET + 4*i)
                         for i in range(3))
             if all(isfinite(v) and abs(v) <= 100000 for v in xyz):
                 point = Vec3(*xyz)
                 if point.distance_to(center) <= radius:
-                    positions.append(point)
+                    # Verify descriptor GUID before interpreting health/faction.
+                    # Unknown descriptors stay conservative rather than disappearing.
+                    hp, faction = None, None
+                    try:
+                        descriptor = memory.read_u32(current+0x08)
+                        if (0x10000 <= descriptor < 0xFFFF0000 and
+                                _u64(memory,descriptor)==object_guid):
+                            hp = memory.read_u32(descriptor+4*0x18)
+                            faction = memory.read_u32(descriptor+4*0x37)
+                    except (OSError,ValueError,WorldPositionError):
+                        pass
+                    creatures.append((point,hp,faction))
         current = memory.read_u32(current + NEXT_OBJECT_OFFSET)
     if (_u64(memory, manager + LOCAL_GUID_OFFSET) != own or
             memory.read_u32(WORLD_MAP_ID_ADDRESS) != origin.map_id):
         raise WorldPositionError('Character or map changed during creature scan')
-    return tuple(positions)
+    return tuple(point for point,hp,faction in creatures
+                 if hp != 0 and not (own_faction and faction==own_faction))
 
 
 def verified_nearby_creatures(snapshot: ClientTelemetry, *, pid: int,
-                              center: Vec3, radius: float = 80) -> tuple[Vec3, ...]:
+                              center: Vec3, radius: float = 80,
+                              ignored_guids=()) -> tuple[Vec3, ...]:
     from wotlkbuddy.game.win32 import ProcessMemory
     if snapshot.truncated or not snapshot.player.guid:
         raise WorldPositionError('Verified character required for creature scan')
     with ProcessMemory(pid, writable=False) as memory:
         return observe_nearby_creatures(memory, expected_guid=snapshot.player.guid,
-                                        center=center, radius=radius)
+                                        center=center, radius=radius,
+                                        ignored_guids=ignored_guids)

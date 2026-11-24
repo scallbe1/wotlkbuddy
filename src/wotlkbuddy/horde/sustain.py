@@ -18,6 +18,7 @@ def maintain_mage_supplies(
     log: Callable[[str], None] = lambda _: None,
     sleep: Callable[[float], None] = real_sleep,
     reserve: int = 4, max_conjures: int = 2,
+    health_goal: float = .70, mana_goal: float = .45,
 ) -> ClientTelemetry:
     """Restock and drink/eat with bounded input, after live identity checks.
 
@@ -100,7 +101,7 @@ def maintain_mage_supplies(
             log(f'Conjured {kind}: {previous}->{newer}')
             casts += 1
 
-    for kind, low_mark in (('water', .45), ('food', .70)):
+    for kind, low_mark in (('water', mana_goal), ('food', health_goal)):
         state = capture()
         guard(state)
         ratio = ((state.resources.mana/max(1,state.resources.max_mana))
@@ -133,7 +134,7 @@ def maintain_mage_supplies(
             now_ratio = ((after.resources.mana/max(1,after.resources.max_mana))
                          if kind == 'water' else
                          after.player.health/max(1,after.player.max_health))
-            if now_ratio >= .85 or now_ratio >= previous + .20:
+            if now_ratio >= max(.85,low_mark) or (low_mark<=.70 and now_ratio >= previous + .20):
                 break
             after = fresh(after, 1.6)
         log(f'Finished {kind} regeneration observation')

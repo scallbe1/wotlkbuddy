@@ -66,6 +66,9 @@ def scan_and_clear_hostiles(
             player_position.player_guid.lower()!=guid.lower()):
         raise LiveControlError('Verified Mage/player position required for threat scan')
     if initial.player.in_combat:
+        callback=getattr(driver,'on_aggro',None)
+        if callable(callback):
+            return callback(initial)
         return defend_against_aggro(
             initial=initial,capture=capture,driver=driver,
             log=log,sleep=sleep)
@@ -89,6 +92,12 @@ def scan_and_clear_hostiles(
             sleep(.08)
         raise LiveControlError('Nearby threat scan telemetry stalled')
 
+    def defend(state):
+        callback=getattr(driver,'on_aggro',None)
+        if callable(callback):
+            return callback(state)
+        return defend_against_aggro(initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
+
     state=initial
     guard(state)
     if state.player.health/max(1,state.player.max_health)<.30:
@@ -105,8 +114,7 @@ def scan_and_clear_hostiles(
     blocked_nearby = []
     for _ in range(max_targets):
         if state.player.in_combat:
-            return defend_against_aggro(
-                initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
+            return defend(state)
         driver.chat('/targetenemy')
         state=fresh(state)
         target=state.combat_target
@@ -170,7 +178,7 @@ def scan_and_clear_hostiles(
         return state
 
     if state.player.in_combat:
-        return defend_against_aggro(initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
+        return defend(state)
     if state.player.health/max(1,state.player.max_health)<.30:
         raise LiveControlError('Low health before proactive pull; rest before advancing')
     if state.resources.mana < 20:
@@ -184,9 +192,7 @@ def scan_and_clear_hostiles(
             driver.chat('/targetenemy')
             state=fresh(state)
             if state.player.in_combat:
-                return defend_against_aggro(
-                    initial=state,capture=capture,driver=driver,
-                    log=log,sleep=sleep)
+                return defend(state)
             if state.player.target_guid==chosen_guid:
                 break
         else:
@@ -208,9 +214,7 @@ def scan_and_clear_hostiles(
         log(f'Scanned hostile {chosen_guid} moved outside the verified '
             'travel corridor; deferring pull and continuing Detour')
         if state.player.in_combat:
-            return defend_against_aggro(
-                initial=state, capture=capture, driver=driver,
-                log=log, sleep=sleep)
+            return defend(state)
         if state.player.target_guid:
             driver.chat('/cleartarget')
             state=fresh(state)
@@ -242,13 +246,24 @@ def scan_and_clear_hostiles(
         state = face(state)
         guard(state)
         if state.player.in_combat:
-            return defend_against_aggro(initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
+            return defend(state)
         target = state.combat_target
         if (state.player.target_guid != chosen_guid or not target or target.dead or
                 target.entry_id != chosen_entry or not target.attackable or
                 target.reaction is None or not 1 <= target.reaction <= 3 or
                 target.fireball_in_range is not True):
             raise LiveControlError('Target changed while turning for ranged pull')
+    assess=getattr(driver,'assess_pull',None)
+    if callable(assess):
+        state,plan=assess(state,getattr(driver,'active_quest_entries',()))
+        if state.player.in_combat:
+            return defend(state)
+        if plan is None or not plan.allowed:
+            raise LiveControlError('Unsafe encounter: '+(plan.reason if plan else 'assessment interrupted'))
+        target=state.combat_target
+        if (state.player.target_guid!=chosen_guid or not target or target.dead or
+                target.fireball_in_range is not True):
+            raise LiveControlError('Unsafe encounter: target moved during assessment')
     before_hp=target.health
     before_quests = state.quests
     from wotlkbuddy.combat.runtime import selected_action
@@ -293,9 +308,7 @@ def scan_and_clear_hostiles(
     lost_target = False
     for _ in range(4):
         if state.player.in_combat:
-            return defend_against_aggro(
-                initial=state, capture=capture, driver=driver,
-                log=log, sleep=sleep)
+            return defend(state)
         if state.player.target_guid != chosen_guid:
             lost_target = True
             break
@@ -304,8 +317,7 @@ def scan_and_clear_hostiles(
             break
         state = fresh(state, .65)
     if state.player.in_combat:
-        return defend_against_aggro(
-            initial=state, capture=capture, driver=driver, log=log, sleep=sleep)
+        return defend(state)
     target = state.combat_target
     if credited(before_quests, state.quests):
         log(f'Live kill-objective credit advanced after preemptive '
@@ -317,6 +329,9 @@ def scan_and_clear_hostiles(
     if (state.player.target_guid == chosen_guid and target and
             (target.dead or target.health == 0)):
         log(f'Preemptive hostile {chosen_entry} defeated before entering combat')
+        remember=getattr(driver,'remember_defeated',None)
+        if callable(remember):
+            remember(state)
         return state
     if state.player.target_guid == chosen_guid and target and (
             target.health < before_hp):
@@ -334,8 +349,6 @@ def scan_and_clear_hostiles(
         driver.chat('/cleartarget')
         state = fresh(state)
     if state.player.in_combat:
-        return defend_against_aggro(
-            initial=state, capture=capture, driver=driver,
-            log=log, sleep=sleep)
+        return defend(state)
     return state
 
