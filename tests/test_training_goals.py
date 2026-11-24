@@ -23,3 +23,10 @@ def test_level6_vs_5_3_3_pack_uses_combined_strength():
     assert assess_encounter(p,r,Vec3(0,0,0),a,(a,b,c),(1667,)).allowed
     p.health=40
     assert not assess_encounter(p,r,Vec3(0,0,0),a,(a,b,c),(1667,)).allowed
+
+
+def test_empty_training_record_refreshes_after_significant_cash_gain():
+    g=TrainingGoal(6,61,8,(),'Isabella',2124,0,(1,2,3),1)
+    assert not g.due(6,61,8)
+    assert not g.due(6,155,8)
+    assert g.due(6,235,5)

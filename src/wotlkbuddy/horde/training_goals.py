@@ -30,7 +30,10 @@ class TrainingGoal:
         if level!=self.level:
             return True
         if not self.pending:
-            return False
+            # A filtered trainer list can falsely appear exhausted after a
+            # purchase. Recheck when funds have materially increased since
+            # the last actual inspection (one low-level rank's worth).
+            return cash-self.cash>=95
         # Retry when one known rank is affordable, or new loot has occupied
         # at least two more slots since the last vendor/trainer visit.
         if cash>=self.next_cost:

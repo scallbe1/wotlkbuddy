@@ -316,3 +316,17 @@ class PostquestTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
+
+def test_explicit_self_cast_keyboard_punctuation():
+    d=KeyboardQuestInput.__new__(KeyboardQuestInput)
+    taps=[]
+    d._tap=lambda code,shifted=False,**kw:taps.append((code,shifted))
+    d.chat('/cast [target=player] Arcane Intellect')
+    assert taps[0]==taps[-1]==(0x1c,False)
+    assert (0x1a,False) in taps and (0x1b,False) in taps and (0x0d,False) in taps
+    taps.clear()
+    import pytest
+    with pytest.raises(ValueError):
+        d.chat('/cast [target=party1] Arcane Intellect')
+    assert not taps
