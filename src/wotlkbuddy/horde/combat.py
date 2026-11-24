@@ -242,8 +242,7 @@ def hunt_kill_objectives(
         if (s.truncated or s.player.guid != guid or s.player.dead or
                 s.resources is None or s.combat_target is None or s.mage_buffs is None):
             raise LiveControlError('Character/telemetry changed or died during combat')
-        if s.player.max_health and s.player.health/s.player.max_health < .25:
-            raise LiveControlError('Mage health below 25%; cannot safely continue fight')
+        # Do not abandon an active fight at arbitrary HP. Rest gates new pulls.
 
     def fresh(before: ClientTelemetry, delay: float = 0.15) -> ClientTelemetry:
         guard(before)
@@ -275,10 +274,12 @@ def hunt_kill_objectives(
         if s.resources is None:
             return s
         until = min(started+max_seconds, now()+40)
-        while now() < until and (s.player.health/s.player.max_health < .70 or
+        while not s.player.in_combat and now() < until and (s.player.health/s.player.max_health < .70 or
                                  s.resources.mana/max(1,s.resources.max_mana) < .45):
             log('Resting for natural health/mana regeneration')
             s = fresh(s, 3)
+        if s.player.in_combat:
+            return s
         if s.player.health/s.player.max_health < .70 or \
                 s.resources.mana/max(1,s.resources.max_mana) < .45:
             raise LiveControlError('Health/mana did not recover within 40 seconds')
@@ -345,7 +346,7 @@ def hunt_kill_objectives(
                             progress=log, on_aggro=getattr(driver, 'on_aggro', None),
                             on_threat=getattr(driver, 'scan_hostiles', None),
                             waypoint_spacing=18.0, continuous_forward=True,
-                            threat_check_yards=14.0))
+                            threat_check_yards=6.0))
             out = fresh(s)
             if report.stopped_reason == 'complete':
                 return out
@@ -554,6 +555,10 @@ def hunt_kill_objectives(
             raise LiveControlError('Fireball range not confirmed; move closer before attacking')
         target_guid = s.player.target_guid
         log(f'Engaging verified creature entry {expected}, GUID {target_guid}')
+        face = getattr(driver, 'face_combat_target', None)
+        if callable(face):
+            s = face(s)
+            guard(s)
         def recover_encounter(snapshot: ClientTelemetry) -> ClientTelemetry:
             nonlocal kills, last_target
             snapshot = clear_remaining_aggro(snapshot)

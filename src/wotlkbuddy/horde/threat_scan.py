@@ -76,8 +76,7 @@ def scan_and_clear_hostiles(
                 driver.emergency_stop_requested() or
                 not driver.wow_is_foreground()):
             raise LiveControlError('Threat scan interrupted by lost focus or player identity')
-        if snapshot.player.health/max(1,snapshot.player.max_health)<.30:
-            raise LiveControlError('Mage below 30% health near hostiles')
+        # An active encounter always takes priority over the pre-pull HP gate.
 
     def fresh(before: ClientTelemetry, delay: float=.15):
         guard(before)
@@ -92,6 +91,8 @@ def scan_and_clear_hostiles(
 
     state=initial
     guard(state)
+    if state.player.health/max(1,state.player.max_health)<.30:
+        raise LiveControlError('Mage below 30% health out of combat; rest before advancing')
     blocked = getattr(driver, 'blocked_combat_guids', None)
     if blocked is None:
         blocked = set()
@@ -101,6 +102,7 @@ def scan_and_clear_hostiles(
     # measured position must corroborate it. Keep no guessed NPC name list.
     seen: set[str]=set()
     candidates: list[tuple[float,str,int]]=[]
+    blocked_nearby = []
     for _ in range(max_targets):
         if state.player.in_combat:
             return defend_against_aggro(
@@ -140,8 +142,9 @@ def scan_and_clear_hostiles(
         if direct_path_clear is not None:
             try:
                 if not direct_path_clear(player_position.position, position):
-                    log(f'Hostile {current_guid} is behind non-traversable cave '
-                        'geometry; following Detour instead of preemptive cast')
+                    blocked_nearby.append((distance, current_guid))
+                    log(f'Hostile {current_guid}: direct ranged approach not clear; '
+                        'checking other visible enemies before advancing')
                     continue
             except (OSError, RuntimeError, ValueError, TimeoutError,
                     LiveControlError) as exc:
@@ -157,6 +160,8 @@ def scan_and_clear_hostiles(
             f'{detection_yards:g}y of travel corridor; possible pack, '
             'stopping before pulling into group')
     if not candidates:
+        if sum(distance <= 18 for distance, _ in blocked_nearby) >= 2:
+            raise LiveControlError('Possible pack behind cave bend; holding position rather than walking into multiple hostiles')
         # Restore a neutral target state, so subsequent quest drivers always
         # reacquire their own exact GUID. The scan never attacks a neutral mob.
         if state.player.target_guid:
@@ -164,6 +169,10 @@ def scan_and_clear_hostiles(
             state=fresh(state)
         return state
 
+    if state.player.in_combat:
+        return defend_against_aggro(initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
+    if state.player.health/max(1,state.player.max_health)<.30:
+        raise LiveControlError('Low health before proactive pull; rest before advancing')
     if state.resources.mana < 20:
         # Only require combat mana if there is a detected red mob ahead.
         raise LiveControlError('Mage lacks minimum mana to clear hostile travel path')
@@ -228,6 +237,18 @@ def scan_and_clear_hostiles(
     log(f'Preemptive hostile {chosen_entry}, GUID {chosen_guid}, '
         f'{measured:.1f}y from player in Detour corridor; '
         'engaging before walking into aggro range')
+    face = getattr(driver, 'face_combat_target', None)
+    if callable(face):
+        state = face(state)
+        guard(state)
+        if state.player.in_combat:
+            return defend_against_aggro(initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
+        target = state.combat_target
+        if (state.player.target_guid != chosen_guid or not target or target.dead or
+                target.entry_id != chosen_entry or not target.attackable or
+                target.reaction is None or not 1 <= target.reaction <= 3 or
+                target.fireball_in_range is not True):
+            raise LiveControlError('Target changed while turning for ranged pull')
     before_hp=target.health
     before_quests = state.quests
     from wotlkbuddy.combat.runtime import selected_action

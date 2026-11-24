@@ -440,11 +440,12 @@ def follow_world_path(
                     key = 'turn-right' if delta * right_sign > 0 else 'turn-left'
                     pulse(key, duration)
                     turns += 1
-                    current, world = checked()
-                    delta_actual = _angle(world.facing_rad - before.facing_rad)
+                    released = sample()
+                    current, world = checked(observation=released)
+                    delta_actual = _angle(released[1].facing_rad - before.facing_rad)
                     if abs(delta_actual) < 0.035 or delta_actual * delta < -0.025:
                         raise LiveControlError('Turn key did not rotate toward waypoint')
-                    if _distance_xy(before.position, world.position) > 2:
+                    if _distance_xy(before.position, released[1].position) > 2:
                         raise LiveControlError('Unexpected player displacement during turn')
                 else:
                     # Smooth, distance-dependent forward holds reduce the
@@ -458,7 +459,7 @@ def follow_world_path(
                     # 8 yards/s and stop with a safety margin; this does NOT
                     # assume the player will move exactly that far.
                     forward_duration = min(
-                        1.20 if continuous_forward else 0.45,
+                        (0.60 if on_threat is not None else 1.20) if continuous_forward else 0.45,
                         max(0.10 if ghost_only else 0.18,
                              0.75*(dxy-arrival_yards)/(11.0 if ghost_only else 8.0)))
                     held = pulse('forward', forward_duration)

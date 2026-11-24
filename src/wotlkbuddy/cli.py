@@ -307,8 +307,29 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     driver = KeyboardQuestInput(interact_key=args.interact_key)
     driver.native_hud_enabled = not args.no_hud
     from wotlkbuddy.horde.defense import defend_against_aggro
-    driver.on_aggro = lambda snapshot: defend_against_aggro(
-        initial=snapshot, capture=cap, driver=driver, log=log)
+    def resolve_aggro(snapshot):
+        from wotlkbuddy.horde.sustain import maintain_mage_supplies
+        state = defend_against_aggro(initial=snapshot, capture=cap, driver=driver, log=log)
+        # No new pull or travel at critical HP after surviving an encounter.
+        if not state.player.in_combat and (state.player.health/max(1,state.player.max_health) < .70 or
+                state.resources.mana/max(1,state.resources.max_mana) < .45):
+            log('Combat cleared; restoring health and mana before movement')
+            state = maintain_mage_supplies(capture=cap, driver=driver, log=log)
+            for _ in range(30):
+                if state.player.dead or state.truncated or state.player.guid != snapshot.player.guid:
+                    raise LiveControlError('Character changed during post-combat recovery')
+                if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+                    raise LiveControlError('Post-combat recovery interrupted')
+                if state.player.in_combat:
+                    return defend_against_aggro(initial=state, capture=cap, driver=driver, log=log)
+                if (state.player.health/max(1,state.player.max_health) >= .70 and
+                        state.resources.mana/max(1,state.resources.max_mana) >= .45):
+                    return state
+                time.sleep(2)
+                state = cap()
+            raise LiveControlError('Combat survived but health/mana did not recover; holding position')
+        return state
+    driver.on_aggro = resolve_aggro
     if first.player.in_combat:
         first = driver.on_aggro(first)
     if first.player.in_combat:
@@ -333,6 +354,11 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
     from wotlkbuddy.live.world_position import verified_target_position
+    from wotlkbuddy.horde.ranged_pull import face_target_in_place, ranged_approach_clear
+    driver.face_combat_target = lambda state: face_target_in_place(
+        state, capture=cap, driver=driver,
+        player_position=lambda s: verified_live_position(s, pid=pid)[1],
+        target_position=lambda s: verified_target_position(s, pid=pid), log=log)
     driver.scan_hostiles = lambda snapshot, where, ahead: scan_and_clear_hostiles(
         initial=snapshot, player_position=where, path_ahead=ahead,
         capture=cap, driver=driver,
@@ -387,7 +413,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
             # signal, not proof of spell line-of-sight. Do not preemptively
             # pull enemies through non-traversable rock.
             driver.direct_path_clear = (
-                lambda start, end: nav.segment_clear(world.map_id, start, end))
+                lambda start, end: ranged_approach_clear(nav, world.map_id, start, end))
 
             def location():
                 state = cap()
