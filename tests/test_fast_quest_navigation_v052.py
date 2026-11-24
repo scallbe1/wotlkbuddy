@@ -82,14 +82,19 @@ class ContinuousGame(SimGame):
         if code in self.down_at:
             self.holds.append((code,self.time-self.down_at.pop(code)))
         super().key_up(code)
+    def sleep(self, seconds):
+        super().sleep(seconds)
+        if (self.become_aggro_at is not None and
+                self.x >= self.become_aggro_at):
+            self.combat = True
+
     def sample(self):
         key=self.key
         if key == _MOVEMENT_SCANCODES['forward']:
             self.samples_while_w+=1
-            if self.become_aggro_at is not None and self.x>=self.become_aggro_at:
-                self.combat=True
-        # Existing simulation forbids sampling while W down; this variant
-        # supports the read-only midway observations used in the live client.
+        # Preserve a counter for forbidden captures while W is down.
+        # Real live reads can block for .12s or longer; they must happen
+        # after release so capture latency never causes extra movement.
         self.key=None
         try:
             return super().sample()
@@ -117,7 +122,8 @@ class FastTravelTests(unittest.TestCase):
                  if code==_MOVEMENT_SCANCODES['forward']]
         self.assertTrue(any(duration>.75 for duration in forward),forward)
         self.assertLess(len(forward),20)
-        self.assertGreater(game.samples_while_w,0)
+        self.assertEqual(game.samples_while_w,0,
+                         'Never sample while W is held; capture latency would cause movement')
         self.assertIsNone(game.key)
 
     def test_fewer_corridor_scans_on_long_travel(self):
