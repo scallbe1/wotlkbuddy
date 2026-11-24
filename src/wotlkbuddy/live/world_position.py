@@ -215,7 +215,8 @@ def verified_target_position(snapshot: ClientTelemetry, *, pid: int) -> Vec3:
 
 
 def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
-                             center: Vec3, radius: float = 80) -> tuple[Vec3, ...]:
+                             center: Vec3, radius: float = 80,
+                             ignored_guids=()) -> tuple[Vec3, ...]:
     """Read creature positions from the existing verified object manager.
 
     Ghost visibility may be incomplete. Exclude descriptor-confirmed dead
@@ -242,7 +243,7 @@ def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
             if 0x10000 <= descriptor < 0xFFFF0000:
                 if _u64(memory,descriptor)==own:
                     own_faction = memory.read_u32(descriptor+4*0x37)
-        if object_guid >> 48 == 0xF130:
+        if object_guid >> 48 == 0xF130 and object_guid not in ignored_guids:
             xyz = tuple(memory.read_f32(current + WORLD_POSITION_OFFSET + 4*i)
                         for i in range(3))
             if all(isfinite(v) and abs(v) <= 100000 for v in xyz):
@@ -269,10 +270,12 @@ def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
 
 
 def verified_nearby_creatures(snapshot: ClientTelemetry, *, pid: int,
-                              center: Vec3, radius: float = 80) -> tuple[Vec3, ...]:
+                              center: Vec3, radius: float = 80,
+                              ignored_guids=()) -> tuple[Vec3, ...]:
     from wotlkbuddy.game.win32 import ProcessMemory
     if snapshot.truncated or not snapshot.player.guid:
         raise WorldPositionError('Verified character required for creature scan')
     with ProcessMemory(pid, writable=False) as memory:
         return observe_nearby_creatures(memory, expected_guid=snapshot.player.guid,
-                                        center=center, radius=radius)
+                                        center=center, radius=radius,
+                                        ignored_guids=ignored_guids)

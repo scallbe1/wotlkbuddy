@@ -746,6 +746,7 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
     from wotlkbuddy.horde.defense import defend_against_aggro
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.resurrection_site import nearby_threats, plan_rest_site
+    from wotlkbuddy.horde.ghost_scout import GhostScout
     from wotlkbuddy.live.world_travel import follow_world_path
     from wotlkbuddy.horde.ranged_pull import face_target_in_place
     from wotlkbuddy.live.world_position import verified_target_position
@@ -825,10 +826,12 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
                 state = cap()
         raise LiveControlError('Post-resurrection resources not restored; holding position')
 
+    scout = GhostScout(sample=sample,driver=driver,log=log)
     with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, NavigationProxy(py32, dll) as nav:
         def hazards(state, corpse):
             _, where = verified_live_position(state,pid=pid)
-            return verified_nearby_creatures(state,pid=pid,center=corpse)
+            return verified_nearby_creatures(state,pid=pid,center=corpse,
+                ignored_guids=scout.ignored_guids())
 
         def spawn_hints(state, corpse):
             _, where = verified_live_position(state,pid=pid)
@@ -838,7 +841,8 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
             sample=sample, driver=driver, nav=nav,
             known_corpse=getattr(args, 'corpse_world', None),
             read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav),
-            read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore, log=log)
+            read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore,
+            scout_surroundings=scout.survey, log=log)
 
 
 def _horde_continuous(args: argparse.Namespace) -> dict:

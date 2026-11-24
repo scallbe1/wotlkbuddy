@@ -19,6 +19,7 @@ from wotlkbuddy.horde.resurrection_site import (
 
 def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                    read_hazards=None, read_spawn_hints=None, restore=None,
+                   scout_surroundings=None,
                    sleep=real_sleep, now=monotonic, log=lambda _: None):
     first, origin = sample()
     guid = first.player.guid
@@ -176,6 +177,10 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
     # Only now is it meaningful to inspect the local creature scene.
     log(f'Arrived near corpse ({position.position.distance_to(corpse):.1f}y); '
         'evaluating resurrection locations')
+    if scout_surroundings is not None:
+        log('Actively surveying all directions before ranking reclaim locations')
+        scout_surroundings()
+        state, position = observe()
     hints = tuple(read_spawn_hints(state,corpse)) if read_spawn_hints else ()
     chosen = None
     attempted = []
@@ -183,11 +188,13 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
     # the navmesh to move us elsewhere. This is especially important when
     # a previous recovery stopped at a good spot while a patrol was nearby.
     if in_reclaim_ring(position.position,corpse):
-        log('Inspecting current reclaim position; waiting for a patrol opening')
+        local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
+        log(f'Current site: {len(local)} potential attackers; checking patrol opening')
         chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
-            corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log)
+            corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
+            patrol_seconds=8 if len(local)>2 else 24)
         attempted.append(position.position)
-    for search in range(4):
+    for search in range(8):
         if chosen is not None:
             break
         state, position = observe()
@@ -205,8 +212,14 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
         # candidates that look crowded from across a cave wall.
         sites = plan_resurrection_sites(nav,corpse_map,position.position,corpse,
             hazards,spawn_hints=hints,route_points=route_points,scout=True)
-        log(f'Resurrection search {search+1}/4: {len(hazards)} mapped creatures, '
-            f'{len(sites)} reachable scouting candidates')
+        # Compare actual terrain-aware local counts before moving to a site.
+        ranked = [(len(local_reclaim_threats(nav,corpse_map,point,hazards)),point,path)
+                  for point,path in sites]
+        ranked.sort(key=lambda item:(item[0],position.position.distance_to(item[1])))
+        sites = [(point,path) for _,point,path in ranked]
+        log(f'Resurrection search {search+1}/8: {len(hazards)} mapped creatures, '
+            f'{len(sites)} reachable scouting candidates; ranked attacker counts '
+            f'{[n for n,_,_ in ranked]}')
         moved = False
         for point, _ in sites:
             if any(point.distance_to(p)<2 for p in attempted):
@@ -227,9 +240,14 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                 if not walk(path,'Ghost scouting'):
                     continue
             moved = True
-            log('Watching local movement for a stable resurrection opening')
+            if scout_surroundings is not None:
+                scout_surroundings()
+            state, position = observe()
+            local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
+            log(f'Scouted site: {len(local)} potential attackers; watching for opening')
             chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
-                corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log)
+                corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
+                patrol_seconds=8 if len(local)>2 else 24)
             if chosen is not None:
                 break
             # Replan from the new vantage and refreshed positions.

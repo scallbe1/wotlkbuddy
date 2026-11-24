@@ -175,7 +175,7 @@ def plan_resurrection_sites(nav, map_id, origin, corpse, hazards, *, spawn_hints
         except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
             continue
         sites.append((point,path))
-        if len(sites)>=6:
+        if len(sites)>=(12 if scout else 6):
             break
     return sites
 
