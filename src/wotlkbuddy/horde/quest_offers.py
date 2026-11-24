@@ -15,9 +15,30 @@ from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 from wotlkbuddy.horde.profile import HordeProfile, condition_value
 
 
+def matching_direct_offer(profile, state, npc_id, npc_name):
+    """Identify an already displayed detail by exact NPC and XML title/ID."""
+    d=state.dialog
+    if (profile is None or d is None or d.kind!='detail' or not d.title or
+            state.player.target_name!=npc_name or
+            creature_entry_from_guid(state.player.target_guid)!=npc_id):
+        return None
+    matches={step.quest_id:step for step in profile.steps if
+             step.kind=='pickup' and step.supported and step.entry==npc_id and
+             step.npc_name in ('',npc_name) and step.name==d.title and
+             step.quest_id>0 and d.quest_id in (0,step.quest_id)}
+    if len(matches)!=1:
+        return None
+    step=next(iter(matches.values()))
+    if (any(q.quest_id==step.quest_id for q in state.quests) or
+            dict(state.quest_completions).get(step.quest_id) is True):
+        return None
+    return step
+
+
 def accept_npc_offers(
     *, npc_name: str, npc_id: int, capture: Callable[[], ClientTelemetry],
     driver, max_quests: int = 4, profile: HordeProfile | None = None,
+    accept_existing_detail: bool = False, confirmed_completed: tuple[int,...] = (),
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     log: Callable[[str], None] = lambda _: None,
@@ -55,10 +76,12 @@ def accept_npc_offers(
 
     for _ in range(max_quests):
         opened_by_us = False
+        verified_existing = (accept_existing_detail and not accepted and
+                             matching_direct_offer(profile,state,npc_id,npc_name) is not None)
         baseline_journal = {q.quest_id: q.title for q in state.quests}
         if state.dialog is None:
             raise LiveControlError('Quest menu telemetry missing')
-        if state.dialog.kind not in ('gossip', 'greeting'):
+        if state.dialog.kind not in ('gossip', 'greeting') and not verified_existing:
             # An incomplete active quest can open a 'progress' screen after
             # accepting another quest. Closing it is not a turn-in action.
             if state.dialog.kind != 'none':
@@ -77,7 +100,7 @@ def accept_npc_offers(
             if state.dialog is None or state.dialog.kind == 'none':
                 raise LiveControlError(
                     f'{npc_name}: interaction opened no verifiable quest dialogue')
-        if state.dialog.kind == 'detail' and opened_by_us:
+        if state.dialog.kind == 'detail' and (opened_by_us or verified_existing):
             # NPCs with one offer sometimes open QuestFrameDetailPanel directly,
             # without a GossipFrame/available quest list. Only our fresh
             # interaction with the already GUID-verified NPC can authorize this
@@ -96,7 +119,8 @@ def accept_npc_offers(
                         if (step.kind == 'pickup' and step.supported and
                             step.entry == npc_id and
                             step.npc_name in ('', npc_name) and
-                            step.name == observed_title and step.quest_id > 0)]
+                            step.name == observed_title and step.quest_id > 0 and
+                            state.dialog.quest_id in (0,step.quest_id))]
             if len(matching) != 1:
                 known_titles = [step.name for step in profile.steps
                                 if (step.kind == 'pickup' and step.entry == npc_id
@@ -108,14 +132,14 @@ def accept_npc_offers(
             step = matching[0]
             if (state.dialog.quest_id not in (0, step.quest_id) or
                     step.quest_id in baseline_journal or
-                    any(title == observed_title for title in baseline_journal.values()) or
+                    (state.dialog.quest_id==0 and any(title == observed_title for title in baseline_journal.values())) or
                     dict(state.quest_completions).get(step.quest_id, False)):
                 raise LiveControlError(
                     f'{npc_name}: direct offer {observed_title!r} conflicts with '
                     'its verified quest ID or active/completed journal; no acceptance')
             # Honor resolvable profile conditions; an unknown conditional
             # dependency must never be silently interpreted as True.
-            completed = {qid for qid, done in state.quest_completions if done}
+            completed = {qid for qid, done in state.quest_completions if done} | set(confirmed_completed)
             for expression in step.conditions:
                 allowed = condition_value(
                     expression, level=state.player.level, race='Undead',
@@ -135,7 +159,7 @@ def accept_npc_offers(
                     f'{npc_name}: direct quest detail changed before accepting '
                     f'{observed_title!r}; no acceptance')
             guard(confirmed)
-            log(f'{npc_name}: directly opened verified profile quest '
+            log(f'{npc_name}: verified direct/chained profile quest '
                 f'{observed_title!r} (quest {step.quest_id}); accepting')
             driver.chat('/run AcceptQuest()')
             previous = confirmed

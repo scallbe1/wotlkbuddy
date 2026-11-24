@@ -68,7 +68,8 @@ end
 -- assuming an absent journal entry means a completed quest.
 local completionCache = nil
 local recentlyObservedQuestIds = {}
-local lastCompletionQuery = 0
+local lastCompletionQuery = -10
+local completionRefreshUntil = 0
 local function queryCompletions()
     if QueryQuestsCompleted and (GetTime() - lastCompletionQuery >= 1) then
         lastCompletionQuery = GetTime()
@@ -83,10 +84,18 @@ questHistoryFrame:RegisterEvent('PLAYER_ENTERING_WORLD')
 questHistoryFrame:SetScript('OnEvent', function(_, event)
     if event == 'QUEST_QUERY_COMPLETE' then
         if GetQuestsCompleted then
-            local ok, flags = pcall(GetQuestsCompleted)
-            if ok and type(flags) == 'table' then completionCache = flags end
+            local supplied = {}
+            local ok, flags = pcall(GetQuestsCompleted, supplied)
+            if not ok then ok, flags = pcall(GetQuestsCompleted) end
+            if ok then
+                if type(flags) == 'table' then completionCache = flags
+                elseif next(supplied) then completionCache = supplied end
+            end
         end
     else
+        -- QUEST_FINISHED can precede the journal/server history update. A
+        -- throttled refresh window prevents a stale cache on direct chains.
+        completionRefreshUntil = GetTime() + 20
         queryCompletions()
     end
 end)
@@ -339,6 +348,7 @@ killFrame:SetScript('OnEvent', function(_, event, ...)
 end)
 
 local function tickData()
+    if GetTime() < completionRefreshUntil then queryCompletions() end
     local lines = {}
     local isTruncated = false
     local payloadBytes = 0
@@ -375,6 +385,10 @@ local function tickData()
         safe(UnitName('target'), 50),
     }, '\t')
     appendLine(playerLine)
+    if UnitXP and UnitXPMax then
+        appendLine(table.concat({'PX', tostring(UnitXP('player') or 0),
+            tostring(UnitXPMax('player') or 0)}, '\t'))
+    end
     appendLine('LK\t' .. tostring(lootSequence))
     for i = #recentKills, 1, -1 do
         local k = recentKills[i]
@@ -819,7 +833,7 @@ local function tickData()
     local completionStates = {}
     if completionCache then
         for id, done in pairs(completionCache) do
-            if type(id) == 'number' and id > 0 and done then
+            if type(id) == 'number' and id > 0 and (done == true or done == 1) then
                 completionStates[id] = 1
             end
         end
@@ -827,7 +841,10 @@ local function tickData()
     if IsQuestFlaggedCompleted then
         for id in pairs(recentlyObservedQuestIds) do
             local ok, done = pcall(IsQuestFlaggedCompleted, id)
-            if ok and done ~= nil then completionStates[id] = done and 1 or 0 end
+            if ok and done ~= nil then
+                if done == true or done == 1 then completionStates[id] = 1
+                elseif completionStates[id] ~= 1 then completionStates[id] = 0 end
+            end
         end
     end
     local completedIds = {}

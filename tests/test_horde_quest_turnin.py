@@ -195,3 +195,37 @@ class NewTelemetryTests(unittest.TestCase):
                 parse_payload(self.P+line,1)
 
 if __name__=='__main__':unittest.main()
+
+
+class ChainGame(Game):
+    def __init__(self):
+        super().__init__()
+        self.level=5
+        self.history_available=False
+        self.followup=False
+    def chat(self,cmd):
+        super().chat(cmd)
+        if cmd=='/run GetQuestReward(0)':
+            self.level=6
+            self.dialog=QuestDialog('detail',364,'The Mindless Ones')
+        elif cmd=='/run AcceptQuest()':
+            self.quests=(QuestRecord(364,2,False,'The Mindless Ones'),)
+            self.dialog=QuestDialog('none',0)
+        elif cmd=='/click QuestFrameCloseButton':
+            self.dialog=QuestDialog('none',0)
+    def capture(self):
+        s=super().capture()
+        return replace(s,player=replace(s.player,level=self.level,
+            target_guid='0xF130000621000001' if self.target else ''))
+
+
+def test_level_up_and_chained_offer_confirms_turnin_without_history():
+    g=ChainGame()
+    profile=replace(PROFILE,steps=PROFILE.steps+(OrderStep('pickup',quest_id=364,
+        name='The Mindless Ones',entry=1569,npc_name='Shadow Priest Sarvis'),))
+    out=run(g,profile)
+    assert out.status=='turned_in'
+    assert not out.history_confirmed
+    assert out.followup_quest_ids==(364,)
+    assert g.commands.count('/run GetQuestReward(0)')==1
+    assert g.commands.count('/run AcceptQuest()')==1

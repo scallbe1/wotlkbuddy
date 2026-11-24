@@ -465,6 +465,23 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                     min_free_slots=minimum, log=log)
                 return serialize_vendor_sale(sold)
 
+            # A previous run may have completed a reward and left the next
+            # detail open. Resume it before vendor movement or quest hunting.
+            resumed_offer=()
+            if args.only in ('all','objectives','collect','quests'):
+                from wotlkbuddy.horde.quest_offers import matching_direct_offer
+                from wotlkbuddy.horde.combat import creature_entry_from_guid
+                open_state=cap()
+                npc_entry=creature_entry_from_guid(open_state.player.target_guid)
+                npc_name=open_state.player.target_name
+                offer=matching_direct_offer(quest_profile,open_state,npc_entry,npc_name)
+                if offer is not None:
+                    log(f'Resuming already-open profile quest {offer.name!r} ({offer.quest_id})')
+                    resumed_offer=accept_npc_offers(npc_name=npc_name,npc_id=npc_entry,
+                        capture=cap,driver=driver,profile=quest_profile,max_quests=1,
+                        accept_existing_detail=True,log=log)
+                    report['chained_quests']=resumed_offer
+                    report['resumed_open_offer']=True
             if args.only in ('all', 'vendor', 'objectives', 'collect', 'objects',
                               'turnin'):
                 # Bags can fill while collecting items. Preflight before
@@ -564,8 +581,8 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                         raise LiveControlError(
                             f'Quest hand-in contradicted by post-training '
                             f'journal/history: {confirmations!r}')
-            delivered_ready_quest = False
-            if args.only in ('all', 'objectives', 'collect', 'objects', 'turnin'):
+            delivered_ready_quest = bool(resumed_offer)
+            if args.only in ('all', 'objectives', 'collect', 'objects', 'turnin') and not delivered_ready_quest:
                 state, current = location()
                 quest = next_ready_profile_turnin(quest_profile, state)
                 if quest is not None:
@@ -893,6 +910,24 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
                           'recovery': recovery})
             continue
         completion = report.get('quest_turnin', {})
+        chained=tuple(report.get('chained_quests',()))+tuple(completion.get('followup_quest_ids',()))
+        if chained:
+            new_ids=[qid for qid in chained if qid not in accepted_ids]
+            accepted_ids.extend(new_ids)
+            steps.append({'cycle':cycle+1,'action':'chained_pickup','quest_ids':new_ids})
+        if report.get('resumed_open_offer') and chained and not completion:
+            level=report.get('character_level_after',0)
+            # On restart no previous in-process level exists. Check the
+            # trainer at a Mage training milestone before further hunting.
+            if level>=4 and level%2==0 and level!=train_level:
+                train_level=level
+                print(f'Level {level}: checking trainer after resumed follow-up',file=sys.stderr,flush=True)
+                try:
+                    training=phase('train')
+                    steps.append({'cycle':cycle+1,'action':'train','trained_spells':training.get('trained_spells',())})
+                except LiveControlError as exc:
+                    print(f'Mage training unavailable this cycle: {exc}',file=sys.stderr,flush=True)
+            continue
         if completion.get('status') in ('turned_in', 'already_turned_in'):
             quest_id = completion.get('quest_id')
             if not isinstance(quest_id, int) or quest_id <= 0:
