@@ -93,10 +93,16 @@ class ReturnTests(unittest.TestCase):
             state['xyz'] = SARVIS
             return SimpleNamespace(stopped_reason='complete')
 
-        def turnin(*args, **kwargs):
+        # Keep the actual turnin_profile_quest keyword-only signature.
+        # A permissive **kwargs fake previously concealed the production
+        # TypeError when navigation passed on_aggro/on_threat to turn-in.
+        def turnin(profile, *, quest_id, capture, driver, character,
+                   expected_guid, timeout, progress):
             state['turnins'] += 1
-            self.assertEqual(kwargs['quest_id'], 364)
-            self.assertEqual(kwargs['expected_guid'], '0x000000000000025F')
+            self.assertEqual(quest_id, 364)
+            self.assertEqual(expected_guid, '0x000000000000025F')
+            self.assertEqual(character, 'Aarr')
+            self.assertEqual(timeout, 10)
             return SimpleNamespace(status='turned_in')
 
         def run(complete=True):
