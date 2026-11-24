@@ -188,6 +188,8 @@ class KeyboardQuestInput:
                      re.fullmatch(r'[A-Za-z :]{1,48}',
                                   command[len('/wbttalent '):])) and
                 not re.fullmatch(r'/run LearnTalent\(([1-3]),([1-9]|[1-3][0-9]|4[0-5])\)', command) and
+                command != '/wbtbar inspect' and
+                not re.fullmatch(r'/wbtbar (?:clear|put) (?:[1-9]|10) [1-9][0-9]{0,9}',command) and
                 not (command.startswith('/wbtability ') and
                      re.fullmatch(r'[A-Za-z :]{1,48}',
                                   command[len('/wbtability '):])) and

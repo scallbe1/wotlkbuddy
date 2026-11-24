@@ -13,7 +13,7 @@ def test_linked_named_nonobjective_enemy_changes_pull_decision():
     assert not plan.allowed and len(plan.enemies)==3
 
 def test_three_substantially_weaker_quest_enemies_allowed_at_full_resources():
-    p=SimpleNamespace(level=9,health=100,max_health=100)
+    p=SimpleNamespace(level=9,health=150,max_health=150)
     r=SimpleNamespace(mana=100,max_mana=100)
     a,b,c=mob('a',20),mob('b',29),mob('c',39)
     assert assess_encounter(p,r,Vec3(0,0,0),a,(a,b,c),(1506,)).allowed

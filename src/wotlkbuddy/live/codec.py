@@ -380,6 +380,7 @@ class ClientTelemetry:
     loot_sequence: int | None = None
     player_xp: int | None = None
     player_xp_max: int | None = None
+    visible_hotbar: tuple[tuple[int,str,int,str], ...] = ()
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -392,6 +393,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     recent_kills = {}
     loot_sequence = None
     player_xp = player_xp_max = None
+    visible_hotbar = {}
     resources = None
     dialog = None
     completion_states: dict[int, bool] = {}
@@ -442,7 +444,20 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     spell_targeting = None
     for line in content.splitlines():
         parts = line.split('\t')
-        if parts[0] == 'PX':
+        if parts[0] == 'HV':
+            if len(parts)!=5:
+                raise TelemetryError('Invalid visible hotbar record')
+            try:
+                button,spell_id=int(parts[1]),int(parts[3])
+                kind,name=parts[2],parts[4]
+                if (not 1<=button<=10 or button in visible_hotbar or
+                        not 0<=spell_id<2**31 or not kind or len(name)>44 or
+                        (kind=='spell' and (not spell_id or not name))):
+                    raise ValueError('Invalid visible hotbar identity')
+                visible_hotbar[button]=(button,kind,spell_id,name)
+            except ValueError as exc:
+                raise TelemetryError('Invalid visible hotbar record') from exc
+        elif parts[0] == 'PX':
             if len(parts)!=3 or player_xp is not None:
                 raise TelemetryError('Invalid or repeated player XP')
             try:
@@ -1181,4 +1196,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            death_state=death_state,
                            recent_kills=tuple(recent_kills[i] for i in sorted(recent_kills)),
                            loot_sequence=loot_sequence,
-                           player_xp=player_xp,player_xp_max=player_xp_max)
+                           player_xp=player_xp,player_xp_max=player_xp_max,
+                           visible_hotbar=tuple(visible_hotbar[i] for i in sorted(visible_hotbar)))

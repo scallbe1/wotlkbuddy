@@ -293,6 +293,85 @@ end
 
 -- END ACTION SPELL IDENTITY AUDIT
 
+-- Observe the actual visible button's action index and tooltip independently
+-- of the legacy spellbook-ID interpretation. No action write on other pages.
+local barTooltip
+local managedMageSpells = {
+    Fireball=true, Frostbolt=true, ['Fire Blast']=true,
+    ['Arcane Intellect']=true, ['Frost Armor']=true,
+    ['Conjure Food']=true, ['Conjure Water']=true
+}
+local function visibleBarIdentity(button)
+    if not GetActionBarPage or GetActionBarPage() ~= 1 then return nil end
+    local frame = _G['ActionButton' .. button]
+    if not frame or not frame:IsShown() or not GetActionInfo then return nil end
+    local actual = frame.action
+    if ActionButton_GetPagedID then
+        local ok, value = pcall(ActionButton_GetPagedID, frame)
+        if not ok or value ~= button then return nil end
+        if actual and actual ~= value then return nil end
+        actual = value
+    end
+    if actual ~= button then return nil end
+    local kind, rawId = GetActionInfo(actual)
+    if not kind then return 'empty', 0, '' end
+    if kind ~= 'spell' then return kind, 0, '' end
+    if not barTooltip then
+        local ok, tip = pcall(CreateFrame,'GameTooltip','WotLKBuddyBarIdentityTooltip',UIParent,'GameTooltipTemplate')
+        if not ok then return nil end
+        barTooltip = tip
+    end
+    if not barTooltip.SetAction then return nil end
+    barTooltip:SetOwner(UIParent,'ANCHOR_NONE')
+    barTooltip:ClearLines()
+    local ok = pcall(barTooltip.SetAction,barTooltip,actual)
+    local line = _G['WotLKBuddyBarIdentityTooltipTextLeft1']
+    local shown = ok and line and line:GetText() or nil
+    barTooltip:Hide()
+    local spellId, resolved = resolveActionSpell(actual,rawId)
+    if not shown or shown == '' or not spellId or shown ~= resolved then return nil end
+    return 'spell',spellId,resolved
+end
+local barEditEnabled = false
+SLASH_WOTLKBUDDYBAR1 = '/wbtbar'
+SlashCmdList['WOTLKBUDDYBAR'] = function(message)
+    -- Commands come from the explicitly enabled keyboard controller.
+    if UnitAffectingCombat('player') or UnitIsDeadOrGhost('player') then return end
+    if message == 'inspect' then barEditEnabled = true; return end
+    local op, b, sid = string.match(message,'^(%a+) (%d+) (%d+)$')
+    local button, spellId = tonumber(b), tonumber(sid)
+    if not barEditEnabled or not button or button<1 or button>10 or not spellId
+            or spellId<1 or not GetCursorInfo or GetCursorInfo() then return end
+    local kind, observedId, name = visibleBarIdentity(button)
+    if op == 'clear' and kind == 'spell' and observedId == spellId then
+        -- Only remove an unwanted spell or an independently verified duplicate.
+        local duplicate = false
+        for i=1,10 do
+            if i~=button then
+                local k,id,n=visibleBarIdentity(i)
+                if k=='spell' and n==name and slotHasDigitBinding(i) then duplicate=true end
+            end
+        end
+        if (not managedMageSpells[name] or duplicate) and PickupAction and ClearCursor then
+            PickupAction(button)
+            ClearCursor()
+        end
+    elseif op == 'put' and kind == 'empty' and slotHasDigitBinding(button) then
+        local wanted = GetSpellInfo and GetSpellInfo(spellId)
+        if not wanted or not managedMageSpells[wanted] then return end
+        for i=1,10 do
+            local k,id,n=visibleBarIdentity(i)
+            if not k or (k=='spell' and n==wanted) then return end
+        end
+        local index, id = resolveSpellbook(wanted)
+        if index>0 and id==spellId and PickupSpell and PlaceAction and ClearCursor then
+            PickupSpell(index,BOOKTYPE_SPELL or 'spell')
+            if GetCursorInfo()=='spell' then PlaceAction(button) end
+            ClearCursor()
+        end
+    end
+end
+
 -- HD clients can expose a separate starting-area map (DeathknellStart)
 -- whose yard dimensions differ from the standard Tirisfal map. Select
 -- the actual parent map before reading *either* normalized position.
@@ -551,6 +630,14 @@ local function tickData()
     end
     -- END ACTION IDENTITY TELEMETRY
     -- END ACTIONBAR OBSERVATIONS
+    if barEditEnabled and page==1 then
+        for button=1,10 do
+            local kind,id,name=visibleBarIdentity(button)
+            if kind then
+                appendLine(table.concat({'HV',tostring(button),kind,tostring(id),safe(name,44)}, '\t'))
+            end
+        end
+    end
     -- Inventory tracking is read only. Match ItemId exactly against source
     -- Horde XML and report current inventory count in each fresh frame.
     if trackedQuestItemId > 0 and GetItemCount then
