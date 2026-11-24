@@ -26,10 +26,89 @@ def nearby_threats(point, hazards):
                  hypot(point.x-h.x,point.y-h.y)<MIN_CLEARANCE)
 
 
-def acceptable_site(point, corpse, hazards):
+def in_reclaim_ring(point, corpse):
     return (MIN_OFFSET <= point.distance_to(corpse) <= MAX_OFFSET and
-            abs(point.z-corpse.z) <= 8 and
+            abs(point.z-corpse.z) <= 8)
+
+
+def local_reclaim_threats(nav, map_id, point, hazards):
+    """Map nearby potential attackers to the actual terrain around a site.
+
+    A validated long detour is evidence of separated terrain, not spell LOS.
+    Close creatures, incomplete navmesh results and failed queries remain
+    threats. Do not infer a wall merely from a failed path query.
+    """
+    local = []
+    for enemy in nearby_threats(point,hazards):
+        distance = point.distance_to(enemy)
+        if distance <= 10:
+            local.append(enemy)
+            continue
+        try:
+            path = nav.find_path(map_id,point,enemy)
+            if (len(path)>=2 and path[0].distance_to(point)<=2 and
+                    path[-1].distance_to(enemy)<=2):
+                length = sum(a.distance_to(b) for a,b in zip(path,path[1:]))
+                if isfinite(length) and length >= max(35.,distance*2.5):
+                    # A mob on the other side of a large walkable detour
+                    # is less likely to join immediate melee aggro.
+                    continue
+        except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError,TypeError):
+            pass
+        local.append(enemy)
+    return tuple(local)
+
+
+def acceptable_site(point, corpse, hazards):
+    return (in_reclaim_ring(point,corpse) and
             len(nearby_threats(point,hazards)) <= MAX_RECLAIM_THREATS)
+
+
+def watch_reclaim_window(*, sample, read_hazards, corpse, nav, map_id,
+                         sleep, now, log=lambda _:None,
+                         patrol_seconds=24, reclaim_seconds=180):
+    """Wait for a stable <=1-attacker opening without moving the ghost.
+
+    Do not abandon a usable spot merely because a patrol passes once.
+    Require three consecutive observations before accepting the popup.
+    """
+    state, pos = sample()
+    if not in_reclaim_ring(pos.position,corpse):
+        return None
+    origin = pos.position
+    deadline = now()+reclaim_seconds
+    crowded = stable = 0
+    previous_count = None
+    for _ in range(int(reclaim_seconds/.5)+1):
+        if (not state.player.dead or not state.death_state.ghost or
+                pos.map_id!=map_id or pos.position.distance_to(origin)>1.8 or
+                not in_reclaim_ring(pos.position,corpse)):
+            return None
+        hazards = tuple(read_hazards(state,corpse))
+        local = local_reclaim_threats(nav,map_id,pos.position,hazards)
+        count = len(local)
+        if count != previous_count:
+            distances = ', '.join(f'{pos.position.distance_to(p):.1f}y' for p in local)
+            log(f'Reclaim watch: {count} nearby potential attackers'
+                + (f' ({distances})' if distances else ''))
+            previous_count = count
+        if count <= MAX_RECLAIM_THREATS and state.death_state.retrieve_ready:
+            stable += 1
+            if stable >= 3:
+                return pos.position
+        else:
+            stable = 0
+        if count > MAX_RECLAIM_THREATS:
+            crowded += 1
+            if crowded >= int(patrol_seconds/.5):
+                break
+        else:
+            crowded = 0
+        if now() >= deadline:
+            break
+        sleep(.5)
+        state,pos=sample()
+    return None
 
 
 def approach_path(nav, map_id, origin, corpse):

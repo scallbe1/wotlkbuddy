@@ -56,3 +56,56 @@ def test_zero_threat_sites_rank_before_one_threat_sites():
     hazards=(Vec3(32,0,0),)
     sites=plan_resurrection_sites(nav,0,Vec3(40,0,0),corpse,hazards)
     assert sites and not nearby_threats(sites[0][0],hazards)
+
+
+def test_patrol_window_waits_at_current_position_until_one_enemy_remains():
+    from types import SimpleNamespace
+    from wotlkbuddy.horde.resurrection_site import watch_reclaim_window
+    corpse=Vec3(0,0,0)
+    site=Vec3(32,0,0)
+    fixed=Vec3(34,0,0)
+    patrol=Vec3(32,8,0)
+    nav=Mock()
+    nav.find_path.side_effect=lambda _,a,b:[a,b]
+    state=SimpleNamespace(player=SimpleNamespace(dead=True),
+                          death_state=SimpleNamespace(ghost=True,retrieve_ready=True))
+    position=SimpleNamespace(position=site,map_id=0)
+    t=[0.]
+    def sleep(s):
+        t[0]+=s
+    def hazards(*_):
+        return (fixed,patrol) if t[0]<4 else (fixed,Vec3(70,0,0))
+    result=watch_reclaim_window(sample=lambda:(state,position),
+        read_hazards=hazards,corpse=corpse,nav=nav,map_id=0,
+        sleep=sleep,now=lambda:t[0])
+    assert result==site
+    assert t[0]>=5
+
+
+def test_two_stationary_enemies_never_authorize_reclaim():
+    from types import SimpleNamespace
+    from wotlkbuddy.horde.resurrection_site import watch_reclaim_window
+    corpse=Vec3(0,0,0)
+    site=Vec3(32,0,0)
+    state=SimpleNamespace(player=SimpleNamespace(dead=True),
+                          death_state=SimpleNamespace(ghost=True,retrieve_ready=True))
+    position=SimpleNamespace(position=site,map_id=0)
+    nav=Mock()
+    t=[0.]
+    def sleep(s):
+        t[0]+=s
+    result=watch_reclaim_window(sample=lambda:(state,position),
+        read_hazards=lambda *_:(Vec3(34,0,0),Vec3(32,8,0)),
+        corpse=corpse,nav=nav,map_id=0,sleep=sleep,now=lambda:t[0],patrol_seconds=3)
+    assert result is None
+
+
+def test_long_detour_reduces_local_aggro_estimate_but_unknown_path_does_not():
+    from wotlkbuddy.horde.resurrection_site import local_reclaim_threats
+    site=Vec3(32,0,0)
+    enemy=Vec3(45,0,0)
+    nav=Mock()
+    nav.find_path.return_value=[site,Vec3(32,25,0),Vec3(45,25,0),enemy]
+    assert not local_reclaim_threats(nav,0,site,(enemy,))
+    nav.find_path.return_value=[]
+    assert local_reclaim_threats(nav,0,site,(enemy,))==(enemy,)
