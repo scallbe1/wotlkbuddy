@@ -46,6 +46,27 @@ class QuestInput(Protocol):
     def interact(self) -> None: ...
 
 
+def navigate_with_status(
+    driver: QuestInput, kind: str, travel: Callable[[], object],
+    *, target: str | None = None,
+) -> object:
+    """Display a sourced destination for the exact span of Detour movement.
+
+    Simulated/test drivers without a native HUD method are unaffected.
+    This display update cannot alter a verified path or permit new inputs.
+    Always clear on arrival/failure while input focus remains available.
+    """
+    update = getattr(driver, 'set_navigation_status', None)
+    if callable(update):
+        update(kind, target)
+    try:
+        return travel()
+    finally:
+        if (callable(update) and driver.wow_is_foreground() and
+                not driver.emergency_stop_requested()):
+            update('clear')
+
+
 class KeyboardQuestInput:
     """Fixed slash commands typed through Windows SendInput (not Lua injection).
 
