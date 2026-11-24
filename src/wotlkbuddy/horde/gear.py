@@ -1,7 +1,7 @@
-"""Conservative Mage cloth upgrade selection from live inventory telemetry.
+"""Mage cloth and supported main-hand upgrades from live inventory telemetry.
 
-No mail, leather or plate; no staves, one-hand or off-hand comparisons yet.
-Equips are verified by observing the same item ID in the exact armor slot.
+Weapon scoring uses caster stats and item level, with a proficiency gate.
+Off-hand combinations are not automatically replaced. Verify exact slots.
 """
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ def best_cloth_upgrade(state: ClientTelemetry) -> BagArmor | None:
     for item in state.bag_armor:
         if (not item.equippable or item.required_level > state.player.level or
                 counts[item.item_id] != 1):
+            continue
+        if item.inventory_slot==16 and state.weapon_swap_safe is not True:
             continue
         existing = worn.get(item.inventory_slot)
         if existing is not None and (
@@ -86,7 +88,8 @@ def equip_mage_upgrades(
             break
         if verified is None:
             raise LiveControlError('Gear inventory changed before equip; abort')
-        log(f'Equipping better Mage cloth: {candidate.name} '
+        kind='weapon' if candidate.inventory_slot==16 else 'cloth'
+        log(f'Equipping better Mage {kind}: {candidate.name} '
             f'(item {candidate.item_id}, slot {candidate.inventory_slot})')
         driver.chat(f'/run EquipItemByName({candidate.item_id},{candidate.inventory_slot})')
         before = verified
@@ -107,5 +110,5 @@ def equip_mage_upgrades(
                 break
             before = after
         if not success:
-            raise LiveControlError('Equip command sent but armor slot change unconfirmed')
+            raise LiveControlError('Equip command sent but equipment slot change unconfirmed')
     return tuple(equipped)

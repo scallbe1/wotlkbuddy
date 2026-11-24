@@ -26,14 +26,18 @@ class TrainingGoal:
     def total_cost(self):
         return sum(p[2] for p in self.pending)
 
-    def due(self,level,cash,free_slots):
+    def due(self,level,cash,free_slots,*,vendor_copper=None):
         if level!=self.level:
             return True
         if not self.pending:
             return False
         # Retry when one known rank is affordable, or new loot has occupied
         # at least two more slots since the last vendor/trainer visit.
-        return cash>=self.next_cost or free_slots<=self.free_slots-2
+        if cash>=self.next_cost:
+            return True
+        if vendor_copper is not None:
+            return vendor_copper>0 and (cash+vendor_copper>=self.next_cost or free_slots<=self.free_slots-2)
+        return free_slots<=self.free_slots-2
 
     def describe(self,cash):
         if not self.pending:

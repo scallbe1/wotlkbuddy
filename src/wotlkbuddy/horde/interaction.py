@@ -177,7 +177,7 @@ class KeyboardQuestInput:
                 not allowed_consumable and
                 command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/click QuestFrameCloseButton', '/click ClassTrainerFrameCloseButton', '/click MerchantFrameCloseButton', '/run CloseGossip()') and
                 not re.fullmatch(r'/run GetQuestReward\((0|[1-9]|1[0-2])\)', command) and
-                not re.fullmatch(r'/run EquipItemByName\(([1-9][0-9]{0,7}),(1|3|5|6|7|8|9|10|15)\)', command) and
+                not re.fullmatch(r'/run EquipItemByName\(([1-9][0-9]{0,7}),(1|3|5|6|7|8|9|10|15|16)\)', command) and
                 not re.fullmatch(r'/run BuyTrainerService\(([1-9]|[1-9][0-9]|1[01][0-9]|120)\)', command) and
                 not re.fullmatch(r'/run UseContainerItem\(([0-4]),([1-9]|[12][0-9]|3[0-6])\)', command) and
                 not re.fullmatch(r'/run SelectGossipOption\(([1-9]|[12][0-9]|3[0-2])\)', command) and

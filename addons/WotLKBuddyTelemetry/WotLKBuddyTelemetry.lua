@@ -1059,7 +1059,7 @@ local function tickData()
             end
         end
     end
-    -- Optional bounded inventory scan for Mage cloth upgrades. No equipment
+    -- Optional bounded inventory scan for Mage cloth and main-hand upgrades. No equipment
     -- changes are made by this addon. Do not truncate core quest telemetry when
     -- the inventory has too many records: Z=0 disables automatic gear actions.
     local armorSlots = {
@@ -1068,12 +1068,35 @@ local function tickData()
         INVTYPE_FEET=8, INVTYPE_WRIST=9, INVTYPE_HAND=10,
         INVTYPE_CLOAK=15
     }
+    local mainLink = GetInventoryItemLink and GetInventoryItemLink('player',16)
+    local offLink = GetInventoryItemLink and GetInventoryItemLink('player',17)
+    local mainSubtype = nil
+    if mainLink then
+        local _,_,_,_,_,_,sub = GetItemInfo(mainLink)
+        mainSubtype = sub
+    end
+    local weaponSkills = {Staves='Staves', Daggers='Daggers', Swords='Swords', ['One-Handed Swords']='Swords'}
+    local function hasWeaponSkill(subtype)
+        if mainSubtype == subtype then return true end
+        local wanted = weaponSkills[subtype]
+        if not wanted then return false end
+        if GetNumSkillLines and GetSkillLineInfo then
+            for i=1,GetNumSkillLines() do
+                local name,header,_,rank = GetSkillLineInfo(i)
+                if not header and name==wanted and (tonumber(rank) or 0)>0 then return true end
+            end
+        end
+        local index = resolveSpellbook(wanted)
+        return index and index>0
+    end
     local function armorInfo(link)
         if not link or not GetItemInfo then return nil, false end
         local name, _, _, level, req, category, subtype, _, equip =
             GetItemInfo(link)
         if not name then return nil, true end
-        if category ~= 'Armor' or subtype ~= 'Cloth' or not armorSlots[equip] then
+        local weapon = category=='Weapon' and weaponSkills[subtype] and
+            (equip=='INVTYPE_WEAPON' or equip=='INVTYPE_WEAPONMAINHAND' or equip=='INVTYPE_2HWEAPON')
+        if not weapon and (category ~= 'Armor' or subtype ~= 'Cloth' or not armorSlots[equip]) then
             return nil, false
         end
         local id = tonumber(string.match(link, 'item:(%d+)')) or 0
@@ -1089,8 +1112,9 @@ local function tickData()
             6*(stats.ITEM_MOD_SPELL_HASTE_RATING_SHORT or 0) +
             6*(stats.ITEM_MOD_SPELL_CRIT_RATING_SHORT or 0) + 0.5)
         local canEquip = IsEquippableItem and IsEquippableItem(link) and 1 or 0
+        if weapon and (not hasWeaponSkill(subtype) or offLink) then canEquip=0 end
         return {id=id, name=safe(name, 55), ilvl=tonumber(level) or -1,
-                req=tonumber(req) or -1, inv=armorSlots[equip],
+                req=tonumber(req) or -1, inv=weapon and 16 or armorSlots[equip],
                 score=score, allowed=canEquip}, false
     end
     local rows = {}
@@ -1129,11 +1153,14 @@ local function tickData()
             end
         end
     end
-    local bytes = 4
+    local mainGear = mainLink and armorInfo(mainLink) or nil
+    local weaponSafe = not offLink and (not mainLink or (mainGear and mainGear.inv==16))
+    local bytes = 12
     for _, row in ipairs(rows) do bytes = bytes + string.len(row) + 1 end
     if gearComplete == 1 and payloadBytes + bytes <= CAPACITY - 20 then
         for _, row in ipairs(rows) do appendLine(row) end
         appendLine('Z\t1')
+        appendLine('WG\t' .. (weaponSafe and '1' or '0'))
     elseif payloadBytes + 4 <= CAPACITY - 20 then
         appendLine('Z\t0')
     end
@@ -1142,13 +1169,14 @@ local function tickData()
     -- this 3.3.5 client. Never call UseContainerItem inside the addon.
     -- The Python controller verifies full frames twice, then right-clicks
     -- only one selected, verified slot and checks sale results.
-    if MerchantFrame and MerchantFrame:IsShown() then
+    do
+        local merchantVisible = MerchantFrame and MerchantFrame:IsShown()
         local rows = {}
         -- The buyback tab can ignore right-click sales; require the normal
         -- merchant sell tab and a quest-item API before authorizing sales.
         local saleScanComplete = (
             GetContainerItemQuestInfo and
-            (not MerchantFrame.selectedTab or MerchantFrame.selectedTab == 1)
+            (not merchantVisible or not MerchantFrame.selectedTab or MerchantFrame.selectedTab == 1)
             ) and 1 or 0
         local equipTypes = {
             INVTYPE_HEAD=1, INVTYPE_NECK=1, INVTYPE_SHOULDER=1,
@@ -1168,7 +1196,7 @@ local function tickData()
                     if link then
                         local _, qty, locked = GetContainerItemInfo(bag, slot)
                         local id = tonumber(string.match(link, 'item:(%d+)'))
-                        local name, _, quality, _, _, itemType, _,
+                        local name, _, quality, _, _, itemType, subtype,
                             _, equipLoc, _, price = GetItemInfo(link)
                         local isQuest = GetContainerItemQuestInfo(bag, slot)
                         -- Uncached item metadata must not authorize a sale.
@@ -1177,6 +1205,11 @@ local function tickData()
                             saleScanComplete = 0
                         elseif (not isQuest and itemType ~= ITEM_CLASS_QUEST
                                 and not locked and price > 0 and
+                                -- Preserve Mage-compatible equipment we do not score yet.
+                                not (equipLoc=='INVTYPE_HOLDABLE' or equipLoc=='INVTYPE_FINGER' or
+                                     equipLoc=='INVTYPE_NECK' or equipLoc=='INVTYPE_TRINKET' or
+                                     (itemType=='Weapon' and (subtype=='Wands' or
+                                       (weaponSkills[subtype] and equipLoc=='INVTYPE_WEAPONOFFHAND')))) and
                                 (quality == 0 or
                                  (quality <= 2 and equipTypes[equipLoc]))) then
                             table.insert(rows, table.concat({
@@ -1196,10 +1229,12 @@ local function tickData()
             saleScanComplete = 0
         end
         if saleScanComplete == 1 then
-            appendLine(table.concat({'M','1',tostring(#rows)}, '\t'))
+            appendLine(table.concat({'M','1',tostring(#rows),merchantVisible and '1' or '0'}, '\t'))
             for _, row in ipairs(rows) do appendLine(row) end
         else
-            appendLine('M\t0\t0')
+            if payloadBytes + 10 <= CAPACITY - 20 then
+                appendLine('M\t0\t0\t' .. (merchantVisible and '1' or '0'))
+            end
         end
     end
     -- Class trainer services are read only. Expose *available* services, not

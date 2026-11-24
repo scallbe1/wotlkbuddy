@@ -446,6 +446,12 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 recover_and_buff(initial=cap(),sample=location,driver=driver,nav=nav,
                     read_hazards=lambda s,center: verified_nearby_creatures(s,pid=pid,center=center),log=log)
 
+            # Reconcile bag upgrades on every objective phase, including
+            # restart after a previously successful quest reward.
+            if args.only in ('objectives','collect','objects','turnin','vendor','train','quests') and cap().gear_scan_complete:
+                upgraded=equip_mage_upgrades(capture=cap,driver=driver,log=log)
+                if upgraded:
+                    report['equipped_item_ids']=upgraded
             def ensure_reward_bag_space():
                 state, _ = location()
                 minimum = max(2, quest_profile.min_free_bag_slots + 1)
@@ -511,14 +517,19 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 report['accepted_quests'] = quests
 
             from wotlkbuddy.horde.training_goals import TrainingGoal,load_goal,save_goal
+            from wotlkbuddy.horde.merchant import estimated_vendor_copper
             budget_state=cap()
+            resale=estimated_vendor_copper(budget_state,quest_profile)
+            if resale is not None:
+                log(f'Verified spare vendor loot estimate: {resale}c; cash {budget_state.resources.money_copper}c')
             training_goal=load_goal(budget_state.player.guid,budget_state.player.name)
             if training_goal is not None:
                 log(training_goal.describe(budget_state.resources.money_copper))
             training_due = (getattr(args,'_continuous_training_check',False) and
                             budget_state.player.level>=4 and
                             (training_goal is None or training_goal.due(budget_state.player.level,
-                             budget_state.resources.money_copper,budget_state.resources.free_bag_slots)))
+                             budget_state.resources.money_copper,budget_state.resources.free_bag_slots,
+                             vendor_copper=resale)))
             if training_goal is not None and not training_due and training_goal.pending:
                 log('Training priority deferred until cash/loot or level changes; continue questing')
             if args.only in ('all', 'train') or training_due:
@@ -530,9 +541,13 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 state,current=location()
                 hud.set(goal='Fund Mage training',action='Selling non-quest loot before trainer')
                 set_native_status('vendor')
-                sale=free_bag_space(profile=quest_profile,profiles_root=profiles_root,
-                    pid=pid,capture=cap,driver=driver,nav=nav,spawns=db,
-                    min_free_slots=1,raise_cash=True,log=log)
+                sale=None
+                if resale!=0:
+                    sale=free_bag_space(profile=quest_profile,profiles_root=profiles_root,
+                        pid=pid,capture=cap,driver=driver,nav=nav,spawns=db,
+                        min_free_slots=1,raise_cash=True,log=log)
+                else:
+                    log('No verified spare vendor loot; skipping empty merchant trip')
                 if sale is not None:
                     serialize_vendor_sale(sale)
                     log(f'Training cash raised: {sale.copper_received}c; balance {cap().resources.money_copper}c')
