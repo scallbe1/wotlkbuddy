@@ -204,6 +204,8 @@ def observe_target_position(memory: MemoryReader, *, player_guid: str,
 
 def verified_target_position(snapshot: ClientTelemetry, *, pid: int) -> Vec3:
     """Query the exact selected NPC from the same Wow.exe process as the player."""
+    if type(pid) is not int or pid<=0:
+        raise WorldPositionError('Target position requires a resolved, positive WoW PID')
     from wotlkbuddy.game.win32 import ProcessMemory
     if (snapshot.truncated or not snapshot.player.guid or
             not snapshot.player.target_guid or
