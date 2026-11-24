@@ -300,6 +300,11 @@ local function tickData()
     end
     local hp = UnitHealth('player') or 0
     local maxhp = UnitHealthMax('player') or 0
+    -- Keep player and corpse markers on the same zone map. Do not change
+    -- a world map the player is currently inspecting.
+    local ghostMap = UnitIsGhost('player') and SetMapToCurrentZone and
+        not (WorldMapFrame and WorldMapFrame:IsShown())
+    if ghostMap then SetMapToCurrentZone() end
     local px, py = GetPlayerMapPosition('player')
     local guid = UnitGUID('player') or ''
     local zone = GetZoneText() or ''
@@ -328,8 +333,23 @@ local function tickData()
             if popup.which == 'RECOVER_CORPSE' then retrieve = 1 end
         end
     end
-    appendLine(table.concat({'DS', tostring(ghost), tostring(release),
-        tostring(retrieve)}, '\t'))
+    local deathFields = {'DS', tostring(ghost), tostring(release), tostring(retrieve)}
+    if ghostMap and GetCorpseMapPosition and GetMapInfo and
+            (not GetCurrentMapDungeonLevel or (GetCurrentMapDungeonLevel() or 0) == 0) then
+        local mapName = GetMapInfo()
+        local cx, cy = GetCorpseMapPosition()
+        local function validXY(x, y)
+            return type(x) == 'number' and type(y) == 'number' and
+                x >= 0 and x <= 1 and y >= 0 and y <= 1 and (x ~= 0 or y ~= 0)
+        end
+        if mapName and string.match(mapName, '^[A-Za-z0-9_]+$') and
+                validXY(cx, cy) and validXY(px, py) then
+            table.insert(deathFields, mapName)
+            table.insert(deathFields, string.format('%.7f', cx))
+            table.insert(deathFields, string.format('%.7f', cy))
+        end
+    end
+    appendLine(table.concat(deathFields, '\t'))
     -- Optional, read-only WorldFrame hover: a name is only exported if the
     -- cursor is over the 3-D world, not a bag/chat/tooltip/action bar region.
     -- Python correlates this with a double-observed GO template/GUID and

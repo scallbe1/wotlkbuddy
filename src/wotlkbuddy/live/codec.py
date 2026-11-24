@@ -100,6 +100,9 @@ class DeathState:
     ghost: bool
     release_ready: bool
     retrieve_ready: bool
+    corpse_map_name: str | None = None
+    corpse_map_x: float | None = None
+    corpse_map_y: float | None = None
 
 
 @dataclass(frozen=True)
@@ -444,10 +447,23 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             except ValueError as exc:
                 raise TelemetryError('Malformed player record') from exc
         elif parts[0] == 'DS':
-            if (len(parts) != 4 or death_state is not None or
-                    any(value not in ('0', '1') for value in parts[1:])):
+            if (len(parts) not in (4, 7) or death_state is not None or
+                    any(value not in ('0', '1') for value in parts[1:4])):
                 raise TelemetryError('Malformed or duplicate death state')
-            death_state = DeathState(*(value == '1' for value in parts[1:]))
+            flags = tuple(value == '1' for value in parts[1:4])
+            if len(parts) == 7:
+                import re
+                if not flags[0] or not re.fullmatch(r'[A-Za-z0-9_]{1,64}', parts[4]):
+                    raise TelemetryError('Invalid corpse map identity')
+                try:
+                    cx, cy = float(parts[5]), float(parts[6])
+                except ValueError as exc:
+                    raise TelemetryError('Malformed corpse map coordinates') from exc
+                if not (0 <= cx <= 1 and 0 <= cy <= 1) or (cx == cy == 0):
+                    raise TelemetryError('Invalid corpse map coordinates')
+                death_state = DeathState(*flags, parts[4], cx, cy)
+            else:
+                death_state = DeathState(*flags)
         elif parts[0] == 'Q':
             if len(parts) != 5:
                 raise TelemetryError('Malformed quest record')

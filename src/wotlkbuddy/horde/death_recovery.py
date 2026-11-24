@@ -1,7 +1,7 @@
 """Verified corpse recovery. Capture the exact death location before release.
 
-Already released ghosts use the client's own cached corpse world position;
-never infer world XYZ from minimap percentages.
+Already released ghosts use the Lua corpse marker and the navmesh.
+Unreleased characters retain the verified pre-release death position.
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
             if read_corpse is None:
                 raise LiveControlError('Already a ghost; client corpse reader unavailable')
             known_corpse = read_corpse(first, origin)
-            log('Own corpse world coordinates read from WoW client memory')
+            log('Own corpse destination resolved from Lua map marker and navigation mesh')
         map_value, x, y, z = known_corpse
         if (not all(isfinite(v) for v in known_corpse) or
                 not 0 <= map_value <= 9999 or int(map_value) != map_value or

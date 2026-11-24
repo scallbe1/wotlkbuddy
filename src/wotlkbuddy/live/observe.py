@@ -70,6 +70,9 @@ def summarize_telemetry(telemetry: ClientTelemetry) -> str:
         d = telemetry.death_state
         lines.append(f'Ghost={d.ghost} | release_ready={d.release_ready} | '
                      f'retrieve_ready={d.retrieve_ready}')
+        if d.corpse_map_name is not None:
+            lines.append(f'Lua corpse marker: {d.corpse_map_name} '
+                         f'({d.corpse_map_x:.5f}, {d.corpse_map_y:.5f})')
     elif p.dead:
         lines.append('Death-state telemetry missing (update addon)')
     for quest in observe_quests(telemetry):
