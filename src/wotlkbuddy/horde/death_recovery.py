@@ -124,7 +124,8 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                     expected_quest_id=None, expected_map_id=corpse_map,
                     max_seconds=min(600,remaining_time), progress=log, ghost_only=True,
                     can_traverse=lambda a,b:nav.segment_clear(corpse_map,a,b),
-                    replan_path=lambda a,b:nav.find_path(corpse_map,a,b))
+                    replan_path=lambda a,b:nav.find_path(corpse_map,a,b),
+                    destination_status=getattr(driver,'set_navigation_destination',None))
                 if travel.stopped_reason == 'complete':
                     breadcrumbs.extend(path)
                     return True

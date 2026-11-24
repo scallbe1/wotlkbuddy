@@ -510,80 +510,124 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                         profile=quest_profile, log=log)
                 report['accepted_quests'] = quests
 
+            from wotlkbuddy.horde.training_goals import TrainingGoal,load_goal,save_goal
+            budget_state=cap()
+            training_goal=load_goal(budget_state.player.guid,budget_state.player.name)
+            if training_goal is not None:
+                log(training_goal.describe(budget_state.resources.money_copper))
             training_due = (getattr(args,'_continuous_training_check',False) and
-                            first.player.level>=4 and
-                            first.player.level!=getattr(args,'_last_training_level',-1))
+                            budget_state.player.level>=4 and
+                            (training_goal is None or training_goal.due(budget_state.player.level,
+                             budget_state.resources.money_copper,budget_state.resources.free_bag_slots)))
+            if training_goal is not None and not training_due and training_goal.pending:
+                log('Training priority deferred until cash/loot or level changes; continue questing')
             if args.only in ('all', 'train') or training_due:
                 if training_due:
-                    log(f'Level {first.player.level}: checking actual trainer spells before questing')
+                    log(f'Level {budget_state.player.level}: vendor first, then check actual trainer spells')
+                # Equip verified upgrades before converting spare loot to copper.
+                if cap().gear_scan_complete:
+                    equip_mage_upgrades(capture=cap,driver=driver,log=log)
+                state,current=location()
+                hud.set(goal='Fund Mage training',action='Selling non-quest loot before trainer')
+                set_native_status('vendor')
+                sale=free_bag_space(profile=quest_profile,profiles_root=profiles_root,
+                    pid=pid,capture=cap,driver=driver,nav=nav,spawns=db,
+                    min_free_slots=1,raise_cash=True,log=log)
+                if sale is not None:
+                    serialize_vendor_sale(sale)
+                    log(f'Training cash raised: {sale.copper_received}c; balance {cap().resources.money_copper}c')
                 state, current = location()
-                trainers = nearby_service_npcs(
-                    profile=quest_profile, spawns=db,
-                    origin=current.position, map_id=current.map_id,
-                    role='train', profiles_root=profiles_root, radius=600)
-                if not trainers:
-                    raise LiveControlError(
-                        'No nearby Mage TrainClass vendor found in local Horde '
-                        'profile XML and corroborated by CreatureSpawns.db')
-                trainer = trainers[0]
-                set_native_status('train')
-                hud.set(goal=f'Train Mage at {trainer.name}',
-                        action='Navigating to class trainer')
-                log(f'Profile-selected Mage trainer: {trainer.name} '
-                    f'({trainer.entry}); source={trainer.source}')
-                visit_npc(npc_name=trainer.name, npc_id=trainer.entry,
-                          pid=pid, capture=cap, driver=driver, nav=nav,
-                          spawns=db, radius=600,
-                          destination_hint=trainer.position, log=log)
-                # NPC services and quest turn-in are not mutually exclusive.
-                # Complete only ready quests explicitly targeting this verified
-                # NPC in the selected profile before opening class training.
-                hud.set(goal=f'Turn in ready quests at {trainer.name}',
-                        action='Checking journal and server quest state')
-                handed_in = turnin_ready_quests_at_npc(
-                    profile=quest_profile, npc_name=trainer.name,
-                    npc_id=trainer.entry, capture=cap, driver=driver, log=log)
-                report['trainer_quest_turnins'] = handed_in
-                if handed_in and cap().gear_scan_complete:
-                    upgraded = equip_mage_upgrades(
-                        capture=cap, driver=driver, log=log)
-                    if upgraded:
-                        report['equipped_item_ids'] = tuple(upgraded)
-                hud.set(goal=f'Learn available Mage spells at {trainer.name}',
-                        action='Inspecting trainer services')
-                report['trained_spells'] = train_available_mage_spells(
-                    npc_name=trainer.name, npc_id=trainer.entry,
-                    capture=cap, driver=driver, log=log)
-                report['training_checked_level']=cap().player.level
-                report['hotbar_changes']=reconcile_mage_hotbar(capture=cap,driver=driver,log=log)
-                maintain_mage_supplies(capture=cap,driver=driver,log=log)
-                # An independent post-training snapshot makes the quest
-                # status visible even when a turn-in happened in an earlier
-                # run (and must NOT be submitted again). Only quests explicitly
-                # assigned to this NPC in the current profile are included.
-                trainer_quest_ids = {
-                    step.quest_id for step in quest_profile.steps
-                    if step.kind == 'turnin' and step.entry == trainer.entry
-                    and step.npc_name in ('', trainer.name)}
-                if trainer_quest_ids:
-                    hud.set(action='Rechecking quest journal and server history')
-                    post = cap()
-                    flags = dict(post.quest_completions)
-                    still_active = {q.quest_id for q in post.quests}
-                    confirmations = {
-                        str(qid): {
-                            'server_history_complete': flags.get(qid) is True,
-                            'still_in_journal': qid in still_active,
-                        } for qid in sorted(trainer_quest_ids)
-                        if qid in flags or qid in still_active or
-                        qid in handed_in}
-                    report['post_training_quest_verification'] = confirmations
-                    if any(not confirmations[str(qid)]['server_history_complete'] or
-                           confirmations[str(qid)]['still_in_journal']
-                           for qid in handed_in):
+                if (training_due and training_goal is not None and training_goal.pending and
+                        state.player.level==training_goal.level and
+                        state.resources.money_copper<training_goal.next_cost):
+                    # Refresh the saved baseline after selling. No pointless
+                    # trainer journey when the observed next rank is unaffordable.
+                    from dataclasses import replace
+                    deferred=replace(training_goal,cash=state.resources.money_copper,
+                        free_slots=state.resources.free_bag_slots,checked_at=time.time())
+                    save_goal(state.player.guid,state.player.name,deferred)
+                    report['training_checked_level']=deferred.level
+                    report['training_goal']=asdict(deferred)
+                    log(deferred.describe(state.resources.money_copper))
+                    log('Still cannot afford a known upgrade after vendor; questing to earn copper')
+                    training_due=False
+                else:
+                    training_due=True
+                if training_due:
+                    trainers = nearby_service_npcs(
+                        profile=quest_profile, spawns=db,
+                        origin=current.position, map_id=current.map_id,
+                        role='train', profiles_root=profiles_root, radius=600)
+                    if not trainers:
                         raise LiveControlError(
-                            f'Quest hand-in contradicted by post-training '
-                            f'journal/history: {confirmations!r}')
+                            'No nearby Mage TrainClass vendor found in local Horde '
+                            'profile XML and corroborated by CreatureSpawns.db')
+                    trainer = trainers[0]
+                    set_native_status('train')
+                    hud.set(goal=f'Train Mage at {trainer.name}',
+                            action='Navigating to class trainer')
+                    log(f'Profile-selected Mage trainer: {trainer.name} '
+                        f'({trainer.entry}); source={trainer.source}')
+                    visit_npc(npc_name=trainer.name, npc_id=trainer.entry,
+                              pid=pid, capture=cap, driver=driver, nav=nav,
+                              spawns=db, radius=600,
+                              destination_hint=trainer.position, log=log)
+                    # NPC services and quest turn-in are not mutually exclusive.
+                    # Complete only ready quests explicitly targeting this verified
+                    # NPC in the selected profile before opening class training.
+                    hud.set(goal=f'Turn in ready quests at {trainer.name}',
+                            action='Checking journal and server quest state')
+                    handed_in = turnin_ready_quests_at_npc(
+                        profile=quest_profile, npc_name=trainer.name,
+                        npc_id=trainer.entry, capture=cap, driver=driver, log=log)
+                    report['trainer_quest_turnins'] = handed_in
+                    if handed_in and cap().gear_scan_complete:
+                        upgraded = equip_mage_upgrades(
+                            capture=cap, driver=driver, log=log)
+                        if upgraded:
+                            report['equipped_item_ids'] = tuple(upgraded)
+                    hud.set(goal=f'Learn available Mage spells at {trainer.name}',
+                            action='Inspecting trainer services')
+                    def record_budget(s,pending):
+                        g=TrainingGoal(s.player.level,s.resources.money_copper,
+                            s.resources.free_bag_slots,pending,trainer.name,trainer.entry,
+                            current.map_id,(trainer.position.x,trainer.position.y,trainer.position.z),time.time())
+                        save_goal(s.player.guid,s.player.name,g)
+                        report['training_goal']=asdict(g)
+                        log(g.describe(s.resources.money_copper))
+                    report['trained_spells'] = train_available_mage_spells(
+                        npc_name=trainer.name, npc_id=trainer.entry,
+                        capture=cap, driver=driver, log=log,on_budget=record_budget)
+                    report['training_checked_level']=cap().player.level
+                    report['hotbar_changes']=reconcile_mage_hotbar(capture=cap,driver=driver,log=log)
+                    maintain_mage_supplies(capture=cap,driver=driver,log=log)
+                    # An independent post-training snapshot makes the quest
+                    # status visible even when a turn-in happened in an earlier
+                    # run (and must NOT be submitted again). Only quests explicitly
+                    # assigned to this NPC in the current profile are included.
+                    trainer_quest_ids = {
+                        step.quest_id for step in quest_profile.steps
+                        if step.kind == 'turnin' and step.entry == trainer.entry
+                        and step.npc_name in ('', trainer.name)}
+                    if trainer_quest_ids:
+                        hud.set(action='Rechecking quest journal and server history')
+                        post = cap()
+                        flags = dict(post.quest_completions)
+                        still_active = {q.quest_id for q in post.quests}
+                        confirmations = {
+                            str(qid): {
+                                'server_history_complete': flags.get(qid) is True,
+                                'still_in_journal': qid in still_active,
+                            } for qid in sorted(trainer_quest_ids)
+                            if qid in flags or qid in still_active or
+                            qid in handed_in}
+                        report['post_training_quest_verification'] = confirmations
+                        if any(not confirmations[str(qid)]['server_history_complete'] or
+                               confirmations[str(qid)]['still_in_journal']
+                               for qid in handed_in):
+                            raise LiveControlError(
+                                f'Quest hand-in contradicted by post-training '
+                                f'journal/history: {confirmations!r}')
             delivered_ready_quest = bool(resumed_offer)
             if args.only in ('all', 'objectives', 'collect', 'objects', 'turnin') and not delivered_ready_quest:
                 state, current = location()

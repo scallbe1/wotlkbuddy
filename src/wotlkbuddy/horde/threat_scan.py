@@ -166,9 +166,14 @@ def scan_and_clear_hostiles(
                     f'{exc}; deferring preemptive cast')
                 continue
         candidates.append((distance,current_guid,target.entry_id))
-        if len(candidates)>crowd_limit:
+        if len(candidates)>max(crowd_limit,3):
             break
-    if len(candidates)>crowd_limit or len(candidates)+sum(d<=18 for d,_ in blocked_nearby)>crowd_limit:
+    assess=getattr(driver,'assess_pull',None)
+    corridor_count=len(candidates)+sum(d<=18 for d,_ in blocked_nearby)
+    # A known three-pack should reach the strength assessment rather than
+    # be rejected solely by count. Larger/unsurveyable packs still stop.
+    allowed_count=3 if callable(assess) else crowd_limit
+    if corridor_count>allowed_count:
         remember_pack(driver,pack_positions,monotonic())
         raise LiveControlError(
             f'{len(candidates)} verified hostile mobs within '
@@ -266,9 +271,10 @@ def scan_and_clear_hostiles(
         state,plan=assess(state,getattr(driver,'active_quest_entries',()))
         if state.player.in_combat:
             return defend(state)
-        if plan is None or not plan.allowed:
+        corridor_guids={g for _,g,_ in candidates}|{g for d,g in blocked_nearby if d<=18}
+        if plan is None or not plan.allowed or (corridor_count>crowd_limit and not corridor_guids.issubset({m.guid for m in plan.enemies})):
             remember_pack(driver,[m.position for m in plan.enemies] if plan else pack_positions,monotonic())
-            raise LiveControlError('Unsafe encounter: '+(plan.reason if plan else 'assessment interrupted'))
+            raise LiveControlError('Unsafe encounter: '+(plan.reason if plan and not plan.allowed else 'corridor pack not fully accounted for in assessment'))
         target=state.combat_target
         if (state.player.target_guid!=chosen_guid or not target or target.dead or
                 target.fireball_in_range is not True):
@@ -277,6 +283,9 @@ def scan_and_clear_hostiles(
     before_quests = state.quests
     from wotlkbuddy.combat.runtime import selected_action
     ability=selected_action(state)
+    fireball=next((a for a in state.action_spells if a.name=='Fireball' and a.usable and a.in_range is True and a.cooldown_ms==0),None)
+    if fireball is not None:
+        ability=fireball
     cast_action=getattr(driver,'cast_action_spell',None)
     if ability is not None and callable(cast_action):
         cast_action(state,ability.spell_id)

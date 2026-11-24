@@ -15,6 +15,7 @@ def train_available_mage_spells(
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     log: Callable[[str], None] = lambda _: None,
+    on_budget: Callable[[ClientTelemetry, tuple], None] | None = None,
 ) -> tuple[str, ...]:
     if not 1 <= max_spells <= 20:
         raise ValueError('Invalid trainer purchase limit')
@@ -129,7 +130,12 @@ def train_available_mage_spells(
                      v.cost <= s.resources.money_copper and
                      v.required_level <= s.player.level]
         if not available:
-            log(f'{npc_name}: no affordable, level-eligible spells available')
+            eligible=[v for v in s.trainer_services if v.required_level<=s.player.level]
+            if eligible:
+                log(f'{npc_name}: cash {s.resources.money_copper}c; outstanding '+
+                    ', '.join(f'{v.name} {v.rank} ({v.cost}c)' for v in eligible))
+            else:
+                log(f'{npc_name}: no observed level-eligible spells remaining')
             break
         available.sort(key=lambda v: (v.cost, v.index))
         choice = available[0]
@@ -163,6 +169,11 @@ def train_available_mage_spells(
     # itself is dismissed. Quest and gossip close actions do not close this
     # separately managed ClassTrainerFrame.
     guard(s)
+    # Snapshot the real remaining trainer services before closing the window.
+    pending=tuple((v.name,v.rank,v.cost) for v in s.trainer_services
+                  if v.required_level<=s.player.level)
+    if on_budget is not None:
+        on_budget(s,pending)
     log(f'{npc_name}: closing class trainer window after training')
     driver.chat('/click ClassTrainerFrameCloseButton')
     deadline = now() + 6

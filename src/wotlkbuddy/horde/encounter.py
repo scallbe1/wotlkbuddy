@@ -59,8 +59,11 @@ def assess_encounter(player, resources, position, chosen, enemies, quest_entries
     if len(pack)==2 and hp>=.95 and mana>=.90 and all(m.level<=player.level-1 for m in pack):
         if sum(m.health for m in pack)<=2.5*player.max_health:
             return PullPlan(True,pack,'two weaker enemies including escorts; high resources')
-    if len(pack)==3 and hp>=.98 and mana>=.95 and all(m.level<=player.level-3 for m in pack) and sum(m.health for m in pack)<=2*player.max_health:
-        return PullPlan(True,pack,'three substantially weaker enemies; full resources')
+    if len(pack)==3:
+        deficits=[player.level-m.level for m in pack]
+        if min(deficits)>=1 and sum(deficits)>=6 and hp>=.90 and mana>=.85 and sum(m.health for m in pack)<=3.5*player.max_health:
+            return PullPlan(True,pack,'three weaker normal enemies; combined level advantage and healthy resources')
+        return PullPlan(False,pack,f'three-enemy budget: level advantages {deficits}, HP {hp:.0%}, mana {mana:.0%}, combined enemy HP {sum(m.health for m in pack)} vs own max {player.max_health}')
     return PullPlan(False,pack,'linked group exceeds conservative Mage combat budget')
 
 
@@ -130,6 +133,7 @@ def survey_pull(*,initial,capture,driver,player_position,target_position,quest_e
         f' {"quest" if m.entry in quest_entries else "non-objective"}'
         f' {m.position.distance_to(position.position):.1f}y' for m in plan.enemies)
     log(f'Encounter assessment: {len(observed)} red enemies mapped; '
-        f'{len(plan.enemies)} likely linked: {details}; '
+        f'{len(plan.enemies)} likely linked: {details}; player L{state.player.level}, '
+        f'HP {state.player.health}/{state.player.max_health}, mana {state.resources.mana}/{state.resources.max_mana}; '
         f'{"PULL" if plan.allowed else "AVOID"}: {plan.reason}')
     return state,plan

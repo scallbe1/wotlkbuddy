@@ -115,6 +115,7 @@ def follow_world_path(
     continuous_forward: bool = False,
     ghost_only: bool = False,
     replan_path: Callable[[Vec3, Vec3], Sequence[Vec3]] | None = None,
+    destination_status: Callable[[Vec3], None] | None = None,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -168,6 +169,8 @@ def follow_world_path(
     breadcrumbs = [world0.position]
     destination = waypoints[-1]
     cautious = False
+    notify(f'Navigation goal: map {expected_map_id}, XYZ ({destination.x:.2f},{destination.y:.2f},{destination.z:.2f}); '
+           f'from ({world0.x:.2f},{world0.y:.2f},{world0.z:.2f})')
 
     def guard() -> None:
         if stop_requested() or not keyboard.wow_is_foreground():
@@ -518,6 +521,9 @@ def follow_world_path(
         return True
 
     try:
+        if destination_status is not None:
+            guard()
+            destination_status(destination)
         if on_threat is not None:
             current, world = checked(force_scan=True)
         index=1
@@ -525,6 +531,9 @@ def follow_world_path(
             waypoint=waypoints[index]
             rerouted=False
             next_waypoint_index = index
+            notify(f'Action: navigating waypoint {index}/{len(waypoints)-1} XYZ '
+                   f'({waypoint.x:.2f},{waypoint.y:.2f},{waypoint.z:.2f}) toward goal '
+                   f'({destination.x:.2f},{destination.y:.2f},{destination.z:.2f})')
             count = 0
             stalls = 0
             prev_distance = _distance_xy(world.position, waypoint)
