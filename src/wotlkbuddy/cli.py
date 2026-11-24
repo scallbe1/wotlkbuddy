@@ -745,6 +745,10 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
     from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
     from wotlkbuddy.horde.defense import defend_against_aggro
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
+    from wotlkbuddy.horde.resurrection_site import nearby_threats, plan_rest_site
+    from wotlkbuddy.live.world_travel import follow_world_path
+    from wotlkbuddy.horde.ranged_pull import face_target_in_place
+    from wotlkbuddy.live.world_position import verified_target_position
     from wotlkbuddy.navigation.proxy import NavigationProxy
     from pathlib import Path
     cap = lambda: capture_monitor(args.monitor)
@@ -776,6 +780,12 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
 
     def restore(state):
         guid = state.player.guid
+        supplies_checked = False
+        retreat_attempts = 0
+        driver.face_combat_target = lambda s: face_target_in_place(
+            s,capture=cap,driver=driver,
+            player_position=lambda s: verified_live_position(s,pid=pid)[1],
+            target_position=lambda s: verified_target_position(s,pid=pid),log=log)
         for attempt in range(40):
             if (state.truncated or state.player.dead or state.player.guid != guid or
                     state.resources is None or driver.emergency_stop_requested() or
@@ -783,11 +793,32 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
                 raise LiveControlError('Post-resurrection recovery interrupted')
             if state.player.in_combat:
                 state = defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
-            elif (state.player.health/max(1,state.player.max_health) >= .90 and
+                supplies_checked = False
+                continue
+            _, where = verified_live_position(state,pid=pid)
+            threats = verified_nearby_creatures(state,pid=pid,center=where.position)
+            if nearby_threats(where.position,threats) and retreat_attempts<2:
+                retreat_attempts+=1
+                path = plan_rest_site(nav,where.map_id,where.position,threats)
+                if path:
+                    log('Moving away from remaining creatures to recover and buff')
+                    report = follow_world_path(path,sample=sample,keyboard=driver.keyboard,
+                        stop_requested=driver.emergency_stop_requested,
+                        expected_quest_id=None,expected_map_id=where.map_id,
+                        max_seconds=60,progress=log,
+                        on_aggro=lambda s: defend_against_aggro(initial=s,capture=cap,driver=driver,log=log),
+                        can_traverse=lambda a,b:nav.segment_clear(where.map_id,a,b))
+                    if report.stopped_reason!='complete':
+                        raise LiveControlError('Post-reclaim retreat interrupted: '+report.stopped_reason)
+                    state=cap()
+                    continue
+                log('No safer short retreat route; holding current position to recover')
+            if (state.player.health/max(1,state.player.max_health) >= .90 and
                   state.resources.mana/max(1,state.resources.max_mana) >= .85):
                 log('Resurrection recovery complete: health and mana restored before questing')
                 return state
-            elif attempt == 0:
+            elif not supplies_checked:
+                supplies_checked=True
                 state = maintain_mage_supplies(capture=cap,driver=driver,log=log)
             else:
                 time.sleep(2)

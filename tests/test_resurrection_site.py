@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 from wotlkbuddy.game.types import Vec3
-from wotlkbuddy.horde.resurrection_site import acceptable_site,plan_resurrection_sites,approach_path
+from wotlkbuddy.horde.resurrection_site import acceptable_site,plan_resurrection_sites,approach_path,nearby_threats
 
 
 def test_selects_reachable_offset_away_from_hostile_spawns():
@@ -15,7 +15,7 @@ def test_selects_reachable_offset_away_from_hostile_spawns():
     for point,path in sites:
         assert acceptable_site(point,corpse,hazards)
         assert 18<=point.distance_to(corpse)<=37
-        assert point.distance_to(hazards[0])>=20
+        assert len(nearby_threats(point,hazards))<=1
         assert path[-1]==point
 
 
@@ -39,3 +39,20 @@ def test_ghost_approaches_even_if_static_spawns_cover_every_site():
     sites=plan_resurrection_sites(nav,0,route[-1],corpse,(),spawn_hints=hints)
     assert sites
     assert all(acceptable_site(p,corpse,()) for p,_ in sites)
+
+
+def test_single_enemy_allowed_but_two_are_not():
+    corpse=Vec3(0,0,0)
+    site=Vec3(32,0,0)
+    assert acceptable_site(site,corpse,(Vec3(34,0,0),))
+    assert not acceptable_site(site,corpse,(Vec3(34,0,0),Vec3(32,5,0)))
+
+
+def test_zero_threat_sites_rank_before_one_threat_sites():
+    corpse=Vec3(0,0,0)
+    nav=Mock()
+    nav.nearest_point.side_effect=lambda _,p:p
+    nav.find_path.side_effect=lambda _,a,b:[a,b]
+    hazards=(Vec3(32,0,0),)
+    sites=plan_resurrection_sites(nav,0,Vec3(40,0,0),corpse,hazards)
+    assert sites and not nearby_threats(sites[0][0],hazards)

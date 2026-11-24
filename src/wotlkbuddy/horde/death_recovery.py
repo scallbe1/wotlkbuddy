@@ -12,7 +12,8 @@ from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 from wotlkbuddy.horde.resurrection_site import (
-    APPROACH_DISTANCE, acceptable_site, approach_path, clearance, plan_resurrection_sites)
+    APPROACH_DISTANCE, acceptable_site, approach_path, clearance,
+    nearby_threats, plan_resurrection_sites)
 
 
 def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
@@ -177,6 +178,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
     hints = tuple(read_spawn_hints(state,corpse)) if read_spawn_hints else ()
     chosen = None
     attempted = []
+    scouted = []
     for search in range(3):
         state, position = observe()
         hazards = tuple(read_hazards(state,corpse))
@@ -190,7 +192,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                 pass
         sites = plan_resurrection_sites(nav,corpse_map,position.position,corpse,
                                          hazards,spawn_hints=hints,route_points=route_points)
-        log(f'Resurrection search {search+1}/3: {len(hazards)} observed creatures, '
+        log(f'Resurrection search {search+1}/3: {len(hazards)} potential living threats, '
             f'{len(hints)} static spawn hints, {len(sites)} reachable candidates')
         for point, _ in sites:
             if any(point.distance_to(p)<2 for p in attempted):
@@ -199,7 +201,8 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
             if not acceptable_site(point,corpse,tuple(read_hazards(state,corpse))):
                 continue
             attempted.append(point)
-            log(f'Checking offset site {point.distance_to(corpse):.1f}y from corpse')
+            log(f'Checking offset site {point.distance_to(corpse):.1f}y from corpse; '
+                f'{len(nearby_threats(point,hazards))} nearby potential attackers')
             if position.position.distance_to(point)>1.5:
                 path = nav.find_path(corpse_map,position.position,point)
                 if not path or path[-1].distance_to(point)>2:
@@ -233,11 +236,32 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
         if chosen is not None:
             break
         if search<2:
-            log('No suitable local site yet; rescanning nearby creatures as ghost')
+            # Physically scout a different reachable vantage while still a ghost.
+            # A scout site may be crowded; it never authorizes resurrection.
+            state, position = observe()
+            scouts = plan_resurrection_sites(nav,corpse_map,position.position,corpse,
+                tuple(read_hazards(state,corpse)),spawn_hints=hints,
+                route_points=route_points,scout=True)
+            for point,path in scouts:
+                if (not path or point.distance_to(position.position)<5 or
+                        any(point.distance_to(p)<5 for p in scouted)):
+                    continue
+                scouted.append(point)
+                log('Moving as ghost to inspect another reclaim vantage')
+                if walk(path,'Ghost scouting'):
+                    break
             sleep(2)
     if chosen is None:
         raise LiveControlError('Reached corpse vicinity but no safe reclaim site found; remaining a ghost nearby')
-    log(f'Resurrecting {chosen.distance_to(corpse):.1f}y from corpse, away from death location')
+    state, position = observe()
+    final_hazards = tuple(read_hazards(state,corpse))
+    if (not state.player.dead or not state.death_state.ghost or
+            not state.death_state.retrieve_ready or
+            not acceptable_site(position.position,corpse,final_hazards)):
+        raise LiveControlError('Final reclaim check failed; no resurrection input sent')
+    chosen = position.position
+    log(f'Resurrecting {chosen.distance_to(corpse):.1f}y from corpse with '
+        f'{len(nearby_threats(chosen,final_hazards))} nearby potential attackers')
     guard()
     driver.chat('/run RetrieveCorpse()')
     state, position = wait_for(
