@@ -792,22 +792,24 @@ local function tickData()
     if dialog == 'reward' and rewardChoices and rewardChoices > 0 and
             rewardChoices <= 12 and GetQuestItemInfo then
         for i = 1, rewardChoices do
-            local ok, name, _, _, _, usable = pcall(GetQuestItemInfo, 'choice', i)
-            if not ok then name, usable = nil, nil end
+            local ok, name, texture, quantity, quality, usable = pcall(GetQuestItemInfo, 'choice', i)
+            if not ok then name, usable, quantity = nil, nil, nil end
             local link = GetQuestItemLink and GetQuestItemLink('choice', i) or nil
             local itemId = link and tonumber(string.match(link, 'item:(%d+)')) or 0
-            local itemLevel, equipSlot = -1, ''
+            local itemLevel, equipSlot, vendorPrice = -1, '', -1
             if link and GetItemInfo then
-                local cached, _, _, _, level, _, _, _, _, slot =
+                local cached, _, _, _, level, _, _, _, _, slot, _, price =
                     pcall(GetItemInfo, link)
                 if cached then
                     itemLevel = tonumber(level) or -1
                     equipSlot = safe(slot, 32)
+                    vendorPrice = tonumber(price) or -1
                 end
             end
             local usableFlag = usable == nil and '-1' or (usable and '1' or '0')
             if not appendLine(table.concat({'R', tostring(i), safe(name, 80),
-                usableFlag, equipSlot, tostring(itemLevel), tostring(itemId)}, '\t')) then
+                usableFlag, equipSlot, tostring(itemLevel), tostring(itemId),
+                tostring(vendorPrice), tostring(math.max(1, tonumber(quantity) or 1))}, '\t')) then
                 break
             end
         end

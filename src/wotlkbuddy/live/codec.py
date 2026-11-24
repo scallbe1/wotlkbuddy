@@ -165,6 +165,8 @@ class QuestRewardChoice:
     equip_slot: str
     item_level: int  # -1 if GetItemInfo was uncached
     item_id: int  # 0 if no quest item link available
+    vendor_price: int | None = None  # copper per item; None if uncached
+    quantity: int = 1
 
 
 @dataclass(frozen=True)
@@ -861,22 +863,26 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 if payment < 0: payment = None
             dialog = QuestDialog(parts[1], quest_id, title, choices, payment)
         elif parts[0] == 'R':
-            if len(parts) != 7 or dialog is None or dialog.kind != 'reward':
+            if len(parts) not in (7, 9) or dialog is None or dialog.kind != 'reward':
                 raise TelemetryError('Reward option requires an active reward panel')
             if parts[3] not in ('-1', '0', '1'):
                 raise TelemetryError('Invalid reward item usability')
             try:
                 index, level, item_id = int(parts[1]), int(parts[5]), int(parts[6])
+                price = int(parts[7]) if len(parts)==9 else -1
+                quantity = int(parts[8]) if len(parts)==9 else 1
             except ValueError as exc:
                 raise TelemetryError('Malformed reward item index/level/ID') from exc
             if (not 1 <= index <= 12 or index in reward_options or
                     not parts[2] or len(parts[2]) > 80 or
                     len(parts[4]) > 32 or not -1 <= level <= 1000 or
-                    not 0 <= item_id < 2**31):
+                    not 0 <= item_id < 2**31 or not -1 <= price < 2**31 or
+                    not 1 <= quantity <= 1000):
                 raise TelemetryError('Invalid or repeated reward option')
             usable = None if parts[3] == '-1' else parts[3] == '1'
             reward_options[index] = QuestRewardChoice(
-                index, parts[2], usable, parts[4], level, item_id)
+                index, parts[2], usable, parts[4], level, item_id,
+                None if price == -1 else price, quantity)
         elif parts[0] == 'K':
             if (len(parts) != 2 or dialog is None or dialog.kind != 'gossip'
                     or gossip_service_total is not None):
