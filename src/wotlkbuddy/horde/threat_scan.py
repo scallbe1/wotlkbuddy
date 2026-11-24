@@ -332,6 +332,9 @@ def scan_and_clear_hostiles(
         remember=getattr(driver,'remember_defeated',None)
         if callable(remember):
             remember(state)
+        drain=getattr(driver,'drain_encounter_loot',None)
+        if callable(drain):
+            return drain(state)
         return state
     if state.player.target_guid == chosen_guid and target and (
             target.health < before_hp):

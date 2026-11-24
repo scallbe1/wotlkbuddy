@@ -81,6 +81,8 @@ class KeyboardQuestInput:
         self.native_hud_enabled = True
         # Exact names from profile data are an acquisition hint, not authorization.
         self.defeated_corpses = {}
+        self.finished_corpses = set()
+        self.seen_kill_events = set()
 
     def wow_is_foreground(self) -> bool:
         return self.keyboard.wow_is_foreground()
@@ -121,10 +123,24 @@ class KeyboardQuestInput:
         self.chat('/targetexact ' + name)
         return True
 
+    def sync_kills(self, state: ClientTelemetry) -> None:
+        from wotlkbuddy.horde.combat import creature_entry_from_guid
+        for serial,guid,name in state.recent_kills:
+            key=(serial,guid)
+            if key in self.seen_kill_events:
+                continue
+            self.seen_kill_events.add(key)
+            # A respawn may reuse a GUID; a new combat-log kill supersedes it.
+            self.finished_corpses.discard(guid)
+            entry=creature_entry_from_guid(guid)
+            if entry:
+                self.defeated_corpses[guid]=(entry,name)
+
     def remember_defeated(self, state: ClientTelemetry) -> None:
         target = state.combat_target
         guid = state.player.target_guid
-        if guid and target and target.entry_id > 0 and target.dead:
+        self.sync_kills(state)
+        if guid and guid not in self.finished_corpses and target and target.entry_id > 0 and target.dead:
             self.defeated_corpses[guid] = (target.entry_id, state.player.target_name)
             if len(self.defeated_corpses) > 16:
                 self.defeated_corpses.pop(next(iter(self.defeated_corpses)))

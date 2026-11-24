@@ -350,6 +350,11 @@ def hunt_kill_objectives(
             out = fresh(s)
             if report.stopped_reason == 'complete':
                 return out
+            if ('fresh Detour replan' in report.stopped_reason or 'fresh Detour route required' in report.stopped_reason) and height_replans<1 and not out.player.in_combat:
+                height_replans+=1
+                log('Encounter displaced player while looting; recalculating route from actual XYZ')
+                s=out
+                continue
             if 'Aggro/combat detected' in report.stopped_reason and out.player.in_combat:
                 log('Interrupted by combat; checking creature identity before fighting')
                 return out
@@ -569,9 +574,11 @@ def hunt_kill_objectives(
                     driver.chat('/targetlasttarget')
                     snapshot = fresh(snapshot)
                 corpse = snapshot.combat_target
-                confirmed = (snapshot.player.target_guid == target_guid and
+                confirmed = (target_guid in getattr(driver,'finished_corpses',set()) or
+                             any(g==target_guid for _,g,_ in snapshot.recent_kills) or
+                             (snapshot.player.target_guid == target_guid and
                              corpse is not None and corpse.entry_id == expected
-                             and corpse.dead is True)
+                             and corpse.dead is True))
             else:
                 confirmed = quest_credit_advanced(snapshot)
             if confirmed:
@@ -983,6 +990,9 @@ def hunt_kill_objectives(
         return s
 
     def drain_travel_corpses(s):
+        drain=getattr(driver,'drain_encounter_loot',None)
+        if callable(drain):
+            return drain(s)
         pending=getattr(driver,'defeated_corpses',None)
         if not isinstance(pending,dict) or s.player.in_combat:
             return s
@@ -1258,10 +1268,16 @@ def hunt_kill_objectives(
                 if s.player.in_combat:
                     log('Combat persists after target death; clearing additional attackers before loot')
                     s = clear_remaining_aggro(s)
+                drain=getattr(driver,'drain_encounter_loot',None)
+                if callable(drain):
+                    driver.remember_defeated(s)
+                    s=drain(s)
                 # Loot selected verified add first, while it is still targetable,
                 # then try the original objective corpse and other observed dead GUIDs.
                 pending = getattr(driver, 'defeated_corpses', None)
-                if isinstance(pending, dict):
+                if callable(drain):
+                    pass  # Unified encounter queue already processed all known kills.
+                elif isinstance(pending, dict):
                     selected = s.player.target_guid
                     ordered = ([selected] if selected in pending and selected != dead_guid else [])
                     ordered += [dead_guid]
