@@ -18,7 +18,7 @@ def defend_against_aggro(
     *, initial: ClientTelemetry, capture: Callable[[], ClientTelemetry],
     driver, log: Callable[[str], None] = lambda _: None,
     sleep: Callable[[float], None] = real_sleep,
-    max_casts: int = 12, max_acquire: int = 5,
+    max_casts: int = 20, max_acquire: int = 8,
 ) -> ClientTelemetry:
     """Resolve a bounded encounter of verified aggressors before resuming."""
     if not 1 <= max_casts <= 20 or not 1 <= max_acquire <= 8:
@@ -38,8 +38,8 @@ def defend_against_aggro(
                 driver.emergency_stop_requested() or
                 not driver.wow_is_foreground()):
             raise LiveControlError('Defense lost player identity, telemetry or input focus')
-        if s.player.health / max(1,s.player.max_health) < .20:
-            raise LiveControlError('Mage below 20% health; defensive combat unsafe')
+        # Low HP is a reason to finish the active encounter, not stop input.
+        # Death, invalid telemetry, focus and bounded fight limits still stop.
 
     def fresh(before: ClientTelemetry, delay: float=.15) -> ClientTelemetry:
         guard(before)
@@ -64,6 +64,7 @@ def defend_against_aggro(
     target_guid = None
     target_entry = None
     no_damage = 0
+    critical_logged = False
     # A global cast budget and bounded acquisition keep the encounter finite.
     # A dead, cleared, or changed target is normal while adds remain alive.
     for _ in range(max_casts):
@@ -86,6 +87,18 @@ def defend_against_aggro(
             target_entry = state.combat_target.entry_id
             no_damage = 0
             log(f'Defending against verified attacker {target_entry}, GUID {target_guid}')
+            face = getattr(driver, 'face_combat_target', None)
+            if callable(face):
+                state = face(state)
+                guard(state)
+                if not state.player.in_combat:
+                    return state
+                if not verified_attacker(state) or state.player.target_guid != target_guid:
+                    target_guid = None
+                    continue
+        if state.player.health/max(1,state.player.max_health) < .25 and not critical_logged:
+            log('Critical health: continuing verified defensive combat; rest after combat')
+            critical_logged = True
         t = state.combat_target
         if t.fireball_in_range is not True:
             raise LiveControlError('Verified attacker is outside Fireball range; '
