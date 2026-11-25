@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from functools import partial
 
+from wotlkbuddy.combat.class_policy import MAGE_COMBAT_POLICY, RangedCombatPolicy
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 
@@ -48,7 +49,7 @@ def recover_encounter(snapshot: ClientTelemetry, *, collect_items, target_guid,
     return snapshot
 
 
-def cast_selected_action(s, *, driver, log):
+def cast_selected_action(s, *, driver, log, policy: RangedCombatPolicy = MAGE_COMBAT_POLICY):
     """Issue the existing verified action policy or legacy driver fallback."""
     # Class-aware action policy: select the strongest suitable
     # learned/ready spell whose actual hotbar binding and range were
@@ -63,30 +64,18 @@ def cast_selected_action(s, *, driver, log):
     elif callable(cast_action):
         return action, False
     else:
-        verified_key = s.fireball_key
-        fast_cast = getattr(driver, 'cast_fireball', None)
-        if callable(fast_cast):
-            fast_cast(s)
-            if verified_key is not None:
-                log(f'Casting Fireball using verified bound action key '
-                    f'{verified_key} (no chat command)')
-        else:
-            driver.chat('/cast Fireball')
+        policy.cast_legacy(s, driver=driver, log=log)
     return action, True
 
 
-def observe_cast(s, *, action, target_guid, fresh):
+def observe_cast(s, *, action, target_guid, fresh, policy: RangedCombatPolicy = MAGE_COMBAT_POLICY):
     """Wait for the current cast to finish without issuing further input."""
     # Observe the actual client cast timer. A low-rank Fireball can
     # finish casting long before the old fixed 2.65 s delay, and its
     # projectile may still be travelling. Resume on cast completion,
     # not projectile impact; WoW itself handles spell queue/GCD.
     during = fresh(s, .15)
-    observed_cast_ms = (
-        during.current_cast_remaining_ms
-        if action is not None and
-           during.current_cast_name == action.name
-        else during.fireball_cast_remaining_ms)
+    observed_cast_ms = policy.cast_remaining(during, action)
     if observed_cast_ms is not None:
         wait_cast = min(2.5, max(.10,
             observed_cast_ms / 1000.0 + .02))
@@ -97,7 +86,7 @@ def observe_cast(s, *, action, target_guid, fresh):
     s = fresh(during, wait_cast)
     # Never issue another cast while the observed current cast is active.
     for _pending in range(12):
-        remaining = s.current_cast_remaining_ms or s.fireball_cast_remaining_ms or 0
+        remaining = policy.pending_cast(s)
         if (remaining <= 0 or s.player.target_guid != target_guid or
                 (s.combat_target and s.combat_target.dead)):
             break
@@ -178,16 +167,16 @@ def observe_impact(s, *, target_guid, expected, previous_health, fresh,
 def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
                   previous_credit: tuple[int, int] | None, *, driver, guard,
                   fresh, qlog, clear_remaining_aggro, approach_unhittable_target,
-                  collect_items, record_kill, log) -> ClientTelemetry:
+                  collect_items, record_kill, log,
+                  policy: RangedCombatPolicy = MAGE_COMBAT_POLICY) -> ClientTelemetry:
     """Execute one bounded fight with explicit evidence and recovery callbacks."""
     from wotlkbuddy.horde.combat import UnhittableMobError
-    if s.mage_buffs.knows_fireball is not True:
-        raise LiveControlError('Fireball is not confirmed learned; Mage spell driver cannot fire')
+    policy.require_primary(s)
     t = s.combat_target
     if not t or t.entry_id != expected or not t.attackable or t.dead or t.health == 0:
         raise LiveControlError('Target entry/hostility mismatch; refusing to attack')
-    if t.fireball_in_range is not True:
-        raise LiveControlError('Fireball range not confirmed; move closer before attacking')
+    if not policy.in_range(s):
+        raise LiveControlError(f'{policy.primary_spell} range not confirmed; move closer before attacking')
     target_guid = s.player.target_guid
     log(f'Engaging verified creature entry {expected}, GUID {target_guid}')
     face = getattr(driver, 'face_combat_target', None)
@@ -218,23 +207,23 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
             record_kill(expected)
             log(f'Creature {expected} defeated; checking quest objective')
             return s
-        if t.fireball_in_range is not True:
+        if not policy.in_range(s):
             if s.player.in_combat:
                 return recover(s)
-            raise UnhittableMobError(target_guid,'Enemy moved out of Fireball range; reassess target')
-        if s.resources.mana < 20:
+            raise UnhittableMobError(target_guid,f'Enemy moved out of {policy.primary_spell} range; reassess target')
+        if not policy.has_attack_resource(s):
             if s.player.in_combat:
                 return recover(s)
-            raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
+            raise LiveControlError(f'Insufficient mana for another {policy.primary_spell}; recovery needed')
         previous_health = t.health
-        action, casted = cast_selected_action(s, driver=driver, log=log)
+        action, casted = cast_selected_action(s, driver=driver, log=log, policy=policy)
         if not casted:
             if s.player.in_combat:
                 return recover(s)
             log('No verified ready damage spell; waiting for cooldown/mana before pull')
             s = fresh(s, .65)
             continue
-        s = observe_cast(s, action=action, target_guid=target_guid, fresh=fresh)
+        s = observe_cast(s, action=action, target_guid=target_guid, fresh=fresh, policy=policy)
         new = s.combat_target
         if (s.player.target_guid != target_guid or new is None
                 or new.entry_id != expected):
@@ -287,4 +276,4 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
         else:
             unchanged=0
             landed_damage = landed_damage or new.health < previous_health
-    raise LiveControlError('Exceeded bounded Fireball casts on one target')
+    raise LiveControlError(f'Exceeded bounded {policy.primary_spell} casts on one target')

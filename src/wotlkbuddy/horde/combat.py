@@ -211,12 +211,14 @@ def hunt_kill_objectives(
     if not nav.ping():
         raise LiveControlError('Navmesh worker is unavailable')
     started = now()
+    from wotlkbuddy.combat.class_policy import require_hunt_combat_policy
     from wotlkbuddy.horde.hunt_session import wire_hunt_services
     services = wire_hunt_services(
         capture=capture, driver=driver, guid=guid, quest_id=quest_id,
         started=started, max_seconds=max_seconds, now=now, sleep=sleep,
         log=log, pid=pid, nav=nav, target_xyz=target_xyz,
-        world_position=world_position, travel=travel, collect_items=collect_items)
+        world_position=world_position, travel=travel, collect_items=collect_items,
+        policy=require_hunt_combat_policy(first.resources.class_token))
     return _run_hunt(
         services=services, profile=profile, quest_id=quest_id, pid=pid,
         capture=capture, driver=driver, nav=nav, spawns=spawns, max_kills=max_kills,
@@ -291,7 +293,8 @@ def _run_hunt(*, services, profile, quest_id, pid, capture, driver, nav, spawns,
             unhittable_guids=unhittable_guids, unhittable_positions=unhittable_positions,
             target_xyz=target_xyz, world_position=world_position, driver=driver,
             navigate=navigate, capture=capture, guard=guard,
-            clear_remaining_aggro=clear_remaining_aggro, fresh=fresh, now=now, log=log)
+            clear_remaining_aggro=clear_remaining_aggro, fresh=fresh, now=now, log=log,
+            policy=services.policy)
         if decision == 'retry':
             continue
         if decision == 'attack':

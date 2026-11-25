@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import hypot
 
+from wotlkbuddy.combat.class_policy import MAGE_COMBAT_POLICY, RangedCombatPolicy
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.hunt_routes import recoverable_hunt_failure, remember_pack
 from wotlkbuddy.live.control import LiveControlError
@@ -16,7 +17,8 @@ class BlockedEngagements:
 
 def prepare_engagement(s, expected, *, routes, allowed_sources, unhittable_guids,
                        unhittable_positions, target_xyz, world_position, driver,
-                       navigate, capture, guard, clear_remaining_aggro, fresh, now, log):
+                       navigate, capture, guard, clear_remaining_aggro, fresh, now, log,
+                       policy: RangedCombatPolicy = MAGE_COMBAT_POLICY):
     """Return attack, retry, or search, preserving the original target and route policy."""
     t = s.combat_target
     if (not routes.force_spawn_search and t and t.entry_id in allowed_sources and t.attackable
@@ -28,9 +30,9 @@ def prepare_engagement(s, expected, *, routes, allowed_sources, unhittable_guids
             corpse_xyz = target_xyz(s)
         except (OSError, ValueError, LiveControlError) as exc:
             log(f'Observed matching target but cannot resolve target XYZ: {exc}')
-        if t.fireball_in_range is not True:
+        if not policy.in_range(s):
             if s.player.in_combat:
-                raise LiveControlError('Aggro target out of Fireball range')
+                raise LiveControlError(f'Aggro target out of {policy.primary_spell} range')
             if corpse_xyz is not None:
                 _pid, world = world_position(s)
                 dx, dy = world.x-corpse_xyz.x, world.y-corpse_xyz.y
@@ -68,7 +70,7 @@ def prepare_engagement(s, expected, *, routes, allowed_sources, unhittable_guids
                 s.combat_target.entry_id in allowed_sources and
                 s.combat_target.entry_id == expected and
                 s.combat_target.attackable and not s.combat_target.dead and
-                s.combat_target.fireball_in_range is True):
+                policy.in_range(s)):
             assess=getattr(driver,'assess_pull',None)
             if callable(assess):
                 selected_guid=s.player.target_guid
@@ -96,7 +98,7 @@ def prepare_engagement(s, expected, *, routes, allowed_sources, unhittable_guids
                         s=fresh(s)
                     return s, expected, corpse_xyz, 'retry'
                 if (s.player.target_guid!=selected_guid or not s.combat_target or
-                        s.combat_target.fireball_in_range is not True):
+                        not policy.in_range(s)):
                     log('Target moved during encounter survey; reacquiring')
                     return s, expected, corpse_xyz, 'retry'
             return s, expected, corpse_xyz, 'attack'

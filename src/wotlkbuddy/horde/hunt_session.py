@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from wotlkbuddy.combat.class_policy import MAGE_COMBAT_POLICY, RangedCombatPolicy
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
@@ -46,11 +47,12 @@ class HuntServices:
     attack: Callable
     loot: Callable
     drain_travel_corpses: Callable
+    policy: RangedCombatPolicy = MAGE_COMBAT_POLICY
 
 
 def wire_hunt_services(*, capture, driver, guid, quest_id, started, max_seconds,
                        now, sleep, log, pid, nav, target_xyz, world_position,
-                       travel, collect_items) -> HuntServices:
+                       travel, collect_items, policy: RangedCombatPolicy = MAGE_COMBAT_POLICY) -> HuntServices:
     """Create the original hunt services and shared state exactly once per hunt."""
     from wotlkbuddy.horde.hunt_objective_state import HuntObjectiveState
     objectives = HuntObjectiveState()
@@ -121,7 +123,7 @@ def wire_hunt_services(*, capture, driver, guid, quest_id, started, max_seconds,
             guard=guard, fresh=fresh, qlog=qlog,
             clear_remaining_aggro=clear_remaining_aggro,
             approach_unhittable_target=approach_unhittable_target,
-            collect_items=collect_items, record_kill=progress.record_kill, log=log)
+            collect_items=collect_items, record_kill=progress.record_kill, log=log, policy=policy)
 
     def loot(s: ClientTelemetry, corpse: Vec3 | None,
              dead_guid: str, expected_entry: int) -> ClientTelemetry:
@@ -153,4 +155,4 @@ def wire_hunt_services(*, capture, driver, guid, quest_id, started, max_seconds,
     return HuntServices(progress, objectives, routes, loot_stats, blocked,
                         unhittable_guids, unhittable_positions, telemetry,
                         navigate, approach_unhittable_target, clear_remaining_aggro,
-                        attack, loot, drain_travel_corpses)
+                        attack, loot, drain_travel_corpses, policy)
