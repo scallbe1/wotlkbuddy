@@ -1104,7 +1104,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     if actionbar_page_seen and actionbar_inspected and fireball_key is not None:
         slot = 10 if fireball_key == '0' else int(fireball_key)
         spell = action_spells.get(slot)
-        if spell is None or spell.spell_id != 133 or spell.name != 'Fireball':
+        # AS/AB carry the independently resolved spell identity and binding.
+        # F is a convenience key, not a claim that Fireball must be rank 1.
+        if spell is None or spell.name != 'Fireball':
             raise TelemetryError('Fireball key not backed by verified Fireball action')
     if actionbar_page_seen and actionbar_inspected:
         # Missing raw rows must not be treated as proof that the slots
