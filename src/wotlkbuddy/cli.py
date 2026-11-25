@@ -317,25 +317,10 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
             state=drain(state)
             if state.player.in_combat:
                 state=defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
-        # No new pull or travel at critical HP after surviving an encounter.
-        if not state.player.in_combat and (state.player.health/max(1,state.player.max_health) < .70 or
-                state.resources.mana/max(1,state.resources.max_mana) < .85):
-            log('Combat cleared; restoring health and mana before movement')
-            state = maintain_mage_supplies(capture=cap, driver=driver, log=log,health_goal=.90,mana_goal=.90)
-            for _ in range(30):
-                if state.player.dead or state.truncated or state.player.guid != snapshot.player.guid:
-                    raise LiveControlError('Character changed during post-combat recovery')
-                if driver.emergency_stop_requested() or not driver.wow_is_foreground():
-                    raise LiveControlError('Post-combat recovery interrupted')
-                if state.player.in_combat:
-                    return defend_against_aggro(initial=state, capture=cap, driver=driver, log=log)
-                if (state.player.health/max(1,state.player.max_health) >= .70 and
-                        state.resources.mana/max(1,state.resources.max_mana) >= .85):
-                    return state
-                time.sleep(2)
-                state = cap()
-            raise LiveControlError('Combat survived but health/mana did not recover; holding position')
-        return state
+        from wotlkbuddy.horde.sustain import recover_after_encounter
+        return recover_after_encounter(initial=state,capture=cap,driver=driver,
+            defend=lambda s:defend_against_aggro(initial=s,capture=cap,driver=driver,log=log),
+            log=log)
     driver.on_aggro = resolve_aggro
     # Configure facing before startup defense, not only after hotbar setup.
     from wotlkbuddy.live.world_position import verified_target_position
