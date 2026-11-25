@@ -383,6 +383,9 @@ class ClientTelemetry:
     player_xp: int | None = None
     player_xp_max: int | None = None
     visible_hotbar: tuple[tuple[int,str,int,str], ...] = ()
+    bag_slots: tuple[tuple[int,int,int,int], ...] = ()  # bag index, item ID, capacity, family
+    bag_candidates: tuple[tuple[int,int,int,int], ...] = ()  # source bag, slot, item ID, capacity
+    bag_scan_complete: bool = False
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -396,6 +399,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     loot_sequence = None
     player_xp = player_xp_max = None
     visible_hotbar = {}
+    bag_slots = {}
+    bag_candidates = {}
+    bag_candidate_count = None
     resources = None
     dialog = None
     completion_states: dict[int, bool] = {}
@@ -973,6 +979,32 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             if not 1 <= index <= 32 or not 0 <= button <= 32 or key in available:
                 raise TelemetryError('Out-of-range or duplicate available quest-list entry')
             available[key] = AvailableQuestOption(parts[1], index, parts[3], button or None)
+        elif parts[0] in ('BG','BE','BC'):
+            try:
+                values=tuple(map(int,parts[1:]))
+            except ValueError as exc:
+                raise TelemetryError('Malformed bag capacity record') from exc
+            if parts[0]=='BG':
+                if len(values)!=1 or not 0<=values[0]<=64 or bag_candidate_count is not None:
+                    raise TelemetryError('Invalid bag scan header')
+                bag_candidate_count=values[0]
+            elif parts[0]=='BE':
+                if len(values)!=4:
+                    raise TelemetryError('Invalid equipped bag record')
+                bag,item,capacity,family=values
+                if (not 1<=bag<=4 or bag in bag_slots or not 0<=item<2**31 or
+                        not 0<=capacity<=36 or not 0<=family<2**31 or
+                        ((item==0)!=(capacity==0)) or (item==0 and family!=0)):
+                    raise TelemetryError('Invalid equipped bag identity or capacity')
+                bag_slots[bag]=values
+            else:
+                if len(values)!=4:
+                    raise TelemetryError('Invalid bag candidate record')
+                bag,slot,item,capacity=values
+                if (not 0<=bag<=4 or not 1<=slot<=36 or not 0<item<2**31 or
+                        not 1<=capacity<=36 or (bag,slot) in bag_candidates):
+                    raise TelemetryError('Invalid or repeated bag candidate')
+                bag_candidates[(bag,slot)]=values
         elif parts[0] == 'U':
             if len(parts) != 10:
                 raise TelemetryError('Invalid bag armor record')
@@ -1054,6 +1086,10 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             raise TelemetryError('Unexpected record type: ' + parts[0])
     if player is None:
         raise TelemetryError('Missing player record')
+    if bag_candidate_count is not None or bag_slots or bag_candidates:
+        if (bag_candidate_count!=len(bag_candidates) or set(bag_slots)!={1,2,3,4} or
+                any(bag and slot>bag_slots[bag][2] for bag,slot,_,_ in bag_candidates.values())):
+            raise TelemetryError('Incomplete or inconsistent bag capacity scan')
     if death_state is not None and (
             (not player.dead and (death_state.ghost or death_state.release_ready or
                                   death_state.retrieve_ready)) or
@@ -1213,4 +1249,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            recent_kills=tuple(recent_kills[i] for i in sorted(recent_kills)),
                            loot_sequence=loot_sequence,
                            player_xp=player_xp,player_xp_max=player_xp_max,
-                           visible_hotbar=tuple(visible_hotbar[i] for i in sorted(visible_hotbar)))
+                           visible_hotbar=tuple(visible_hotbar[i] for i in sorted(visible_hotbar)),
+                           bag_slots=tuple(bag_slots[i] for i in sorted(bag_slots)),
+                           bag_candidates=tuple(bag_candidates[i] for i in sorted(bag_candidates)),
+                           bag_scan_complete=bag_candidate_count is not None)

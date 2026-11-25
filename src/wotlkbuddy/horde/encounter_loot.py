@@ -61,24 +61,16 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
             log(f'Encounter loot: {name or entry} {cg}, {distance:.1f}y')
             # A failed attempt should not drag the character repeatedly off
             # the current quest/service route. Retain it for a later pass.
-            retry_after[cg]=now()+45
+            retry_after[cg]=now()+10
             if distance>4:
                 if distance>25 or abs(point.z-where.z)>4:
+                    retry_after[cg]=now()+45
                     log('Corpse too far or on different floor; retaining for later')
                     continue
-                # First try to establish the actual dead target while still
-                # on the original route. Do not travel to a name-only guess.
-                if not exact(state,cg,entry):
-                    driver.chat('/targetlasttarget')
-                    state,where=fresh(state)
-                if not exact(state,cg,entry) and not state.player.in_combat and name:
-                    if driver.target_objective_name(name):
-                        state,where=fresh(state)
-                if state.player.in_combat:
-                    break
-                if not exact(state,cg,entry):
-                    log('Exact corpse not selectable before detour; deferring 45s')
-                    continue
+                # A combat-log GUID and live object-manager XYZ already
+                # identify this corpse. Selection may fail outside interact
+                # range; approach the verified position first, then select.
+                # No interaction is authorized by XYZ alone.
                 dx,dy=point.x-where.x,point.y-where.y
                 d=hypot(dx,dy)
                 if d<.1:
@@ -100,10 +92,12 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                 if report.stopped_reason!='complete':
                     log('Corpse approach incomplete; retaining pending corpse')
                     continue
-            # Prefer the already selected corpse, then last target, then the
-            # combat-log name. Every interaction still requires exact dead GUID.
-            if not exact(state,cg,entry):
-                driver.chat('/targetlasttarget')
+            # Prefer current corpse, then previous enemy and last target,
+            # then name. Never interact with a same-name living mob.
+            for command in ('/targetlastenemy','/targetlasttarget'):
+                if exact(state,cg,entry) or state.player.in_combat:
+                    break
+                driver.chat(command)
                 state,where=fresh(state)
             if not exact(state,cg,entry) and not state.player.in_combat and name:
                 if driver.target_objective_name(name):
@@ -111,7 +105,7 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
             if state.player.in_combat:
                 break
             if not exact(state,cg,entry):
-                log('Exact corpse not selectable yet; retaining pending corpse')
+                log('Exact corpse not selectable at loot range; retaining pending corpse')
                 continue
             try:
                 actual=corpse_position(state,cg)

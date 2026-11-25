@@ -433,8 +433,15 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
             def corpse_position(state, corpse_guid):
                 with ProcessMemory(pid,writable=False) as memory:
                     return observe_target_position(memory,player_guid=state.player.guid,target_guid=corpse_guid)
-            driver.drain_encounter_loot=lambda state: loot_encounter(initial=state,
-                sample=location,driver=driver,nav=nav,corpse_position=corpse_position,log=log)
+            from wotlkbuddy.horde.bags import equip_bag_upgrades
+            def drain_and_equip(state):
+                state=loot_encounter(initial=state,sample=location,driver=driver,nav=nav,
+                    corpse_position=corpse_position,log=log)
+                if not state.player.in_combat and state.bag_candidates:
+                    equip_bag_upgrades(capture=cap,driver=driver,log=log)
+                    state=cap()
+                return state
+            driver.drain_encounter_loot=drain_and_equip
             if needs_recovery:
                 from wotlkbuddy.horde.recovery_rest import recover_and_buff
                 from wotlkbuddy.live.world_position import verified_nearby_creatures
@@ -442,6 +449,10 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 recover_and_buff(initial=cap(),sample=location,driver=driver,nav=nav,
                     read_hazards=lambda s,center: verified_nearby_creatures(s,pid=pid,center=center),log=log)
 
+            # Equip newly looted bags before evaluating inventory pressure.
+            bag_upgrades=equip_bag_upgrades(capture=cap,driver=driver,log=log)
+            if bag_upgrades:
+                report['equipped_bag_ids']=bag_upgrades
             # Reconcile bag upgrades on every objective phase, including
             # restart after a previously successful quest reward.
             if args.only in ('objectives','collect','objects','turnin','vendor','train','quests') and cap().gear_scan_complete:

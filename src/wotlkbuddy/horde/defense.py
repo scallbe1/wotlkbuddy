@@ -47,6 +47,11 @@ def defend_against_aggro(
         for _ in range(10):
             state=capture()
             guard(state)
+            # Record observed deaths and combat-log events even if the
+            # target is cleared or another attacker is acquired next frame.
+            remember=getattr(driver,'remember_defeated',None)
+            if callable(remember):
+                remember(state)
             if state.sequence != before.sequence:
                 return state
             sleep(.08)
