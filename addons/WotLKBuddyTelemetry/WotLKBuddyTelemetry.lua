@@ -1520,11 +1520,505 @@ destinationText:SetJustifyH('LEFT')
 destinationText:SetText('')
 SLASH_WOTLKBUDDYCOORDS1='/wbtcoords'
 SlashCmdList['WOTLKBUDDYCOORDS']=function(msg)
-    local x,y,z=string.match(msg or '', '^(-?%d+) (-?%d+) (-?%d+)$')
-    x,y,z=tonumber(x),tonumber(y),tonumber(z)
-    if x and y and z and math.abs(x)<=100000 and math.abs(y)<=100000 and math.abs(z)<=100000 then
-        destinationText:SetText(string.format('Destination XYZ: %d, %d, %d',x,y,z))
+    local x,y,z,d=string.match(msg or '', '^(-?%d+) (-?%d+) (-?%d+) (%d+)
+
+local hudQuestId = 0
+local hudQuestName = ''
+local hudPhase = 'idle'
+local hudTravelKind = ''
+local hudTravelName = ''
+local hudLastAction = ''
+local hudLastActive = 0
+local phaseLabels = {
+    idle='Waiting for next goal',
+    hunt='Complete quest objectives',
+    turnin='Turn in completed quest',
+    quests='Accept available quests',
+    train='Visit class trainer',
+    gear='Check and equip upgrades',
+    vendor='Visit merchant'
+}
+local function setQuestGoal(id)
+    if hudQuestId ~= id then
+        hudTravelKind, hudTravelName = '', ''
     end
+    hudQuestId = id
+    hudQuestName = ''
+    if id > 0 and GetNumQuestLogEntries and GetQuestLogTitle then
+        for i=1, GetNumQuestLogEntries() do
+            local title, _, _, _, isHeader, _, _, _, qid =
+                GetQuestLogTitle(i)
+            if not isHeader and qid == id and type(title) == 'string' then
+                hudQuestName = title
+                break
+            end
+        end
+    end
+    if id > 0 and hudQuestName == '' then
+        hudQuestName = 'Quest ' .. tostring(id)
+    end
+end
+SLASH_WOTLKBUDDYGOAL1 = '/wbtgoal'
+SlashCmdList['WOTLKBUDDYGOAL'] = function(message)
+    local id = tonumber(message or '')
+    if not id or id ~= math.floor(id) or id < 0 or id > 999999 then return end
+    setQuestGoal(id)
+    statusFrame:Show()
+end
+SLASH_WOTLKBUDDYPHASE1 = '/wbtphase'
+SlashCmdList['WOTLKBUDDYPHASE'] = function(message)
+    if phaseLabels[message or ''] then
+        if hudPhase ~= message then
+            hudTravelKind, hudTravelName = '', ''
+            destinationText:SetText('')
+        end
+        hudPhase = message
+        statusFrame:Show()
+    end
+end
+
+-- BEGIN HUD NAVIGATION CONTEXT
+-- These are presentation-only strings. They never influence targeting,
+-- movement, quest telemetry, combat, or spell casts.
+local function travelActionLabel(kind, target, questName)
+    if kind == 'enemies' then
+        return 'Navigating to ' ..
+            ((questName and questName ~= '' and questName) or 'quest') .. ' enemies'
+    elseif kind == 'npc' and target and target ~= '' then
+        return 'Navigating to ' .. target
+    elseif kind == 'deathrun' then
+        return 'Navigating to own corpse'
+    elseif kind == 'corpse' then
+        return 'Navigating to quest corpse'
+    elseif kind == 'firing' then
+        return 'Navigating to firing position'
+    end
+    return nil
+end
+
+SLASH_WOTLKBUDDYTRAVEL1 = '/wbttravel'
+SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
+    if message == 'clear' then
+        hudTravelKind, hudTravelName = '', ''
+        destinationText:SetText('')
+    elseif message == 'enemies' or message == 'corpse' or
+            message == 'firing' or message == 'deathrun' then
+        hudTravelKind, hudTravelName = message, ''
+    else
+        -- Accept only a bounded NPC name, not an arbitrary Lua expression
+        -- or command string. Names originate in validated quest profiles.
+        local npc = string.match(message or '', "^npc ([A-Za-z][A-Za-z '%-]*)$")
+        if not npc or string.len(npc) > 64 then return end
+        hudTravelKind, hudTravelName = 'npc', npc
+    end
+    statusFrame:Show()
+end
+-- END HUD NAVIGATION CONTEXT
+
+local statusElapsed = 0
+statusFrame:SetScript('OnUpdate', function(_, elapsed)
+    statusElapsed = statusElapsed + elapsed
+    if statusElapsed < 0.20 then return end
+    statusElapsed = 0
+    if hudQuestId > 0 and hudQuestName == ('Quest '..hudQuestId) then
+        setQuestGoal(hudQuestId)
+    end
+    local goal = phaseLabels[hudPhase] or phaseLabels.idle
+    if hudQuestId > 0 then
+        goal = goal .. ': ' .. hudQuestName
+    end
+    goalText:SetText('Goal: ' .. string.sub(goal, 1, 65))
+    local action = phaseLabels[hudPhase] or 'Standing by'
+    if UnitIsDeadOrGhost('player') then
+        action = (UnitIsGhost('player') and (travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) or 'Ghost: recovering corpse')) or 'Dead: awaiting spirit release'
+    elseif LootFrame and LootFrame:IsShown() then
+        action = 'Looting corpse'
+    elseif ClassTrainerFrame and ClassTrainerFrame:IsShown() then
+        action = 'Training Mage spells'
+    elseif UnitCastingInfo and UnitCastingInfo('player') then
+        local spell = UnitCastingInfo('player')
+        action = 'Casting ' .. tostring(spell)
+    elseif UnitChannelInfo and UnitChannelInfo('player') then
+        local spell = UnitChannelInfo('player')
+        action = 'Channeling ' .. tostring(spell)
+    elseif UnitAffectingCombat('player') then
+        action = 'Combat'
+    elseif travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) then
+        -- Keep the actual destination visible during paused Detour movement,
+        -- steering corrections, and proactive hostile scans. GetUnitSpeed
+        -- drops to zero during those pauses and must not hide the goal.
+        action = travelActionLabel(hudTravelKind, hudTravelName, hudQuestName)
+    elseif GetUnitSpeed and (GetUnitSpeed('player') or 0) > 0.2 then
+        action = travelActionLabel(
+            hudPhase == 'hunt' and 'enemies' or '', '', hudQuestName
+        ) or 'Navigating'
+    elseif hudPhase == 'hunt' then
+        action = 'Searching for quest enemies'
+    elseif hudPhase == 'turnin' then
+        action = 'Interacting with quest giver'
+    end
+    if action ~= hudLastAction then
+        hudLastAction = action
+        hudLastActive = GetTime()
+        actionText:SetText('Action: ' .. string.sub(action, 1, 67))
+    end
+end)
+statusFrame:Hide()
+SLASH_WOTLKBUDDYHUD1 = '/wbthud'
+SlashCmdList['WOTLKBUDDYHUD'] = function(message)
+    if message == 'show' then statusFrame:Show()
+    elseif message == 'hide' then statusFrame:Hide() end
+end
+
+queryCompletions()
+publish()
+)
+    if not x then x,y,z=string.match(msg or '', '^(-?%d+) (-?%d+) (-?%d+)
+
+local hudQuestId = 0
+local hudQuestName = ''
+local hudPhase = 'idle'
+local hudTravelKind = ''
+local hudTravelName = ''
+local hudLastAction = ''
+local hudLastActive = 0
+local phaseLabels = {
+    idle='Waiting for next goal',
+    hunt='Complete quest objectives',
+    turnin='Turn in completed quest',
+    quests='Accept available quests',
+    train='Visit class trainer',
+    gear='Check and equip upgrades',
+    vendor='Visit merchant'
+}
+local function setQuestGoal(id)
+    if hudQuestId ~= id then
+        hudTravelKind, hudTravelName = '', ''
+    end
+    hudQuestId = id
+    hudQuestName = ''
+    if id > 0 and GetNumQuestLogEntries and GetQuestLogTitle then
+        for i=1, GetNumQuestLogEntries() do
+            local title, _, _, _, isHeader, _, _, _, qid =
+                GetQuestLogTitle(i)
+            if not isHeader and qid == id and type(title) == 'string' then
+                hudQuestName = title
+                break
+            end
+        end
+    end
+    if id > 0 and hudQuestName == '' then
+        hudQuestName = 'Quest ' .. tostring(id)
+    end
+end
+SLASH_WOTLKBUDDYGOAL1 = '/wbtgoal'
+SlashCmdList['WOTLKBUDDYGOAL'] = function(message)
+    local id = tonumber(message or '')
+    if not id or id ~= math.floor(id) or id < 0 or id > 999999 then return end
+    setQuestGoal(id)
+    statusFrame:Show()
+end
+SLASH_WOTLKBUDDYPHASE1 = '/wbtphase'
+SlashCmdList['WOTLKBUDDYPHASE'] = function(message)
+    if phaseLabels[message or ''] then
+        if hudPhase ~= message then
+            hudTravelKind, hudTravelName = '', ''
+            destinationText:SetText('')
+        end
+        hudPhase = message
+        statusFrame:Show()
+    end
+end
+
+-- BEGIN HUD NAVIGATION CONTEXT
+-- These are presentation-only strings. They never influence targeting,
+-- movement, quest telemetry, combat, or spell casts.
+local function travelActionLabel(kind, target, questName)
+    if kind == 'enemies' then
+        return 'Navigating to ' ..
+            ((questName and questName ~= '' and questName) or 'quest') .. ' enemies'
+    elseif kind == 'npc' and target and target ~= '' then
+        return 'Navigating to ' .. target
+    elseif kind == 'deathrun' then
+        return 'Navigating to own corpse'
+    elseif kind == 'corpse' then
+        return 'Navigating to quest corpse'
+    elseif kind == 'firing' then
+        return 'Navigating to firing position'
+    end
+    return nil
+end
+
+SLASH_WOTLKBUDDYTRAVEL1 = '/wbttravel'
+SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
+    if message == 'clear' then
+        hudTravelKind, hudTravelName = '', ''
+        destinationText:SetText('')
+    elseif message == 'enemies' or message == 'corpse' or
+            message == 'firing' or message == 'deathrun' then
+        hudTravelKind, hudTravelName = message, ''
+    else
+        -- Accept only a bounded NPC name, not an arbitrary Lua expression
+        -- or command string. Names originate in validated quest profiles.
+        local npc = string.match(message or '', "^npc ([A-Za-z][A-Za-z '%-]*)$")
+        if not npc or string.len(npc) > 64 then return end
+        hudTravelKind, hudTravelName = 'npc', npc
+    end
+    statusFrame:Show()
+end
+-- END HUD NAVIGATION CONTEXT
+
+local statusElapsed = 0
+statusFrame:SetScript('OnUpdate', function(_, elapsed)
+    statusElapsed = statusElapsed + elapsed
+    if statusElapsed < 0.20 then return end
+    statusElapsed = 0
+    if hudQuestId > 0 and hudQuestName == ('Quest '..hudQuestId) then
+        setQuestGoal(hudQuestId)
+    end
+    local goal = phaseLabels[hudPhase] or phaseLabels.idle
+    if hudQuestId > 0 then
+        goal = goal .. ': ' .. hudQuestName
+    end
+    goalText:SetText('Goal: ' .. string.sub(goal, 1, 65))
+    local action = phaseLabels[hudPhase] or 'Standing by'
+    if UnitIsDeadOrGhost('player') then
+        action = (UnitIsGhost('player') and (travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) or 'Ghost: recovering corpse')) or 'Dead: awaiting spirit release'
+    elseif LootFrame and LootFrame:IsShown() then
+        action = 'Looting corpse'
+    elseif ClassTrainerFrame and ClassTrainerFrame:IsShown() then
+        action = 'Training Mage spells'
+    elseif UnitCastingInfo and UnitCastingInfo('player') then
+        local spell = UnitCastingInfo('player')
+        action = 'Casting ' .. tostring(spell)
+    elseif UnitChannelInfo and UnitChannelInfo('player') then
+        local spell = UnitChannelInfo('player')
+        action = 'Channeling ' .. tostring(spell)
+    elseif UnitAffectingCombat('player') then
+        action = 'Combat'
+    elseif travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) then
+        -- Keep the actual destination visible during paused Detour movement,
+        -- steering corrections, and proactive hostile scans. GetUnitSpeed
+        -- drops to zero during those pauses and must not hide the goal.
+        action = travelActionLabel(hudTravelKind, hudTravelName, hudQuestName)
+    elseif GetUnitSpeed and (GetUnitSpeed('player') or 0) > 0.2 then
+        action = travelActionLabel(
+            hudPhase == 'hunt' and 'enemies' or '', '', hudQuestName
+        ) or 'Navigating'
+    elseif hudPhase == 'hunt' then
+        action = 'Searching for quest enemies'
+    elseif hudPhase == 'turnin' then
+        action = 'Interacting with quest giver'
+    end
+    if action ~= hudLastAction then
+        hudLastAction = action
+        hudLastActive = GetTime()
+        actionText:SetText('Action: ' .. string.sub(action, 1, 67))
+    end
+end)
+statusFrame:Hide()
+SLASH_WOTLKBUDDYHUD1 = '/wbthud'
+SlashCmdList['WOTLKBUDDYHUD'] = function(message)
+    if message == 'show' then statusFrame:Show()
+    elseif message == 'hide' then statusFrame:Hide() end
+end
+
+queryCompletions()
+publish()
+) end
+    x,y,z,d=tonumber(x),tonumber(y),tonumber(z),tonumber(d)
+    if x and y and z and math.abs(x)<=100000 and math.abs(y)<=100000 and math.abs(z)<=100000 and (not d or d<=999999) then
+        if d then
+            destinationText:SetText(string.format('Destination XYZ: %d, %d, %d (%d yd)',x,y,z,d))
+        else
+            destinationText:SetText(string.format('Destination XYZ: %d, %d, %d',x,y,z))
+        end
+    end
+end
+
+-- Explicit, bounded native bag operation. Verify both slots in the live
+-- client before touching the cursor; never delete or vendor inventory.
+SLASH_WOTLKBUDDYBAG1='/wbtbag'
+SlashCmdList['WOTLKBUDDYBAG']=function(msg)
+    local src,slot,id,bag,old=string.match(msg or '', '^(%d+) (%d+) (%d+) (%d+) (%d+)
+
+local hudQuestId = 0
+local hudQuestName = ''
+local hudPhase = 'idle'
+local hudTravelKind = ''
+local hudTravelName = ''
+local hudLastAction = ''
+local hudLastActive = 0
+local phaseLabels = {
+    idle='Waiting for next goal',
+    hunt='Complete quest objectives',
+    turnin='Turn in completed quest',
+    quests='Accept available quests',
+    train='Visit class trainer',
+    gear='Check and equip upgrades',
+    vendor='Visit merchant'
+}
+local function setQuestGoal(id)
+    if hudQuestId ~= id then
+        hudTravelKind, hudTravelName = '', ''
+    end
+    hudQuestId = id
+    hudQuestName = ''
+    if id > 0 and GetNumQuestLogEntries and GetQuestLogTitle then
+        for i=1, GetNumQuestLogEntries() do
+            local title, _, _, _, isHeader, _, _, _, qid =
+                GetQuestLogTitle(i)
+            if not isHeader and qid == id and type(title) == 'string' then
+                hudQuestName = title
+                break
+            end
+        end
+    end
+    if id > 0 and hudQuestName == '' then
+        hudQuestName = 'Quest ' .. tostring(id)
+    end
+end
+SLASH_WOTLKBUDDYGOAL1 = '/wbtgoal'
+SlashCmdList['WOTLKBUDDYGOAL'] = function(message)
+    local id = tonumber(message or '')
+    if not id or id ~= math.floor(id) or id < 0 or id > 999999 then return end
+    setQuestGoal(id)
+    statusFrame:Show()
+end
+SLASH_WOTLKBUDDYPHASE1 = '/wbtphase'
+SlashCmdList['WOTLKBUDDYPHASE'] = function(message)
+    if phaseLabels[message or ''] then
+        if hudPhase ~= message then
+            hudTravelKind, hudTravelName = '', ''
+            destinationText:SetText('')
+        end
+        hudPhase = message
+        statusFrame:Show()
+    end
+end
+
+-- BEGIN HUD NAVIGATION CONTEXT
+-- These are presentation-only strings. They never influence targeting,
+-- movement, quest telemetry, combat, or spell casts.
+local function travelActionLabel(kind, target, questName)
+    if kind == 'enemies' then
+        return 'Navigating to ' ..
+            ((questName and questName ~= '' and questName) or 'quest') .. ' enemies'
+    elseif kind == 'npc' and target and target ~= '' then
+        return 'Navigating to ' .. target
+    elseif kind == 'deathrun' then
+        return 'Navigating to own corpse'
+    elseif kind == 'corpse' then
+        return 'Navigating to quest corpse'
+    elseif kind == 'firing' then
+        return 'Navigating to firing position'
+    end
+    return nil
+end
+
+SLASH_WOTLKBUDDYTRAVEL1 = '/wbttravel'
+SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
+    if message == 'clear' then
+        hudTravelKind, hudTravelName = '', ''
+        destinationText:SetText('')
+    elseif message == 'enemies' or message == 'corpse' or
+            message == 'firing' or message == 'deathrun' then
+        hudTravelKind, hudTravelName = message, ''
+    else
+        -- Accept only a bounded NPC name, not an arbitrary Lua expression
+        -- or command string. Names originate in validated quest profiles.
+        local npc = string.match(message or '', "^npc ([A-Za-z][A-Za-z '%-]*)$")
+        if not npc or string.len(npc) > 64 then return end
+        hudTravelKind, hudTravelName = 'npc', npc
+    end
+    statusFrame:Show()
+end
+-- END HUD NAVIGATION CONTEXT
+
+local statusElapsed = 0
+statusFrame:SetScript('OnUpdate', function(_, elapsed)
+    statusElapsed = statusElapsed + elapsed
+    if statusElapsed < 0.20 then return end
+    statusElapsed = 0
+    if hudQuestId > 0 and hudQuestName == ('Quest '..hudQuestId) then
+        setQuestGoal(hudQuestId)
+    end
+    local goal = phaseLabels[hudPhase] or phaseLabels.idle
+    if hudQuestId > 0 then
+        goal = goal .. ': ' .. hudQuestName
+    end
+    goalText:SetText('Goal: ' .. string.sub(goal, 1, 65))
+    local action = phaseLabels[hudPhase] or 'Standing by'
+    if UnitIsDeadOrGhost('player') then
+        action = (UnitIsGhost('player') and (travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) or 'Ghost: recovering corpse')) or 'Dead: awaiting spirit release'
+    elseif LootFrame and LootFrame:IsShown() then
+        action = 'Looting corpse'
+    elseif ClassTrainerFrame and ClassTrainerFrame:IsShown() then
+        action = 'Training Mage spells'
+    elseif UnitCastingInfo and UnitCastingInfo('player') then
+        local spell = UnitCastingInfo('player')
+        action = 'Casting ' .. tostring(spell)
+    elseif UnitChannelInfo and UnitChannelInfo('player') then
+        local spell = UnitChannelInfo('player')
+        action = 'Channeling ' .. tostring(spell)
+    elseif UnitAffectingCombat('player') then
+        action = 'Combat'
+    elseif travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) then
+        -- Keep the actual destination visible during paused Detour movement,
+        -- steering corrections, and proactive hostile scans. GetUnitSpeed
+        -- drops to zero during those pauses and must not hide the goal.
+        action = travelActionLabel(hudTravelKind, hudTravelName, hudQuestName)
+    elseif GetUnitSpeed and (GetUnitSpeed('player') or 0) > 0.2 then
+        action = travelActionLabel(
+            hudPhase == 'hunt' and 'enemies' or '', '', hudQuestName
+        ) or 'Navigating'
+    elseif hudPhase == 'hunt' then
+        action = 'Searching for quest enemies'
+    elseif hudPhase == 'turnin' then
+        action = 'Interacting with quest giver'
+    end
+    if action ~= hudLastAction then
+        hudLastAction = action
+        hudLastActive = GetTime()
+        actionText:SetText('Action: ' .. string.sub(action, 1, 67))
+    end
+end)
+statusFrame:Hide()
+SLASH_WOTLKBUDDYHUD1 = '/wbthud'
+SlashCmdList['WOTLKBUDDYHUD'] = function(message)
+    if message == 'show' then statusFrame:Show()
+    elseif message == 'hide' then statusFrame:Hide() end
+end
+
+queryCompletions()
+publish()
+)
+    src,slot,id,bag,old=tonumber(src),tonumber(slot),tonumber(id),tonumber(bag),tonumber(old)
+    if not src or src>4 or not bag or bag<1 or bag>4 or src==bag or
+            not slot or slot<1 or slot>36 or not id or id<1 or id>99999999 or
+            not old or old>99999999 then return end
+    if not GetCursorInfo or GetCursorInfo() or UnitAffectingCombat('player') or
+            (InCombatLockdown and InCombatLockdown()) or UnitIsDeadOrGhost('player') then return end
+    if not PickupContainerItem or not PickupInventoryItem or not ClearCursor then return end
+    local link=GetContainerItemLink(src,slot)
+    local equipped=GetInventoryItemLink('player',19+bag)
+    local actual=link and tonumber(string.match(link,'item:(%d+)'))
+    local oldId=equipped and tonumber(string.match(equipped,'item:(%d+)')) or 0
+    local _,_,locked=GetContainerItemInfo(src,slot)
+    if actual~=id or oldId~=old or locked or not GetItemFamily or GetItemFamily(link)~=0 then return end
+    if equipped and GetItemFamily(equipped)~=0 then return end
+    local name,_,_,_,required,_,_,_,equipLoc=GetItemInfo(link)
+    local capacity=observedBagSize(link)
+    if not name or equipLoc~='INVTYPE_BAG' or (required or 0)>UnitLevel('player') or
+            not capacity or capacity<=(GetContainerNumSlots(bag) or 0) then return end
+    PickupContainerItem(src,slot)
+    local kind,cursorId=GetCursorInfo()
+    if kind=='item' and tonumber(cursorId)==id then
+        PickupInventoryItem(19+bag)
+    end
+    -- Restore a rejected pickup or the displaced bag through native cursor
+    -- handling, with the original source slot available for the old bag.
+    if GetCursorInfo() then ClearCursor() end
 end
 
 local hudQuestId = 0
