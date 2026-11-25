@@ -1,6 +1,8 @@
 """Read-only actionbar page diagnosis and legacy write-suspension and guarded maintenance regressions."""
+import ast
+import inspect
 from dataclasses import replace
-from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
@@ -87,12 +89,39 @@ def test_raw_chat_placement_command_is_rejected_before_any_keypress():
 
 
 def test_continuous_cli_uses_guarded_hotbar_reconciler_not_legacy_mutation():
-    repo=Path(__file__).resolve().parents[1]
-    source=(repo/'src/wotlkbuddy/cli.py').read_text(encoding='utf-8')
-    assert 'provision_rotation_hotbar(capture=cap' not in source
-    assert 'reconcile_mage_hotbar(capture=cap,driver=driver,log=log)' in source
-    source=(repo/'src/wotlkbuddy/horde/interaction.py').read_text(encoding='utf-8')
-    method=source.split('    def place_book_spell(',1)[1].split(
-        '    def cast_fireball(',1)[0]
-    assert 'raise LiveControlError' in method
-    assert 'self.chat(' not in method
+    from wotlkbuddy import cli
+    from wotlkbuddy.horde.session_startup import prepare_phase
+    from wotlkbuddy.horde.session_training import execute_training_phase, visit_and_train
+
+    def calls(function):
+        tree = ast.parse(dedent(inspect.getsource(function)))
+        return [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+
+    def calls_named(function, name):
+        return [node for node in calls(function)
+                if isinstance(node.func, ast.Name) and node.func.id == name]
+
+    # Verify the actual delegation path, not a particular source location
+    # or whitespace. Startup and post-training both use the guarded editor.
+    assert calls_named(cli._horde_progress, 'prepare_phase')
+    assert calls_named(cli._horde_progress, 'execute_training_phase')
+    assert calls_named(execute_training_phase, 'visit_and_train')
+    for function in (prepare_phase, visit_and_train):
+        guarded = calls_named(function, 'reconcile_mage_hotbar')
+        assert len(guarded) == 1
+        assert {kw.arg: ast.unparse(kw.value) for kw in guarded[0].keywords} == {
+            'capture': 'cap', 'driver': 'driver', 'log': 'log'}
+    for function in (cli._horde_progress, prepare_phase,
+                     execute_training_phase, visit_and_train):
+        assert not calls_named(function, 'provision_rotation_hotbar')
+        assert not any(isinstance(node.func, ast.Attribute)
+                       and node.func.attr == 'place_book_spell'
+                       for node in calls(function))
+
+    # Legacy mutation must still fail before sending keyboard input.
+    driver = KeyboardQuestInput.__new__(KeyboardQuestInput)
+    sent = []
+    driver.chat = sent.append
+    with pytest.raises(LiveControlError, match='Automatic hotbar placement is suspended'):
+        driver.place_book_spell(3, 7)
+    assert sent == []
