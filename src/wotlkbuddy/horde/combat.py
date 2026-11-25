@@ -215,11 +215,8 @@ def hunt_kill_objectives(
     last_target = 0
     last_description = ''
     no_credit = 0
-    recently_visited: dict[tuple[int, int, int], int] = {}
-    # A verified position can be used to choose another Detour spawn route
-    # after an off-axis collision. Never retry the same problematic spawn.
-    navigation_mismatches = 0
-    failed_navigation: dict[tuple[int, int, int], LiveControlError] = {}
+    from wotlkbuddy.horde.hunt_retry import HuntRouteState, run_spawn_route, select_spawn_goal
+    routes = HuntRouteState()
     from wotlkbuddy.horde.hunt_loot import LootStats, loot_corpse
     loot_stats = LootStats()
     active_tracked_item = 0
@@ -236,11 +233,7 @@ def hunt_kill_objectives(
     unhittable_count = 0
     logged_live_kill_totals: set[int] = set()
     from wotlkbuddy.horde.hunt_routes import recoverable_hunt_failure, remember_pack, alternate_hunt_routes
-    route_replans = 0
-    refresh_rounds = 0
-    force_spawn_search = False
-    staging_visited=[]
-    required_waits=0
+
 
     from wotlkbuddy.horde.hunt_telemetry import HuntTelemetry
     telemetry = HuntTelemetry(
@@ -438,7 +431,7 @@ def hunt_kill_objectives(
                 else:
                     log(f'KillMob entry {spec.entry}: live journal progress '
                         f'{live_credit[0]}/{live_credit[1]}')
-        s = rest(s,full=bool(route_replans and len(allowed_sources)==1))
+        s = rest(s,full=bool(routes.route_replans and len(allowed_sources)==1))
         s = buffs(s)
         if (s.player.health/max(1,s.player.max_health) < .70 or
                 s.resources.mana/max(1,s.resources.max_mana) < .45):
@@ -454,7 +447,7 @@ def hunt_kill_objectives(
         from wotlkbuddy.horde.hunt_targeting import acquire_hunt_target
         s = acquire_hunt_target(
             s, driver=driver, spec=spec, allowed_sources=allowed_sources,
-            unhittable_guids=unhittable_guids, force_spawn_search=force_spawn_search,
+            unhittable_guids=unhittable_guids, force_spawn_search=routes.force_spawn_search,
             world_position=world_position, fresh=fresh, log=log,
             creature_entry_from_guid=creature_entry_from_guid)
 
@@ -462,7 +455,7 @@ def hunt_kill_objectives(
             s = clear_remaining_aggro(s)
             continue
         t = s.combat_target
-        if (not force_spawn_search and t and t.entry_id in allowed_sources and t.attackable
+        if (not routes.force_spawn_search and t and t.entry_id in allowed_sources and t.attackable
                 and not t.dead and
                 s.player.target_guid not in unhittable_guids):
             expected = t.entry_id
@@ -497,9 +490,9 @@ def hunt_kill_objectives(
                             unhittable_positions.append(corpse_xyz)
                         else:
                             _,measured=world_position(s)
-                            staging_visited.append(measured.position)
-                        force_spawn_search=True
-                        route_replans+=1
+                            routes.staging_visited.append(measured.position)
+                        routes.force_spawn_search=True
+                        routes.route_replans+=1
                         log('Unsafe live-target approach; planning alternate quest hunting route: '+str(exc))
                         continue
                     if s.player.in_combat:
@@ -527,12 +520,12 @@ def hunt_kill_objectives(
                             if corpse_xyz is not None:
                                 unhittable_positions.append(corpse_xyz)
                         else:
-                            route_replans+=1
+                            routes.route_replans+=1
                             _,measured=world_position(s)
-                            staging_visited.append(measured.position)
+                            routes.staging_visited.append(measured.position)
                         if plan is not None:
                             remember_pack(driver,[m.position for m in plan.enemies],now())
-                        force_spawn_search=True
+                        routes.force_spawn_search=True
                         log('Avoiding linked encounter; selecting another quest hunting location')
                         if s.player.target_guid:
                             driver.chat('/cleartarget')
@@ -650,144 +643,30 @@ def hunt_kill_objectives(
                 continue
 
         # No eligible target ready. Search locations are not live target proof.
-        force_spawn_search=False
+        routes.force_spawn_search=False
         _pid, world = world_position(s)
         from wotlkbuddy.horde.hunt_search import search_spawn_candidates, next_unvisited_spawn
         search = search_spawn_candidates(
             spawns=spawns, world=world, spec=spec, allowed_sources=allowed_sources,
-            expected=expected, refresh_rounds=refresh_rounds,
-            unhittable_positions=unhittable_positions, failed_navigation=failed_navigation,
+            expected=expected, refresh_rounds=routes.refresh_rounds,
+            unhittable_positions=unhittable_positions, failed_navigation=routes.failed_navigation,
             reference_search_points=reference_search_points, collect_items=collect_items,
             nearest_objective_spawns=nearest_objective_spawns,
             distant_objective_spawns=distant_objective_spawns, log=log)
         nearby, reference_only, remote_camp = (
             search.candidates, search.reference_only, search.remote_camp)
-        if not nearby and refresh_rounds<2:
-            refresh_rounds+=1
-            log('Local hunting sites exhausted; resting and expanding the profile-constrained search')
-            s=rest(s)
-            sleep(8)
-            recently_visited.clear()
-            unhittable_guids.clear()
-            unhittable_positions.clear()
-            continue
-        if not nearby:
-            if failed_navigation:
-                raise list(failed_navigation.values())[-1]
-            raise LiveControlError(
-                f'No verified nearby creature spawns or bounded reference '
-                f'search locations for XML sources {allowed_sources} '
-                f'of item {spec.entry}' if collect_items
-                else f'No validated local spawn for objective mob {expected}')
-        # Limit repeat failures at one spawn. Respawns are not immediate.
-        goal = next_unvisited_spawn(nearby, recently_visited)
+        goal = select_spawn_goal(
+            s, routes=routes, nearby=nearby, spec=spec, allowed_sources=allowed_sources,
+            expected=expected, collect_items=collect_items, rest=rest, sleep=sleep,
+            unhittable_guids=unhittable_guids, unhittable_positions=unhittable_positions,
+            log=log)
         if goal is None:
-            if refresh_rounds<2:
-                refresh_rounds+=1
-                log('All nearby spawn approaches tried; waiting for patrol changes and expanding search')
-                s=rest(s)
-                sleep(8)
-                recently_visited.clear()
-                unhittable_guids.clear()
-                unhittable_positions.clear()
-                continue
-            if failed_navigation:
-                raise list(failed_navigation.values())[-1]
-            raise LiveControlError('No new spawn positions within safe search radius after alternate searches')
-        key = (round(goal.x), round(goal.y), round(goal.z))
-        dx,dy = world.x-goal.x,world.y-goal.y
-        d = hypot(dx,dy)
-        if d < 0.1:
-            recently_visited[key]=2
             continue
-        stand_off=min(32.,max(5.,d-3.)) if getattr(driver,'awareness',None) else 10.
-        staging = (goal.position if reference_only and remote_camp else
-                   Vec3(goal.x+dx/d*stand_off,goal.y+dy/d*stand_off,goal.z))
-        hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if now()-t<90]
-        if hazards or route_replans:
-            alternatives=alternate_hunt_routes(nav,world.map_id,world.position,nearby,hazards,recently_visited,
-                excluded_staging=staging_visited)
-            if not alternatives:
-                if len(allowed_sources)==1 and required_waits<4:
-                    required_waits+=1
-                    log('Required target has no safe firing position yet; observing patrol movement and recovering before retry')
-                    s=rest(s,full=True)
-                    for _ in range(6):
-                        s=fresh(s,3)
-                        if s.player.in_combat:
-                            s=clear_remaining_aggro(s)
-                            break
-                    staging_visited.clear()
-                    recently_visited.clear()
-                    driver.dangerous_hunt_positions=[]  # live scanner must re-observe, not trust stale patrols
-                    continue
-                recently_visited[key]=2
-                log('No safe approach to this spawn cluster; searching remaining quest locations')
-                continue
-            goal,staging=alternatives[0]
-            key=(round(goal.x),round(goal.y),round(goal.z))
-            log(f'Alternate hunting plan: entry {goal.entry}, ranged staging {staging.distance_to(goal.position):.1f}y from spawn; avoiding {len(hazards)} recent danger points')
-        recently_visited[key]=recently_visited.get(key,0)+1
-        staging_visited.append(staging)
-        try:
-            s = navigate(s, staging, camp_transit=remote_camp)
-        except LiveControlError as exc:
-            # The low-level world follower already released all movement keys
-            # on a heading mismatch. Do NOT relax that collision/telemetry
-            # guard. Recheck identity, map and actual position, then exclude
-            # this spawn for the remainder of the session. The outer loop can
-            # search other verified, navmesh-routed spawn candidates.
-            height_failure = ('height/floor' in str(exc) or
-                              'different heights/floors' in str(exc))
-            unsafe_encounter=('unsafe encounter:' in str(exc).lower() or 'possible pack' in str(exc).lower())
-            if not recoverable_hunt_failure(exc):
-                raise
-            s = capture()
-            guard(s)
-            current_pid, current_world = world_position(s)
-            if current_pid != pid or current_world.map_id != world.map_id:
-                raise LiveControlError('Cannot verify map/PID after interrupted navigation') from exc
-            if s.player.in_combat:
-                raise LiveControlError(
-                    'Combat began during off-axis navigation; refusing alternate routing'
-                ) from exc
-            recently_visited[key] = 0 if unsafe_encounter and len(allowed_sources)==1 else 2
-            if unsafe_encounter:
-                route_replans+=1
-                force_spawn_search=True
-                log(f'Unsafe pack near spawn {key}; planning another quest route from live position')
-                continue
-            failed_navigation[key] = exc
-            if height_failure:
-                log(f'Excluding wrong-floor spawn {key}; selecting another verified candidate')
-                continue
-            navigation_mismatches += 1
-            log(f'Off-axis movement near spawn {key}; actual player position='
-                f'({current_world.x:.2f},{current_world.y:.2f},{current_world.z:.2f}). '
-                f'Excluding this spawn; alternative-route attempt '
-                f'{navigation_mismatches}/2')
-            if navigation_mismatches >= 2:
-                raise LiveControlError(
-                    'Two off-axis navigation failures; stopped to avoid repeated '
-                    'indoor/collision routing: ' + str(exc)
-                ) from exc
-            continue
-        if s.player.in_combat:
-            s = clear_remaining_aggro(s)
-            continue
-        s=drain_travel_corpses(s)
-        if remote_camp:
-            _,arrived=world_position(s)
-            if arrived.position.distance_to(staging)>8:
-                # The first verified segment is not arrival at a camp.
-                # Re-evaluate live threats and remaining route on next pass.
-                recently_visited.pop(key,None)
-                log(f'Continuing toward quest camp; {arrived.position.distance_to(staging):.1f}y remain')
-                continue
-        if reference_only:
-            log(f'At source-labeled search area for creature {goal.entry}; '
-                'looking for live NPC by exact entry/GUID, '
-                'not trusting location as spawn proof')
-        else:
-            log(f'At candidate spawn for {goal.entry}; will recheck targets')
+        run_spawn_route(
+            s, routes=routes, goal=goal, nearby=nearby, world=world,
+            reference_only=reference_only, remote_camp=remote_camp,
+            allowed_sources=allowed_sources, driver=driver, nav=nav, now=now,
+            rest=rest, fresh=fresh, clear_remaining_aggro=clear_remaining_aggro,
+            navigate=navigate, capture=capture, guard=guard, world_position=world_position,
+            pid=pid, drain_travel_corpses=drain_travel_corpses, log=log)
     raise LiveControlError('Bounded spawn-search iteration limit reached')
