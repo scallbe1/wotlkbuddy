@@ -351,6 +351,7 @@ def hunt_kill_objectives(
                             progress=log, on_aggro=getattr(driver, 'on_aggro', None),
                             on_threat=getattr(driver, 'scan_hostiles', None),
                             waypoint_spacing=18.0, continuous_forward=True,
+                            fast_observe=getattr(driver,'fast_travel_observe',None),
                             threat_check_yards=6.0))
             out = fresh(s)
             if report.stopped_reason == 'complete':
