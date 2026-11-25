@@ -65,6 +65,8 @@ def defend_against_aggro(
     target_entry = None
     no_damage = 0
     critical_logged = False
+    melee_target=None
+    readiness_waits=0
     # A global cast budget and bounded acquisition keep the encounter finite.
     # A dead, cleared, or changed target is normal while adds remain alive.
     for _ in range(max_casts):
@@ -105,16 +107,36 @@ def defend_against_aggro(
                                    'unsafe combat pursuit is unavailable')
         if state.mage_buffs is None or state.mage_buffs.knows_fireball is not True:
             raise LiveControlError('Learned Fireball not verified during defense')
-        if state.resources.mana < 20:
-            raise LiveControlError('Insufficient mana for defensive Fireball')
         before_hp=t.health
         from wotlkbuddy.combat.runtime import selected_action
         ability=selected_action(state)
         cast_action=getattr(driver,'cast_action_spell',None)
-        if ability is not None and callable(cast_action):
+        if callable(cast_action):
+            if ability is None:
+                readiness_waits+=1
+                if readiness_waits==1 or readiness_waits%4==0:
+                    log(f'Defensive spell readiness: HP {state.player.health}/{state.player.max_health}, '
+                        f'mana {state.resources.mana}/{state.resources.max_mana}; '
+                        f'actions {[(a.name,a.usable,a.cooldown_ms,a.in_range) for a in state.action_spells]}')
+                # Global cooldown, casts already in flight, and insufficient
+                # mana are NOT a missing key binding. Keep observing combat.
+                # A verified living aggressor is the only permissible melee
+                # target; StartAttack never moves toward it.
+                if (not (state.current_cast_remaining_ms or state.fireball_cast_remaining_ms or 0)
+                        and melee_target!=target_guid and readiness_waits>=3):
+                    if verified_attacker(state):
+                        driver.chat('/startattack')
+                        melee_target=target_guid
+                        log('No ready damage spell; enabling staff autoattack against verified aggressor')
+                state=fresh(state,.65)
+                continue
+            readiness_waits=0
             cast_action(state,ability.spell_id)
             log(f'Defensive {ability.name} via verified action key {ability.key}')
         else:
+            # Compatibility only for older test/legacy input adapters.
+            if state.resources.mana<20:
+                raise LiveControlError('Insufficient mana for defensive Fireball')
             cast=getattr(driver,'cast_fireball',None)
             if callable(cast):
                 cast(state)
@@ -164,7 +186,7 @@ def defend_against_aggro(
             continue
         if new.health < before_hp:
             no_damage=0
-            log(f'Defensive Fireball hit: {before_hp}->{new.health} HP')
+            log(f'Defensive {ability.name if ability is not None else "Fireball"}: observed target HP {before_hp}->{new.health}')
         else:
             no_damage+=1
             if no_damage>=2:

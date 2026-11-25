@@ -294,6 +294,9 @@ def scan_and_clear_hostiles(
     if ability is not None and callable(cast_action):
         cast_action(state,ability.spell_id)
         log(f'Preemptive {ability.name} via verified action key {ability.key}')
+    elif callable(cast_action):
+        log('No verified ready damage spell; deferring proactive pull')
+        return finish(state)
     else:
         cast=getattr(driver,'cast_fireball',None)
         if callable(cast):

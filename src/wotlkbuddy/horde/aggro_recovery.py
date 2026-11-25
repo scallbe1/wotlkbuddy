@@ -10,6 +10,9 @@ def recoverable_aggro_error(exc):
         'Aggro unresolved before starting quest phase',
         'Verified attacker is outside Fireball range',
         'Insufficient mana for defensive Fireball',
+        'Fireball is not verified on a digit-bound action button',
+        'Proactive threat scan failed to restore safe live player/map state',
+        'Aggro/combat detected; defensive handler unavailable or route fight budget exhausted',
         'Defensive fight cast limit reached',
         'Two Fireballs failed to damage verified attacker',
     ))
