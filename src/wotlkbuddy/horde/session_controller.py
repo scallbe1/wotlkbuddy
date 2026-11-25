@@ -11,6 +11,7 @@ from typing import Callable
 from wotlkbuddy.live.control import LiveControlError, WindowsKeyboard
 from wotlkbuddy.live.capture import capture_monitor
 from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+from wotlkbuddy.horde.session_activity import Activity, ActivityGate
 
 
 @dataclass
@@ -26,6 +27,7 @@ class QuestSession:
     train_level: int = -1
     recoveries: int = 0
     aggro_recoveries: int = 0
+    activity: ActivityGate = field(default_factory=ActivityGate)
 
     def time_expired(self) -> bool:
         return time.monotonic() - self.start >= self.args.auto_minutes * 60
@@ -35,7 +37,10 @@ class QuestSession:
         child.only = mode
         child._continuous_training_check = mode == 'objectives'
         child._last_training_level = self.train_level
-        return self.progress(child, _skip_countdown=True, _emit_report=False)
+        owner = {'objectives': Activity.OBJECTIVES, 'quests': Activity.OFFERS,
+                 'train': Activity.TRAINING}[mode]
+        with self.activity.claim(owner):
+            return self.progress(child, _skip_countdown=True, _emit_report=False)
 
     def retry_blocked_route(self, exc, cycle: int) -> None:
         print(f'Route temporarily unavailable: {exc}; refreshing after patrol wait',
@@ -64,7 +69,8 @@ class QuestSession:
             from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error
             if recoverable_aggro_error(exc):
                 raise exc
-        recovery = self.recover(self.args, original_error=exc)
+        with self.activity.claim(Activity.RECOVERY):
+            recovery = self.recover(self.args, original_error=exc)
         if recovery.get('status') == 'combat_cleared':
             self.aggro_recoveries += 1
             action = 'aggro_recovery'
@@ -78,7 +84,8 @@ class QuestSession:
         try:
             return self.phase(mode)
         except EncounterRouteUnavailable as exc:
-            self.retry_blocked_route(exc, cycle)
+            with self.activity.claim(Activity.ROUTE_WAIT):
+                self.retry_blocked_route(exc, cycle)
         except LiveControlError as exc:
             self.recover_phase(exc, cycle)
         return None
@@ -153,6 +160,12 @@ class QuestSession:
         self.steps.append({'cycle': cycle, 'action': 'pickup', 'quest_ids': newly_accepted})
 
     def run(self) -> dict:
+        try:
+            return self._run_cycles()
+        finally:
+            self.activity.finish()
+
+    def _run_cycles(self) -> dict:
         for cycle in range(1, self.args.max_cycles + 1):
             if self.time_expired():
                 self.reason = 'time_limit'
