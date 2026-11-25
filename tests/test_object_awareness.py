@@ -71,7 +71,7 @@ def test_same_template_adds_are_mapped_without_tab():
 
 def test_unclassified_object_is_retained_not_guessed_hostile():
     rows=(NearbyCreature(G1,ENTRY,Vec3(32,0,0),137,14),
-          NearbyCreature(G3,1525,Vec3(24,2,0),120,14))
+          NearbyCreature(G3,1525,Vec3(24,2,0),120,9999))
     state,commands,awareness,where,_=setup(rows,(G1,))
     awareness.names[ENTRY]='Rot Hide Graverobber'
     _,enemies,unknown=awareness.survey(state[0],where)
@@ -80,7 +80,7 @@ def test_unclassified_object_is_retained_not_guessed_hostile():
     assert commands==['/targetexact Rot Hide Graverobber']
 
 def test_unclassified_route_hazard_stops_before_advance():
-    rows=(NearbyCreature(G3,1525,Vec3(23,0,0),120,14),)
+    rows=(NearbyCreature(G3,1525,Vec3(23,0,0),120,9999),)
     state,commands,awareness,where,driver=setup(rows)
     driver.awareness=awareness
     with pytest.raises(LiveControlError,match='unclassified nearby object'):
@@ -107,9 +107,44 @@ def test_acquisition_fallback_is_one_tab_then_cooldown():
 
 
 def test_passive_encounter_survey_never_changes_target():
-    rows=(NearbyCreature(G1,ENTRY,Vec3(32,0,0),137,14),)
+    rows=(NearbyCreature(G1,ENTRY,Vec3(32,0,0),137,9999),)
     state,commands,awareness,where,_=setup(rows)
     awareness.names[ENTRY]='Rot Hide Graverobber'
     _,enemies,unknown=awareness.survey(state[0],where,probe=False)
     assert enemies==() and len(unknown)==1
     assert commands==[]
+
+
+def test_rat_and_turkey_do_not_block_navigation():
+    rows=(NearbyCreature('0xF1300080340062CB',32820,Vec3(6,0,0),8,7,1),
+          NearbyCreature('0xF130000FEB0005A1',4075,Vec3(15,0,0),8,None,1))
+    state,commands,awareness,where,driver=setup(rows)
+    driver.awareness=awareness
+    _,enemies,unknown=awareness.survey(state[0],where)
+    assert not enemies and not unknown
+    result=scan_and_clear_hostiles(initial=state[0],player_position=where,
+        path_ahead=(Vec3(30,0,0),),capture=lambda:state[0],driver=driver,
+        target_position=lambda s:Vec3(0,0,0),sleep=lambda _:None,
+        detection_yards=35,corridor_yards=18)
+    assert result==state[0]
+    assert commands==[]
+
+
+def test_live_rothide_faction_is_passive_discovery_not_attack_permission():
+    rows=(NearbyCreature(G1,ENTRY,Vec3(32,0,0),137,70,7),)
+    state,commands,awareness,where,_=setup(rows)
+    _,enemies,unknown=awareness.survey(state[0],where,probe=False)
+    assert len(enemies)==1 and enemies[0].guid==G1
+    assert enemies[0].level==7 and enemies[0].classification=='unknown'
+    assert not unknown and not commands
+
+
+def test_unknown_behind_player_does_not_block_retreat():
+    rows=(NearbyCreature(G3,1525,Vec3(-6,0,0),120,9999),)
+    state,commands,awareness,where,driver=setup(rows)
+    driver.awareness=awareness
+    result=scan_and_clear_hostiles(initial=state[0],player_position=where,
+        path_ahead=(Vec3(15,0,0),),capture=lambda:state[0],driver=driver,
+        target_position=lambda s:Vec3(0,0,0),sleep=lambda _:None,
+        detection_yards=35,corridor_yards=18)
+    assert result==state[0] and not commands
