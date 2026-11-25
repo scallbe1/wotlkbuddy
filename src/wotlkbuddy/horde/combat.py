@@ -211,17 +211,14 @@ def hunt_kill_objectives(
     if not nav.ping():
         raise LiveControlError('Navmesh worker is unavailable')
     started = now()
+    from wotlkbuddy.horde.hunt_objective_state import HuntObjectiveState
+    objectives = HuntObjectiveState()
     kills = 0
     last_target = 0
-    last_description = ''
-    no_credit = 0
     from wotlkbuddy.horde.hunt_retry import HuntRouteState, run_spawn_route, select_spawn_goal
     routes = HuntRouteState()
     from wotlkbuddy.horde.hunt_loot import LootStats, loot_corpse
     loot_stats = LootStats()
-    active_tracked_item = 0
-    collected_results: dict[int, tuple[int, int]] = {}
-    known_item_names: dict[int, str] = {}
     # Share exact GUID exclusions with the proactive path scanner.
     # An unreachable quest target must not be immediately pulled again by
     # a different combat path during the same attended phase.
@@ -231,7 +228,6 @@ def hunt_kill_objectives(
         driver.blocked_combat_guids = unhittable_guids
     unhittable_positions: list[Vec3] = []
     unhittable_count = 0
-    logged_live_kill_totals: set[int] = set()
     from wotlkbuddy.horde.hunt_routes import recoverable_hunt_failure, remember_pack, alternate_hunt_routes
 
 
@@ -301,7 +297,7 @@ def hunt_kill_objectives(
             capture=capture, guard=guard, fresh=fresh, world_position=world_position,
             target_xyz=target_xyz, pid=pid, nav=nav, travel=travel, quest_id=quest_id,
             max_seconds=max_seconds, now=now, started=started, sleep=sleep,
-            collect_items=collect_items, tracked_item_id=lambda: active_tracked_item,
+            collect_items=collect_items, tracked_item_id=lambda: objectives.active_tracked_item,
             objective_index=lambda: observed.index, qlog=qlog, stats=loot_stats, log=log)
 
     def drain_travel_corpses(s):
@@ -327,110 +323,24 @@ def hunt_kill_objectives(
         guard(s)
         if not s.player.in_combat:
             s=drain_travel_corpses(s)
-        current_objective = (
-            next_collect_objective(profile, s, quest_id,
-                                   item_names=known_item_names)
-            if collect_items else
-            next_kill_objective(profile, s, quest_id))
+        current_objective = objectives.current(profile, s, quest_id, collect_items=collect_items)
         if current_objective is None:
-            if collect_items and active_tracked_item:
-                result = collected_results.get(active_tracked_item)
-                if (result is None or
-                        s.tracked_item_id != active_tracked_item or
-                        s.tracked_item_count is None or
-                        s.tracked_item_count < result[1]):
-                    raise LiveControlError(
-                        'Journal completed quest but final tracked '
-                        'quest-item inventory count cannot be confirmed')
-                collected_results[active_tracked_item] = (
-                    s.tracked_item_count, result[1])
+            collected = objectives.finalize(s, collect_items=collect_items)
             return HuntReport(
                 quest_id, s.player.name, kills, True, 'objectives_complete',
-                last_target, last_description,
+                last_target, objectives.last_description,
                 loot_stats.attempts, loot_stats.confirmed, loot_stats.skipped,
-                tuple((item_id, counts[0], counts[1])
-                      for item_id, counts in collected_results.items()))
+                collected)
         if kills >= max_kills:
             raise LiveControlError('Kill limit reached before objective completion')
         spec, observed = current_objective
-        allowed_sources = (
-            tuple(dict.fromkeys(
-                source.entry for source in spec.sources
-                if source.kind == 'mob' and 0 < source.entry < 2**24))
-            if collect_items else (spec.entry,))
-        driver.active_quest_entries = allowed_sources
-        if not allowed_sources:
-            raise LiveControlError(
-                f'CollectItem {spec.entry} has no Mob source IDs in local '
-                'Horde XML; no creature is authorized for item farming')
-        if collect_items and active_tracked_item != spec.entry:
-            driver.chat(f'/wbttrack {spec.entry}')
-            observed_tracker = fresh(s)
-            if (observed_tracker.tracked_item_id != spec.entry or
-                    observed_tracker.tracked_item_count is None):
-                raise LiveControlError(
-                    f'Cannot verify inventory count for item {spec.entry}; '
-                    'reinstall updated WotLKBuddyTelemetry addon and /reload')
-            for _ in range(5):
-                if observed_tracker.tracked_item_name:
-                    break
-                observed_tracker = fresh(observed_tracker)
-            if not observed_tracker.tracked_item_name:
-                raise LiveControlError(
-                    f'Item {spec.entry} name not cached by 3.3.5a client; '
-                    'cannot bind item ID to quest journal safely')
-            known_item_names[spec.entry] = observed_tracker.tracked_item_name
-            active_tracked_item = spec.entry
-            s = observed_tracker
-            # A previously collected item can be complete before this run;
-            # the next profile item then becomes the legitimate objective.
-            verified_objective = next_collect_objective(
-                profile, s, quest_id, item_names=known_item_names)
-            if verified_objective is None:
-                continue
-            verified_spec, verified_journal = verified_objective
-            if verified_spec.entry != spec.entry:
-                log(f'Item {spec.entry} already completed; '
-                    'switching to next source item')
-                continue
-            observed = verified_journal
-            log(f'Collecting item {spec.entry} '
-                f'({s.tracked_item_name}) from profile Mob IDs '
-                f'{allowed_sources}; inventory={s.tracked_item_count}, '
-                f'journal={observed.description}')
-        if collect_items and (
-                s.tracked_item_id != spec.entry or
-                s.tracked_item_count is None):
-            raise LiveControlError(
-                'Tracked item identity missing or changed during collection')
-        if collect_items:
-            parsed = objective_progress(observed.description)
-            if parsed is None or s.tracked_item_count < parsed[0]:
-                raise LiveControlError(
-                    'Inventory count conflicts with live CollectItem journal')
-            collected_results[spec.entry] = (s.tracked_item_count, spec.count)
+        prepared = objectives.prepare(
+            s, current_objective, collect_items=collect_items, profile=profile,
+            quest_id=quest_id, driver=driver, fresh=fresh, log=log)
+        if prepared is None:
+            continue
+        s, spec, observed, allowed_sources = prepared
         expected = allowed_sources[0]
-        last_description = observed.description
-        if not collect_items:
-            # Server quest variants can demand a different number of kills
-            # than the imported Honorbuddy XML. XML supplies the creature
-            # entry and search hotspots; the live journal supplies the
-            # required total and the done flag. Never stop at XML KillCount.
-            live_credit = objective_progress(observed.description)
-            if (live_credit is None or live_credit[1] <= 0 or
-                    not 0 <= live_credit[0] < live_credit[1]):
-                raise LiveControlError(
-                    'Active kill objective has no valid unfinished live '
-                    f'journal count: {observed.description!r}')
-            if spec.entry not in logged_live_kill_totals:
-                logged_live_kill_totals.add(spec.entry)
-                if spec.count != live_credit[1]:
-                    log(f'KillMob entry {spec.entry}: live journal requires '
-                        f'{live_credit[1]} kills, while XML requests '
-                        f'{spec.count}; honoring live quest journal')
-                else:
-                    log(f'KillMob entry {spec.entry}: live journal progress '
-                        f'{live_credit[0]}/{live_credit[1]}')
         s = rest(s,full=bool(routes.route_replans and len(allowed_sources)==1))
         s = buffs(s)
         if (s.player.health/max(1,s.player.max_health) < .70 or
@@ -610,36 +520,9 @@ def hunt_kill_objectives(
                         pending.pop(corpse_guid, None)
                 else:
                     s = loot(s, corpse_xyz, dead_guid, expected)
-                latest = qlog(s)
-                if collect_items:
-                    if (s.tracked_item_id != spec.entry or
-                            s.tracked_item_count is None):
-                        raise LiveControlError(
-                            'Item tracker lost during corpse looting')
-                    updated = next(
-                        (obj for obj in latest.objectives
-                         if obj.index == observed.index), None)
-                    count = (objective_progress(updated.description)
-                             if updated is not None else None)
-                    if count is None or count[0] > s.tracked_item_count:
-                        raise LiveControlError(
-                            'Collected inventory item count does not '
-                            'confirm live quest journal progress')
-                    collected_results[spec.entry] = (
-                        s.tracked_item_count, spec.count)
-                    log(f'CollectItem {spec.entry} inventory='
-                        f'{s.tracked_item_count}, journal={count[0]}/{count[1]}')
-                after_text = tuple(o.description for o in latest.objectives)
-                if latest.complete or after_text != before_text:
-                    no_credit = 0
-                    log('Quest journal objective progress changed')
-                else:
-                    no_credit += 1
-                    if collect_items:
-                        log('No item-collection credit from this corpse; '
-                            'checking another authorized source (bounded kill limit)')
-                    elif no_credit >= 2:
-                        raise LiveControlError('Two verified kills without quest progress; stop')
+                objectives.after_loot(
+                    s, qlog=qlog, collect_items=collect_items, spec=spec,
+                    observed=observed, before_text=before_text, log=log)
                 continue
 
         # No eligible target ready. Search locations are not live target proof.
