@@ -78,6 +78,79 @@ def validate_nav_path(raw: Sequence[Vec3], start: Vec3, destination: Vec3,
     return tuple(expanded)
 
 
+def route_reuses_collision(path, blocked_edges):
+    """Reject a route crossing a measured collision in the same direction.
+
+    Leaving the collision point sideways or backwards is allowed. Sample
+    the full segments, not merely their sparse Detour endpoints.
+    """
+    for a,b in zip(path,path[1:]):
+        dx,dy=b.x-a.x,b.y-a.y
+        length=hypot(dx,dy)
+        if length<.1:
+            continue
+        heading=atan2(dy,dx)
+        for point,blocked_heading in blocked_edges:
+            if abs(_angle(heading-blocked_heading))>pi/3:
+                continue
+            t=max(0.,min(1.,((point.x-a.x)*dx+(point.y-a.y)*dy)/(length*length)))
+            z=a.z+t*(b.z-a.z)
+            if abs(z-point.z)<=2.5 and hypot(a.x+t*dx-point.x,a.y+t*dy-point.y)<=2.2:
+                return True
+    return False
+
+
+def alternate_wall_route(start,destination,*,replan_path,blocked_edges,
+                         guard=lambda:None,can_traverse=None,log=lambda _:None):
+    """Search bounded, complete Detour routes through distinct staging points."""
+    def query(a,b):
+        guard()
+        try:
+            raw=replan_path(a,b)
+            if (not raw or _distance_xy(raw[0],a)>1.8 or
+                    abs(raw[0].z-a.z)>2.5 or raw[-1].distance_to(b)>1.8):
+                return None
+            if raw[0].distance_to(a)>.65:
+                if can_traverse is None or not can_traverse(a,raw[0]):
+                    return None
+                raw=[a,*raw]
+            path=validate_nav_path(raw,a,b,max_step=5.)
+            if route_reuses_collision(path,blocked_edges):
+                return None
+            return path
+        except (RuntimeError,OSError,ValueError,TimeoutError):
+            return None
+    direct=query(start,destination)
+    if direct:
+        return direct
+    heading=blocked_edges[-1][1] if blocked_edges else atan2(destination.y-start.y,destination.x-start.x)
+    # Different approaches around a door jamb/fence: lateral first, then
+    # diagonally back, then wider approaches. No guessed keyboard travel.
+    for radius in (5.,9.,14.):
+        candidates=[]
+        for offset in (pi/2,-pi/2,3*pi/4,-3*pi/4,pi,pi/4,-pi/4):
+            angle=heading+offset
+            staging=Vec3(start.x+radius*cos(angle),start.y+radius*sin(angle),start.z)
+            first=query(start,staging)
+            if not first:
+                continue
+            second=query(first[-1],destination)
+            if not second:
+                continue
+            joined=first+second[1:]
+            if route_reuses_collision(joined,blocked_edges):
+                continue
+            total=sum(a.distance_to(b) for a,b in zip(joined,joined[1:]))
+            if len(joined)<=512 and total<=800:
+                candidates.append((total,joined,staging))
+        if candidates:
+            _,path,staging=min(candidates,key=lambda candidate:candidate[0])
+            log(f'Alternate wall route via staging XYZ ({staging.x:.2f},{staging.y:.2f},{staging.z:.2f}); '
+                f'{len(path)-1} verified short legs avoiding measured collision')
+            return path
+    return None
+
+
 @dataclass(frozen=True)
 class WorldTravelReport:
     character: str
@@ -106,7 +179,7 @@ def follow_world_path(
     now: Callable[[], float] = monotonic,
     progress: Callable[[str], None] | None = None,
     can_traverse: Callable[[Vec3, Vec3], bool] | None = None,
-    max_recoveries: int = 2,
+    max_recoveries: int = 4,
     on_aggro: Callable[[ClientTelemetry], ClientTelemetry] | None = None,
     max_aggro_fights: int = 3,
     on_threat: Callable[[ClientTelemetry, WorldPosition, Sequence[Vec3]], ClientTelemetry] | None = None,
@@ -125,7 +198,7 @@ def follow_world_path(
     snapshot or path preflight fails.
     """
     if (not 15 <= max_seconds <= 600 or not 1 <= arrival_yards <= 2.5
-            or not 0 <= max_recoveries <= 3 or not 0 <= max_aggro_fights <= 5
+            or not 0 <= max_recoveries <= 6 or not 0 <= max_aggro_fights <= 5
             or not 3 <= threat_check_yards <= 20
             or not 5 <= waypoint_spacing <= 22):
 
@@ -162,6 +235,8 @@ def follow_world_path(
     current, world = first, world0
     turns = moves = reached = recoveries = strafes = 0
     recovery_locations: list[Vec3] = []
+    blocked_edges: list[tuple[Vec3,float]] = []
+    blocked_waypoints: list[Vec3] = []
     aggro_fights = 0
     next_waypoint_index = 1
     last_threat_scan_xyz = world0.position
@@ -438,7 +513,11 @@ def follow_world_path(
             return False
         guard()
         origin=world.position
-        repeated=any(_distance_xy(origin,p)<3.0 for p in recovery_locations)
+        blocked=waypoints[next_waypoint_index]
+        repeated=(any(_distance_xy(origin,p)<3.0 for p in recovery_locations) or
+                  any(blocked.distance_to(p)<3.0 for p in blocked_waypoints))
+        blocked_waypoints.append(blocked)
+        blocked_edges.append((origin,atan2(blocked.y-origin.y,blocked.x-origin.x)))
         recovery_locations.append(origin)
         recoveries+=1
         nearby=[p for p in reversed(breadcrumbs)
@@ -506,8 +585,11 @@ def follow_world_path(
             lateral=False
             # Same recovery attempt: do not reject it merely because the
             # blocked retreat just recorded this location in the history.
-            for direction,key in ((-1,'strafe-right'),(1,'strafe-left')):
-                for _ in range(3):
+            sides=((-1,'strafe-right'),(1,'strafe-left'))
+            if repeated and recoveries%2==0:
+                sides=tuple(reversed(sides))
+            for direction,key in sides:
+                for _ in range(5 if repeated else 3):
                     guard()
                     before=world
                     angle=before.facing_rad+direction*pi/2
@@ -537,16 +619,24 @@ def follow_world_path(
                 if lateral:
                     break
             if not lateral:
-                notify('No verified lateral clearance; stopping rather than repeating blocked route')
-                return False
+                notify('No verified lateral clearance; checking alternate complete paths from current position')
         if _distance_xy(world.position,destination)<=arrival_yards and abs(world.z-destination.z)<=5:
             waypoints=(world.position,destination)
         else:
             try:
                 raw=replan_path(world.position,destination)
-                waypoints=validate_nav_path(raw,world.position,destination,max_step=5.)
+                candidate=validate_nav_path(raw,world.position,destination,max_step=5.)
+                if (_distance_xy(raw[0],world.position)>1.8 or abs(raw[0].z-world.z)>2.5 or
+                        ((repeated or _distance_xy(origin,world.position)<.75) and
+                         route_reuses_collision(candidate,blocked_edges))):
+                    raise LiveControlError('Fresh route returns to blocked corridor or snaps away from actual position')
             except (RuntimeError,OSError,ValueError,TimeoutError) as exc:
-                raise LiveControlError(f'Backtracked but fresh Detour route unavailable: {exc}') from exc
+                notify(f'Rejecting ordinary wall replan: {exc}; searching alternate routes')
+                candidate=alternate_wall_route(world.position,destination,replan_path=replan_path,
+                    blocked_edges=blocked_edges,guard=guard,can_traverse=can_traverse,log=notify)
+                if candidate is None:
+                    raise LiveControlError(f'Backtracked but fresh Detour route unavailable: {exc}') from exc
+            waypoints=candidate
         cautious=True
         breadcrumbs[:]=[world.position]
         next_waypoint_index=1
@@ -555,6 +645,21 @@ def follow_world_path(
                f'({world.x:.2f},{world.y:.2f},{world.z:.2f}), {len(waypoints)-1} short legs')
         current,world=checked(force_scan=True)
         return True
+
+    def recover_collision(reason):
+        # A failed route query does not exhaust physical escape options. Try
+        # another measured retreat/side before giving up, within one budget.
+        while recoveries<max_recoveries:
+            guard()
+            previous=recoveries
+            try:
+                return backtrack_and_replan(reason)
+            except LiveControlError as exc:
+                if ('Backtracked but fresh Detour route unavailable:' not in str(exc) or
+                        recoveries==previous or recoveries>=max_recoveries):
+                    raise
+                notify('Wall route search unsuccessful; trying another measured escape direction')
+        return False
 
     try:
         if destination_status is not None:
@@ -637,7 +742,7 @@ def follow_world_path(
                             f'waypoint {index}/{len(waypoints)-1})')
                     stalls = stalls + 1 if displacement < 0.15 else 0
                     if stalls >= 4:
-                        if backtrack_and_replan('no forward progress'):
+                        if recover_collision('no forward progress'):
                             rerouted=True
                             break
                         if replan_path is None and recover_around_wall(waypoint):
@@ -650,7 +755,7 @@ def follow_world_path(
                         forward_angle = atan2(moved_to.y-before.y,
                                               moved_to.x-before.x)
                         if abs(_angle(forward_angle - before.facing_rad)) > 0.85:
-                            if backtrack_and_replan('wall slide: measured movement disagrees with facing'):
+                            if recover_collision('wall slide: measured movement disagrees with facing'):
                                 rerouted=True
                                 break
                             raise LiveControlError('Measured movement disagrees with client facing')
@@ -660,7 +765,7 @@ def follow_world_path(
                 count += 1
                 distance = _distance_xy(world.position, waypoint)
                 if distance > prev_distance + 1.0:
-                    if backtrack_and_replan(f'movement diverged from waypoint {index}'):
+                    if recover_collision(f'movement diverged from waypoint {index}'):
                         rerouted=True
                         break
                     raise LiveControlError(f'Movement diverged from waypoint {index}')
