@@ -186,6 +186,7 @@ def follow_world_path(
     threat_check_yards: float = 7.,
     waypoint_spacing: float = 9.0,
     continuous_forward: bool = False,
+    fast_observe: Callable[[ClientTelemetry, float], tuple[WorldPosition, bool]] | None = None,
     ghost_only: bool = False,
     replan_path: Callable[[Vec3, Vec3], Sequence[Vec3]] | None = None,
     destination_status: Callable[[Vec3], None] | None = None,
@@ -362,6 +363,77 @@ def follow_world_path(
         held = now() - started
         guard()
         return held
+
+    def smooth_forward(before, waypoint, snapshot):
+        """Bounded W hold with cheap position/hazard observations only.
+
+        No screenshots, chat, combat callbacks or navmesh RPC while W is down.
+        A full addon sample is still required after every burst.
+        """
+        guard()
+        try:
+            measured, hazard = fast_observe(snapshot, 35.)
+        except (OSError, ValueError, RuntimeError):
+            return None
+        if hazard or measured.position.distance_to(before.position)>1.2:
+            return None
+        if measured.map_id!=expected_map_id or measured.player_guid.lower()!=guid.lower():
+            raise LiveControlError('Fast movement observation changed map or identity')
+        scan=_MOVEMENT_SCANCODES['forward']
+        began=now()
+        last=measured
+        turn_key=None
+        turn_end=0.
+        next_observation=began
+        interrupted=False
+        steering=0
+        keyboard.key_down(scan)
+        try:
+            while now()-began<2.0:
+                guard()
+                t=now()
+                if turn_key is not None and t>=turn_end:
+                    keyboard.key_up(turn_key)
+                    turn_key=None
+                if t>=next_observation:
+                    # Local read-only observation. Unknown or slow reads
+                    # terminate the burst rather than extending blind travel.
+                    measured,hazard=fast_observe(snapshot,35.)
+                    guard()
+                    if (measured.map_id!=expected_map_id or
+                            measured.player_guid.lower()!=guid.lower()):
+                        raise LiveControlError('Fast movement observation changed map or identity')
+                    if hazard:
+                        interrupted=True
+                        break
+                    if (abs(measured.z-last.z)>2.5 or
+                            _distance_xy(measured.position,before.position)>11*(now()-began)+2):
+                        raise LiveControlError('Implausible movement during continuous W')
+                    distance=_distance_xy(measured.position,waypoint)
+                    if distance<=arrival_yards+0.8:
+                        break
+                    heading=atan2(waypoint.y-measured.y,waypoint.x-measured.x)
+                    error=_angle(heading-measured.facing_rad)
+                    if abs(error)>.35:
+                        break  # sharp corner: stop and use measured stationary turn
+                    if turn_key is None and .10<abs(error)<=.35 and distance>4:
+                        turn_key=_MOVEMENT_SCANCODES['turn-right' if error*right_sign>0 else 'turn-left']
+                        keyboard.key_down(turn_key)
+                        turn_end=now()+min(.09,max(.035,abs(error)/turn_rate*.65))
+                        steering+=1
+                    last=measured
+                    next_observation=now()+.12
+                sleep(.03)
+        except (OSError, ValueError, RuntimeError) as exc:
+            if isinstance(exc,LiveControlError):
+                raise
+            raise LiveControlError(f'Fast movement observation failed: {exc}') from exc
+        finally:
+            if turn_key is not None:
+                keyboard.key_up(turn_key)
+            keyboard.key_up(scan)
+        guard()
+        return now()-began,interrupted,steering
 
     # Reusing measured calibration across nearby Detour legs avoids a
     # visible 0.12s D-key twitch before every corpse and vendor approach.
@@ -673,6 +745,8 @@ def follow_world_path(
             destination_status(destination)
         if on_threat is not None:
             current, world = checked(force_scan=True)
+        if continuous_forward and fast_observe is not None:
+            notify('Smooth travel: bounded continuous W with passive position and threat checks')
         index=1
         while index<len(waypoints):
             waypoint=waypoints[index]
@@ -729,14 +803,23 @@ def follow_world_path(
                         0.25 if cautious else ((0.60 if on_threat is not None else 1.20) if continuous_forward else 0.45),
                         max(0.10 if ghost_only else 0.18,
                              0.75*(dxy-arrival_yards)/(11.0 if ghost_only else 8.0)))
-                    held = pulse('forward', forward_duration)
+                    burst=None
+                    if (continuous_forward and not cautious and not ghost_only and
+                            fast_observe is not None and dxy>5 and abs(delta)<=.24):
+                        burst=smooth_forward(before,waypoint,current)
+                    if burst is None:
+                        held=pulse('forward',forward_duration)
+                        interrupted=False
+                    else:
+                        held,interrupted,steering=burst
+                        turns+=steering
                     moves += 1
                     # Measure immediately after releasing W, BEFORE the
                     # reactive handler or proactive scan can alter position.
                     # checked() can reuse the identical live observation and
                     # still run normal combat, identity and quest guards.
                     released = sample()
-                    current, world = checked(observation=released)
+                    current, world = checked(observation=released,force_scan=interrupted)
                     moved_to = released[1]
                     displacement = _distance_xy(before.position, moved_to.position)
                     # This bound is tied to the actual key-down interval,
