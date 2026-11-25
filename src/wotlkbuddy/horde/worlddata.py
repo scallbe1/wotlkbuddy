@@ -257,3 +257,22 @@ def nearest_objective_spawns(db: CreatureSpawnDatabase, *, entry: int, map_id: i
         results.append(Spawn(entry, map_id, xyz.x, xyz.y, xyz.z))
     results.sort(key=lambda s: distance_world(origin, s.position))
     return tuple(results[:limit])
+
+
+
+def distant_objective_spawns(db, *, entry, map_id, origin, hotspots,
+                             radius=4000, limit=40):
+    """Search exact objective IDs around profile hotspots, not the player.
+
+    A remote quest camp may be outside the local 360/600-yard pull radius.
+    Only same-map DB spawns within the existing hotspot tolerance qualify.
+    """
+    found={}
+    for center in hotspots:
+        if center.distance_to(origin)>radius+100:
+            continue
+        for spawn in nearest_objective_spawns(db,entry=entry,map_id=map_id,
+                origin=center,hotspots=(center,),radius=100,limit=100):
+            if spawn.position.distance_to(origin)<=radius:
+                found[(spawn.x,spawn.y,spawn.z)]=spawn
+    return tuple(sorted(found.values(),key=lambda spawn:spawn.position.distance_to(origin))[:limit])
