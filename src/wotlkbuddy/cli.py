@@ -319,9 +319,9 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 state=defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
         # No new pull or travel at critical HP after surviving an encounter.
         if not state.player.in_combat and (state.player.health/max(1,state.player.max_health) < .70 or
-                state.resources.mana/max(1,state.resources.max_mana) < .45):
+                state.resources.mana/max(1,state.resources.max_mana) < .85):
             log('Combat cleared; restoring health and mana before movement')
-            state = maintain_mage_supplies(capture=cap, driver=driver, log=log)
+            state = maintain_mage_supplies(capture=cap, driver=driver, log=log,health_goal=.90,mana_goal=.90)
             for _ in range(30):
                 if state.player.dead or state.truncated or state.player.guid != snapshot.player.guid:
                     raise LiveControlError('Character changed during post-combat recovery')
@@ -330,7 +330,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 if state.player.in_combat:
                     return defend_against_aggro(initial=state, capture=cap, driver=driver, log=log)
                 if (state.player.health/max(1,state.player.max_health) >= .70 and
-                        state.resources.mana/max(1,state.resources.max_mana) >= .45):
+                        state.resources.mana/max(1,state.resources.max_mana) >= .85):
                     return state
                 time.sleep(2)
                 state = cap()
@@ -383,6 +383,9 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         first=maintain_travel_buffs(state=first,capture=cap,driver=driver,log=log)
         if first.player.in_combat:
             first=driver.on_aggro(first)
+        elif first.resources.mana/max(1,first.resources.max_mana)<.90:
+            log('Restoring mana after buff maintenance before travel')
+            first=maintain_mage_supplies(capture=cap,driver=driver,log=log,health_goal=.90,mana_goal=.95)
 
     def set_native_status(phase: str, quest_id: int = 0) -> None:
         if args.no_hud:

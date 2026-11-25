@@ -839,7 +839,7 @@ local function tickData()
             local kind, rawId = GetActionInfo(actionIndex)
             if kind == 'spell' and slotHasDigitBinding(button) then
                 local spellId, name = resolveActionSpell(actionIndex, rawId)
-                if spellId == 133 and name == fireballName then
+                if spellId and spellId > 0 and name == fireballName then
                     fireballKey = button == 10 and '0' or tostring(button)
                     break
                 end

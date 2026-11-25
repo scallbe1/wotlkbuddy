@@ -12,7 +12,7 @@ from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 from wotlkbuddy.horde.resurrection_site import (
-    APPROACH_DISTANCE, acceptable_site, approach_path, clearance,
+    APPROACH_DISTANCE, acceptable_site, approach_path, alternate_approach_path, clearance,
     in_reclaim_ring, local_reclaim_threats, plan_resurrection_sites,
     watch_reclaim_window)
 
@@ -109,6 +109,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
             return True
         destination = path[-1]
         failures = []
+        failed_ends = []
         deadline = now()+600
         if callable(set_status):
             set_status('deathrun')
@@ -134,6 +135,10 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                     'height/floor', 'No forward progress',
                     'Measured movement disagrees with client facing',
                     'Movement diverged from waypoint'))
+                partial_replan = ('Backtracked but fresh Detour route unavailable:' in reason and
+                    any(marker in reason for marker in ('partial path','no usable bounded waypoint path',
+                        'route starts away from the verified player position')))
+                terrain_failure = terrain_failure or partial_replan
                 if not terrain_failure:
                     raise LiveControlError(label+' navigation stopped: '+reason)
                 measured = ghost_position().position
@@ -143,19 +148,30 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                 if not toward_corpse and any(measured.distance_to(p)<2 for p in failures):
                     log('Repeated terrain failure approaching offset site; checking another site')
                     return False
-                if attempt==4 or any(measured.distance_to(p)<1.5 for p in failures):
+                repeated=any(measured.distance_to(p)<1.5 for p in failures)
+                if attempt==4 or (repeated and not toward_corpse):
                     if not toward_corpse:
                         log('Offset site terrain route exhausted; checking another site')
                         return False
                     raise LiveControlError(label+' navigation could not find a different reachable floor: '+reason)
                 breadcrumbs.append(measured)
                 failures.append(measured)
+                failed_ends.append(path[-1])
                 log(f'{label} terrain mismatch; replanning {attempt+1}/4 from '
                     f'actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}); '
                     f'moved {start.distance_to(measured):.1f}y on last route')
                 try:
                     if toward_corpse:
-                        path = approach_path(nav,corpse_map,measured,corpse)
+                        if partial_replan or repeated:
+                            log('Old corpse approach blocked; searching alternative reclaim-side routes')
+                            path=alternate_approach_path(nav,corpse_map,measured,corpse,
+                                failed_points=failures,excluded_ends=failed_ends,log=log)
+                        else:
+                            try:
+                                path = approach_path(nav,corpse_map,measured,corpse)
+                            except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
+                                path=alternate_approach_path(nav,corpse_map,measured,corpse,
+                                    failed_points=failures,excluded_ends=failed_ends,log=log)
                     else:
                         raw = nav.find_path(corpse_map,measured,destination)
                         if not raw or raw[-1].distance_to(destination)>2:
@@ -174,7 +190,11 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                 set_status('clear')
 
     state, position = observe()
-    approach = approach_path(nav,corpse_map,position.position,corpse)
+    try:
+        approach = approach_path(nav,corpse_map,position.position,corpse)
+    except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
+        log('Initial corpse path unavailable; searching alternative reclaim-side routes')
+        approach=alternate_approach_path(nav,corpse_map,position.position,corpse,log=log)
     if approach:
         log(f'Running toward corpse as ghost; stopping near reclaim range '
             f'({approach[-1].distance_to(corpse):.1f}y from corpse)')

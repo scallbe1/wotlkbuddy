@@ -609,6 +609,8 @@ def hunt_kill_objectives(
                     return recover_encounter(s)
                 raise UnhittableMobError(target_guid,'Enemy moved out of Fireball range; reassess target')
             if s.resources.mana < 20:
+                if s.player.in_combat:
+                    return recover_encounter(s)
                 raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
             previous_health = t.health
             # Class-aware action policy: select the strongest suitable
@@ -621,6 +623,12 @@ def hunt_kill_objectives(
                 cast_action(s, action.spell_id)
                 log(f'Casting {action.name} ({action.spell_id}) with verified '
                     f'action key {action.key}; no chat command')
+            elif callable(cast_action):
+                if s.player.in_combat:
+                    return recover_encounter(s)
+                log('No verified ready damage spell; waiting for cooldown/mana before pull')
+                s=fresh(s,.65)
+                continue
             else:
                 verified_key = s.fireball_key
                 fast_cast = getattr(driver, 'cast_fireball', None)
