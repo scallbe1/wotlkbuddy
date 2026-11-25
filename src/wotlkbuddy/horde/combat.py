@@ -1471,7 +1471,11 @@ def hunt_kill_objectives(
                 log('No eligible reference search area on this map '
                     '(max 600y from player, within 100y of XML hotspot); '
                     + (', '.join(offsets) if offsets else 'no matching NPC entry'))
-        if not nearby and spec.hotspots and not collect_items:
+        if (not nearby and spec.hotspots and not collect_items
+                and not reference_search_points):
+            # Explicitly supplied reference locations have their own entry,
+            # geography and distance restrictions; do not bypass a rejected
+            # reference by treating its XML hotspot as a generic search site.
             # Explicit XML search areas are not creature spawn proof. Use
             # them only as navigation targets, then require the live mob ID.
             nearby=[Spawn(expected,world.map_id,h.x,h.y,h.z) for h in spec.hotspots

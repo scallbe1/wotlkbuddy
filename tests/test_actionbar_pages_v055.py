@@ -1,4 +1,4 @@
-"""Read-only actionbar page diagnosis and permanent write-suspension regressions."""
+"""Read-only actionbar page diagnosis and legacy write-suspension and guarded maintenance regressions."""
 from dataclasses import replace
 from pathlib import Path
 
@@ -40,7 +40,7 @@ def test_base_page_and_visible_page_are_different_without_guessing():
     text=summarize_telemetry(replace(snap,resources=state().resources))
     assert 'visible button 2 -> action 14: spell raw=133 [Fireball]' in text
     assert 'visible button 7 -> action 19: spell raw=133 [Fireball]' in text
-    assert 'Next bot run will NOT place or replace action-bar spells' in text
+    assert 'Guarded Mage hotbar maintenance may edit verified page-1 slots' in text
 
 
 def test_raw_page_index_mismatch_is_rejected():
@@ -86,11 +86,11 @@ def test_raw_chat_placement_command_is_rejected_before_any_keypress():
     assert events==[]
 
 
-def test_continuous_cli_does_not_call_hotbar_mutation():
+def test_continuous_cli_uses_guarded_hotbar_reconciler_not_legacy_mutation():
     repo=Path(__file__).resolve().parents[1]
     source=(repo/'src/wotlkbuddy/cli.py').read_text(encoding='utf-8')
     assert 'provision_rotation_hotbar(capture=cap' not in source
-    assert 'Automatic spell placement DISABLED' in source
+    assert 'reconcile_mage_hotbar(capture=cap,driver=driver,log=log)' in source
     source=(repo/'src/wotlkbuddy/horde/interaction.py').read_text(encoding='utf-8')
     method=source.split('    def place_book_spell(',1)[1].split(
         '    def cast_fireball(',1)[0]
