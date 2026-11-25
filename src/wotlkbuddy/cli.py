@@ -355,7 +355,8 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
     from wotlkbuddy.horde.encounter import survey_pull
     from wotlkbuddy.horde.awareness import ObjectAwareness
-    from wotlkbuddy.live.world_position import verified_nearby_creature_details
+    from wotlkbuddy.live.world_position import verified_nearby_creature_details, fast_travel_observation
+    driver.fast_travel_observe=lambda state,radius: fast_travel_observation(state,pid=pid,radius=radius)
     driver.awareness=ObjectAwareness(
         read=lambda state,center: verified_nearby_creature_details(
             state,pid=pid,center=center,radius=50),
