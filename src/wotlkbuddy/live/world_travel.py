@@ -303,8 +303,7 @@ def follow_world_path(
             origin=pos
             upcoming=tuple(waypoints[next_waypoint_index:
                                     min(len(waypoints),next_waypoint_index+6)])
-            notify('Scanning next path legs for red hostile creatures '
-                   'within 27 yards before advancing')
+            notify('Scanning upcoming path legs for nearby creature threats before advancing')
             on_threat(snap,pos,upcoming)
             snap,pos=sample()
             if (snap.truncated or snap.player.guid != guid or
