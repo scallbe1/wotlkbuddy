@@ -312,15 +312,20 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         state = defend_against_aggro(initial=snapshot, capture=cap, driver=driver, log=log)
         if state.player.level>snapshot.player.level:
             log(f'Level gained in combat: {snapshot.player.level} -> {state.player.level}; trainer priority will be refreshed on next phase')
+        from wotlkbuddy.horde.sustain import recover_after_encounter
+        def recover(current):
+            return recover_after_encounter(initial=current,capture=cap,driver=driver,
+                defend=lambda s:defend_against_aggro(initial=s,capture=cap,driver=driver,log=log),
+                log=log)
+        # Restore resources before detouring to corpses.
+        state=recover(state)
         drain=getattr(driver,'drain_encounter_loot',None)
         if callable(drain) and not getattr(driver,'looting_encounter',False):
             state=drain(state)
             if state.player.in_combat:
                 state=defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
-        from wotlkbuddy.horde.sustain import recover_after_encounter
-        return recover_after_encounter(initial=state,capture=cap,driver=driver,
-            defend=lambda s:defend_against_aggro(initial=s,capture=cap,driver=driver,log=log),
-            log=log)
+            state=recover(state)
+        return state
     driver.on_aggro = resolve_aggro
     # Configure facing before startup defense, not only after hotbar setup.
     from wotlkbuddy.live.world_position import verified_target_position
