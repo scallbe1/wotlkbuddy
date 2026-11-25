@@ -226,11 +226,12 @@ class NearbyCreature:
     level: int | None = None
 
 
-# Standard 3.3.5a FactionTemplate records (AzerothCore wiki):
-# 7 Creature, 15 Creature, 35 Friendly have no player-hostile mask.
+# Standard 3.3.5a FactionTemplate records:
+# https://www.azerothcore.org/wiki/factiontemplate
+# 7/15 Creature, 31 Prey, 35 Friendly have no player-hostile mask.
 # Confirmed harmless critter entries cover unavailable descriptor faction.
 # Do not override a conflicting known live faction on a customized server.
-PASSIVE_FACTIONS = frozenset({7, 15, 35})
+PASSIVE_FACTIONS = frozenset({7, 15, 31, 35})
 PASSIVE_CRITTERS = frozenset({4075, 32820})  # Rat, Wild Turkey
 
 
