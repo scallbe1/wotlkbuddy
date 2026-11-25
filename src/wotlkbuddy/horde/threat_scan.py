@@ -146,7 +146,13 @@ def scan_and_clear_hostiles(
                 ', '.join(f'{m.entry} {m.guid} faction={m.faction} level={m.level} {m.position.distance_to(origin):.1f}y' for m in urgent))
         for enemy in enemies:
             distance=enemy.position.distance_to(origin)
-            if distance>detection_yards or distance_to_corridor(enemy.position,origin,path_ahead)>corridor_yards:
+            corridor=distance_to_corridor(enemy.position,origin,path_ahead)
+            if distance>detection_yards or corridor>corridor_yards:
+                continue
+            # A verified detour that moves away from the hostile is not a
+            # reason to turn back and pull it. Reactive defense stays armed.
+            if (corridor>=hypot(enemy.position.x-origin.x,enemy.position.y-origin.y)-1
+                    and path_ahead[0].distance_to(enemy.position)>distance+1):
                 continue
             pack_positions.append(enemy.position)
             if enemy.guid in blocked:
@@ -256,6 +262,7 @@ def scan_and_clear_hostiles(
             if state.player.in_combat:
                 return defend(state)
             if state.player.target_guid!=chosen_guid:
+                remember_pack(driver,pack_positions,monotonic())
                 raise LiveControlError('Unsafe encounter: could not acquire exact discovered hostile GUID')
         else:
             for _ in range(max_targets+2):
@@ -330,7 +337,7 @@ def scan_and_clear_hostiles(
             return defend(state)
         corridor_guids={g for _,g,_ in candidates}|{g for d,g in blocked_nearby if d<=18}
         if plan is None or not plan.allowed or (awareness is None and corridor_count>crowd_limit and not corridor_guids.issubset({m.guid for m in plan.enemies})):
-            remember_pack(driver,[m.position for m in plan.enemies] if plan else pack_positions,monotonic())
+            remember_pack(driver,([m.position for m in plan.enemies] if plan and plan.enemies else pack_positions),monotonic())
             raise LiveControlError('Unsafe encounter: '+(plan.reason if plan and not plan.allowed else 'corridor pack not fully accounted for in assessment'))
         target=state.combat_target
         if (state.player.target_guid!=chosen_guid or not target or target.dead or
