@@ -339,3 +339,28 @@ def verified_nearby_creatures(snapshot: ClientTelemetry, *, pid: int,
         return observe_nearby_creatures(memory, expected_guid=snapshot.player.guid,
                                         center=center, radius=radius,
                                         ignored_guids=ignored_guids)
+
+
+def fast_travel_observation(snapshot: ClientTelemetry, *, pid: int,
+                            radius: float = 35.) -> tuple[WorldPosition, bool]:
+    """Single read-only position sample plus a conservative creature census.
+
+    The PID was resolved by the normal screenshot/dual-position preflight.
+    Do not capture a screenshot, send input, or query the navmesh here.
+    Unclassified units count as hazards until a stationary scan can resolve them.
+    """
+    from wotlkbuddy.game.win32 import ProcessMemory
+    if snapshot.truncated or not snapshot.player.guid:
+        raise WorldPositionError('Complete player identity required for fast travel')
+    if not 1 <= radius <= 80:
+        raise ValueError('Invalid fast travel threat radius')
+    with ProcessMemory(pid,writable=False) as memory:
+        pos=observe_world_position(memory,expected_guid=snapshot.player.guid)
+        mobs=observe_nearby_creature_details(memory,expected_guid=snapshot.player.guid,
+                                            center=pos.position,radius=radius)
+        latest=observe_world_position(memory,expected_guid=snapshot.player.guid)
+        if latest.map_id!=pos.map_id or latest.position.distance_to(pos.position)>3:
+            raise WorldPositionError('Player moved too far during fast creature census')
+        hazard=any(not passive_creature(m) and abs(m.position.z-latest.z)<=8 and
+                   m.position.distance_to(latest.position)<=radius+2 for m in mobs)
+        return latest,hazard
