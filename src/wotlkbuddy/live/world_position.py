@@ -235,9 +235,23 @@ PASSIVE_FACTIONS = frozenset({7, 15, 31, 35})
 PASSIVE_CRITTERS = frozenset({4075, 32820})  # Rat, Wild Turkey
 
 
-def passive_creature(mob: NearbyCreature) -> bool:
+# FactionTemplate 68: Undercity; friendly to Horde, hostile to Alliance.
+# Never classify this as globally passive or authorize attacks from a hint.
+HORDE_FRIENDLY_TEMPLATES = frozenset({68})
+HORDE_RACE_TOKENS = frozenset({'orc', 'scourge', 'undead', 'tauren', 'troll', 'bloodelf'})
+
+
+def passive_creature(mob: NearbyCreature, *, race_token: str = '') -> bool:
     return (mob.faction in PASSIVE_FACTIONS or
+            (mob.faction in HORDE_FRIENDLY_TEMPLATES and
+             race_token.lower() in HORDE_RACE_TOKENS) or
             (mob.entry in PASSIVE_CRITTERS and mob.faction in (None, 0)))
+
+
+def observed_race_token(snapshot: ClientTelemetry) -> str:
+    """No faction assumption when character resource telemetry is missing."""
+    resources = getattr(snapshot, 'resources', None)
+    return getattr(resources, 'race_token', '') or ''
 
 
 # Standard hostile templates with player-hostile mask bit 1; common starter
@@ -309,11 +323,11 @@ def observe_nearby_creature_details(memory: MemoryReader, *, expected_guid: str,
 
 def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
                              center: Vec3, radius: float = 80,
-                             ignored_guids=()) -> tuple[Vec3, ...]:
+                             ignored_guids=(), race_token: str = '') -> tuple[Vec3, ...]:
     """Compatibility projection for corpse recovery and other hazard readers."""
     return tuple(mob.position for mob in observe_nearby_creature_details(
         memory,expected_guid=expected_guid,center=center,radius=radius,
-        ignored_guids=ignored_guids) if not passive_creature(mob))
+        ignored_guids=ignored_guids) if not passive_creature(mob, race_token=race_token))
 
 
 def verified_nearby_creature_details(snapshot: ClientTelemetry, *, pid: int,
@@ -338,7 +352,8 @@ def verified_nearby_creatures(snapshot: ClientTelemetry, *, pid: int,
     with ProcessMemory(pid, writable=False) as memory:
         return observe_nearby_creatures(memory, expected_guid=snapshot.player.guid,
                                         center=center, radius=radius,
-                                        ignored_guids=ignored_guids)
+                                        ignored_guids=ignored_guids,
+                                        race_token=observed_race_token(snapshot))
 
 
 def fast_travel_observation(snapshot: ClientTelemetry, *, pid: int,
@@ -361,6 +376,7 @@ def fast_travel_observation(snapshot: ClientTelemetry, *, pid: int,
         latest=observe_world_position(memory,expected_guid=snapshot.player.guid)
         if latest.map_id!=pos.map_id or latest.position.distance_to(pos.position)>3:
             raise WorldPositionError('Player moved too far during fast creature census')
-        hazard=any(not passive_creature(m) and abs(m.position.z-latest.z)<=8 and
+        race_token = observed_race_token(snapshot)
+        hazard=any(not passive_creature(m, race_token=race_token) and abs(m.position.z-latest.z)<=8 and
                    m.position.distance_to(latest.position)<=radius+2 for m in mobs)
         return latest,hazard
