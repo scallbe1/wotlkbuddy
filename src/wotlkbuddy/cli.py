@@ -513,7 +513,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 report['accepted_quests'] = quests
 
             from wotlkbuddy.horde.training_goals import TrainingGoal,load_goal,save_goal
-            from wotlkbuddy.horde.merchant import estimated_vendor_copper
+            from wotlkbuddy.horde.merchant import estimated_vendor_copper,should_vendor_before_training
             budget_state=cap()
             resale=estimated_vendor_copper(budget_state,quest_profile)
             if resale is not None:
@@ -530,7 +530,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 log('Training priority deferred until cash/loot or level changes; continue questing')
             if args.only in ('all', 'train') or training_due:
                 if training_due:
-                    log(f'Level {budget_state.player.level}: vendor first, then check actual trainer spells')
+                    log(f'Level {budget_state.player.level}: checking training priority and actual trainer spells')
                 # Equip verified upgrades before converting spare loot to copper.
                 if cap().gear_scan_complete:
                     equip_mage_upgrades(capture=cap,driver=driver,log=log)
@@ -538,12 +538,13 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 hud.set(goal='Fund Mage training',action='Selling non-quest loot before trainer')
                 set_native_status('vendor')
                 sale=None
-                if resale!=0:
+                if should_vendor_before_training(state,training_goal,estimated_vendor_copper(state,quest_profile),
+                        minimum_slots=max(3,quest_profile.min_free_bag_slots+1)):
                     sale=free_bag_space(profile=quest_profile,profiles_root=profiles_root,
                         pid=pid,capture=cap,driver=driver,nav=nav,spawns=db,
                         min_free_slots=1,raise_cash=True,log=log)
                 else:
-                    log('No verified spare vendor loot; skipping empty merchant trip')
+                    log('No verified training funds or bag-space shortage requiring a sale; skipping optional merchant trip')
                 if sale is not None:
                     serialize_vendor_sale(sale)
                     log(f'Training cash raised: {sale.copper_received}c; balance {cap().resources.money_copper}c')

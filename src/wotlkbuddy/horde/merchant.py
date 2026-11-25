@@ -19,6 +19,20 @@ from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_position import verified_live_position
 
 
+class MerchantUnavailable(LiveControlError):
+    """Verified merchant never opened a window; no transaction was attempted."""
+
+
+def should_vendor_before_training(state, goal, resale, *, minimum_slots=3):
+    """An optional cash trip must solve an observed funds or space shortage."""
+    if resale is None or resale<=0:
+        return False
+    if state.resources.free_bag_slots<minimum_slots:
+        return True
+    return bool(goal is not None and goal.pending and
+                state.resources.money_copper<goal.next_cost)
+
+
 @dataclass(frozen=True)
 class VendorSaleReport:
     npc_name: str
@@ -150,18 +164,25 @@ def sell_at_verified_merchant(
     s = first
     if not s.merchant_open:
         log(f'Opening profile merchant {npc_name} ({npc_id})')
-        driver.interact()
-        s = _capture_fresh(capture, s, guard, sleep=sleep, now=now)
-        end = now() + 7
-        while now() < end and not (
-                s.merchant_open or
-                (s.dialog and s.dialog.kind != 'none')):
-            s = _capture_fresh(
-                capture, s, guard, sleep=sleep, now=now, timeout=2)
+        for attempt in range(3):
+            guard(s)
+            # Never interact again once a dialog has actually opened.
+            if s.merchant_open or (s.dialog and s.dialog.kind!='none'):
+                break
+            if attempt:
+                log(f'{npc_name}: retrying verified merchant interaction {attempt+1}/3')
+            driver.interact()
+            s = _capture_fresh(capture, s, guard, sleep=sleep, now=now)
+            end = now() + 4
+            while now() < end and not (s.merchant_open or (s.dialog and s.dialog.kind!='none')):
+                s = _capture_fresh(capture,s,guard,sleep=sleep,now=now,timeout=2)
+            if s.merchant_open or (s.dialog and s.dialog.kind!='none'):
+                break
         if not s.merchant_open:
-            if s.dialog is None or s.dialog.kind != 'gossip':
-                raise LiveControlError(
-                    f'{npc_name} did not open merchant or service gossip UI')
+            if s.dialog is None or s.dialog.kind == 'none':
+                raise MerchantUnavailable(f'{npc_name} did not open merchant or service gossip UI after three attempts')
+            if s.dialog.kind != 'gossip':
+                raise LiveControlError(f'{npc_name} opened an unexpected dialog; refusing further input')
             choices = [o for o in s.gossip_services
                        if o.kind.casefold() in ('vendor', 'merchant')]
             if not s.gossip_services_complete or len(choices) != 1:
@@ -310,15 +331,26 @@ def free_bag_space(
         raise LiveControlError(
             'Full bags: no merchant named by Horde XML and verified in '
             'CreatureSpawns.db within 600 yards')
-    target = options[0]
     reason=('Raising training cash' if raise_cash else f'Bags low ({initial.resources.free_bag_slots} free)')
-    log(f'{reason}; visiting profile merchant {target.name} ({target.entry}) '
-        f'from {target.source}')
-    visit_npc(npc_name=target.name, npc_id=target.entry,
-              pid=pid, capture=capture, driver=driver,
-              nav=nav, spawns=spawns,
-              radius=600, destination_hint=target.position, log=log)
-    return sell_at_verified_merchant(
-        npc_name=target.name, npc_id=target.entry,
-        profile=profile, capture=capture, driver=driver,
-        min_free_slots=min_free_slots, protect_mage_gear=raise_cash, log=log)
+    last_error=None
+    for target in options[:3]:
+        log(f'{reason}; visiting profile merchant {target.name} ({target.entry}) from {target.source}')
+        visit_npc(npc_name=target.name,npc_id=target.entry,pid=pid,capture=capture,driver=driver,
+            nav=nav,spawns=spawns,radius=600,destination_hint=target.position,log=log)
+        try:
+            return sell_at_verified_merchant(npc_name=target.name,npc_id=target.entry,
+                profile=profile,capture=capture,driver=driver,min_free_slots=min_free_slots,
+                protect_mage_gear=raise_cash,log=log)
+        except MerchantUnavailable as exc:
+            last_error=exc
+            s=capture()
+            if (s.truncated or s.player.guid!=initial.player.guid or s.player.dead or s.player.in_combat or
+                    s.resources is None or s.merchant_open or (s.dialog and s.dialog.kind!='none') or
+                    driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+                raise LiveControlError('Unsafe state after merchant interaction failure') from exc
+            log(str(exc))
+            if raise_cash and s.resources.free_bag_slots>=3:
+                log('Optional cash sale deferred; continuing with existing funds')
+                return None
+            log('Trying another independently verified merchant if available')
+    raise last_error or MerchantUnavailable('No responsive verified merchant')
