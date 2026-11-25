@@ -15,6 +15,7 @@ from weakref import WeakKeyDictionary
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.codec import ClientTelemetry
+from wotlkbuddy.live.travel_activity import TravelInput
 from wotlkbuddy.live.control import KeyboardDriver, LiveControlError, _MOVEMENT_SCANCODES
 from wotlkbuddy.live.world_position import WorldPosition
 
@@ -203,9 +204,9 @@ def follow_world_path(
             or not 0 <= max_recoveries <= 6 or not 0 <= max_aggro_fights <= 5
             or not 3 <= threat_check_yards <= 20
             or not 5 <= waypoint_spacing <= 22):
-
         raise ValueError('Invalid bounded travel parameters')
     notify = progress or (lambda _: None)
+    travel_input = TravelInput(keyboard)
     first, world0 = sample()
     player = first.player
     guid = player.guid
@@ -222,7 +223,6 @@ def follow_world_path(
         if ghost_only:
             return bool(snap.player.dead and snap.death_state and snap.death_state.ghost)
         return not snap.player.dead
-
     if ghost_only and (on_aggro is not None or on_threat is not None):
         raise ValueError('Ghost navigation cannot invoke combat or threat scans')
     if first.player.in_combat or not valid_life_state(first):
@@ -254,7 +254,6 @@ def follow_world_path(
             raise LiveControlError('Escape pressed or WoW lost focus during world navigation')
         if now() - start_time > max_seconds:
             raise LiveControlError('World navigation time limit reached')
-
     def checked(*, force_scan: bool = False, suppress_scan: bool = False,
                 observation: tuple[ClientTelemetry, WorldPosition] | None = None
                 ) -> tuple[ClientTelemetry, WorldPosition]:
@@ -277,7 +276,7 @@ def follow_world_path(
             aggro_fights += 1
             notify(f'Aggro during waypoint travel; stopping input for '
                    f'verified attacker defense {aggro_fights}/{max_aggro_fights}')
-            after_defense = on_aggro(snap)
+            after_defense = travel_input.interrupt('defense', on_aggro, snap)
             guard()
             if after_defense.player.guid != guid:
                 raise LiveControlError('Character changed during defensive combat')
@@ -305,7 +304,7 @@ def follow_world_path(
             upcoming=tuple(waypoints[next_waypoint_index:
                                     min(len(waypoints),next_waypoint_index+6)])
             notify('Scanning upcoming path legs for nearby creature threats before advancing')
-            on_threat(snap,pos,upcoming)
+            travel_input.interrupt('threat_scan', on_threat, snap, pos, upcoming)
             snap,pos=sample()
             if (snap.truncated or snap.player.guid != guid or
                     pos.player_guid.lower()!=guid.lower() or
@@ -344,7 +343,7 @@ def follow_world_path(
         guard()
         scan = _MOVEMENT_SCANCODES[key]
         started = now()
-        keyboard.key_down(scan)
+        travel_input.key_down(scan)
         try:
             accounted = 0.0
             while accounted < duration:
@@ -359,7 +358,7 @@ def follow_world_path(
                 sleep(step)
                 accounted += step
         finally:
-            keyboard.key_up(scan)
+            travel_input.key_up(scan)
         held = now() - started
         guard()
         return held
@@ -387,7 +386,7 @@ def follow_world_path(
         next_observation=began
         interrupted=False
         steering=0
-        keyboard.key_down(scan)
+        travel_input.key_down(scan)
         try:
             for _ in range(68):
                 if now()-began>=2.0:
@@ -395,7 +394,7 @@ def follow_world_path(
                 guard()
                 t=now()
                 if turn_key is not None and t>=turn_end:
-                    keyboard.key_up(turn_key)
+                    travel_input.key_up(turn_key)
                     turn_key=None
                 if t>=next_observation:
                     # Local read-only observation. Unknown or slow reads
@@ -420,7 +419,7 @@ def follow_world_path(
                         break  # sharp corner: stop and use measured stationary turn
                     if turn_key is None and .10<abs(error)<=.35 and distance>4:
                         turn_key=_MOVEMENT_SCANCODES['turn-right' if error*right_sign>0 else 'turn-left']
-                        keyboard.key_down(turn_key)
+                        travel_input.key_down(turn_key)
                         turn_end=now()+min(.09,max(.035,abs(error)/turn_rate*.65))
                         steering+=1
                     last=measured
@@ -431,9 +430,11 @@ def follow_world_path(
                 raise
             raise LiveControlError(f'Fast movement observation failed: {exc}') from exc
         finally:
-            if turn_key is not None:
-                keyboard.key_up(turn_key)
-            keyboard.key_up(scan)
+            try:
+                if turn_key is not None:
+                    travel_input.key_up(turn_key)
+            finally:
+                travel_input.key_up(scan)
         guard()
         return now()-began,interrupted,steering
 
