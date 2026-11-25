@@ -8,6 +8,7 @@ from time import monotonic, sleep as real_sleep
 
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.horde.combat import creature_entry_from_guid
+from wotlkbuddy.live.world_position import passive_creature, HOSTILE_PLAYER_FACTIONS
 
 
 class ObjectAwareness:
@@ -119,7 +120,7 @@ class ObjectAwareness:
         if probe and not preserve and not state.player.in_combat and callable(select):
             for mob in sorted(rows.values(),key=lambda m:m.position.distance_to(position.position)):
                 name=self.names.get(mob.entry)
-                if (exact(mob) or hint(mob) or not name or
+                if (exact(mob) or hint(mob) or passive_creature(mob) or not name or
                         stamp-self.probed.get(mob.entry,float('-inf'))<20):
                     continue
                 self.probed[mob.entry]=stamp
@@ -131,21 +132,34 @@ class ObjectAwareness:
         enemies=[]
         unknown=[]
         inferred=0
+        passive=0
+        from wotlkbuddy.horde.encounter import Enemy
         for mob in rows.values():
             cached=exact(mob)
             if cached is not None:
                 enemy=cached[3]
+            elif passive_creature(mob):
+                passive+=1
+                continue
             else:
                 template=hint(mob)
-                if template is None:
+                if template is not None:
+                    enemy=template[1]
+                elif mob.faction in HOSTILE_PLAYER_FACTIONS and mob.health is not None and mob.health>0:
+                    # Live descriptor faction gives a planning hint without
+                    # targeting. Do not cast until Lua confirms exact hostility.
+                    enemy=Enemy(mob.guid,mob.entry,self.names.get(mob.entry,''),
+                                mob.position,mob.level,'unknown',mob.health)
+                else:
                     unknown.append(mob)
                     continue
-                enemy=template[1]
                 inferred+=1
             if enemy is not None:
                 enemies.append(replace(enemy,guid=mob.guid,position=mob.position,
-                                       health=mob.health if mob.health is not None else enemy.health))
+                                       health=mob.health if mob.health is not None else enemy.health,
+                                       level=mob.level if mob.level is not None else enemy.level))
         if rows:
             self.log(f'Object awareness: {len(rows)} nearby objects, {len(enemies)-inferred} confirmed hostile, '
-                     f'{inferred} potential template-linked hostile, {len(unknown)} unclassified; 0 scan Tabs')
+                     f'{inferred} potential faction/template hostile, {passive} passive ignored, '
+                     f'{len(unknown)} unclassified; 0 scan Tabs')
         return state,tuple(enemies),tuple(unknown)

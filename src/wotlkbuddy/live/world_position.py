@@ -223,6 +223,30 @@ class NearbyCreature:
     position: Vec3
     health: int | None
     faction: int | None
+    level: int | None = None
+
+
+# Standard 3.3.5a FactionTemplate records:
+# https://www.azerothcore.org/wiki/factiontemplate
+# 7/15 Creature, 31 Prey, 35 Friendly have no player-hostile mask.
+# Confirmed harmless critter entries cover unavailable descriptor faction.
+# Do not override a conflicting known live faction on a customized server.
+PASSIVE_FACTIONS = frozenset({7, 15, 31, 35})
+PASSIVE_CRITTERS = frozenset({4075, 32820})  # Rat, Wild Turkey
+
+
+def passive_creature(mob: NearbyCreature) -> bool:
+    return (mob.faction in PASSIVE_FACTIONS or
+            (mob.entry in PASSIVE_CRITTERS and mob.faction in (None, 0)))
+
+
+# Standard hostile templates with player-hostile mask bit 1; common starter
+# zones including Scourge (21), spiders (22), Scarlet (67/89), Rot Hide (70).
+# A hint only: the selected unit must still pass current UnitReaction.
+HOSTILE_PLAYER_FACTIONS = frozenset({
+    14,16,17,18,19,20,21,22,24,26,27,28,30,37,38,39,40,44,45,46,47,
+    48,49,50,51,54,59,60,61,62,63,66,67,70,72,73,74,78,81,82,87,89,90,91,92,93,95,
+})
 
 
 def observe_nearby_creature_details(memory: MemoryReader, *, expected_guid: str,
@@ -262,16 +286,19 @@ def observe_nearby_creature_details(memory: MemoryReader, *, expected_guid: str,
                 if point.distance_to(center) <= radius:
                     # Verify descriptor GUID before interpreting health/faction.
                     # Unknown descriptors stay conservative rather than disappearing.
-                    hp, faction = None, None
+                    hp, faction, level = None, None, None
                     try:
                         descriptor = memory.read_u32(current+0x08)
                         if (0x10000 <= descriptor < 0xFFFF0000 and
                                 _u64(memory,descriptor)==object_guid):
                             hp = memory.read_u32(descriptor+4*0x18)
                             faction = memory.read_u32(descriptor+4*0x37)
+                            raw_level = memory.read_u32(descriptor+4*0x36)
+                            if 1 <= raw_level <= 83:
+                                level = raw_level
                     except (OSError,ValueError,WorldPositionError):
                         pass
-                    creatures.append(NearbyCreature(f'0x{object_guid:016X}', (object_guid >> 24) & 0xFFFFFF, point,hp,faction))
+                    creatures.append(NearbyCreature(f'0x{object_guid:016X}', (object_guid >> 24) & 0xFFFFFF, point,hp,faction,level))
         current = memory.read_u32(current + NEXT_OBJECT_OFFSET)
     if (_u64(memory, manager + LOCAL_GUID_OFFSET) != own or
             memory.read_u32(WORLD_MAP_ID_ADDRESS) != origin.map_id):
@@ -286,7 +313,7 @@ def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
     """Compatibility projection for corpse recovery and other hazard readers."""
     return tuple(mob.position for mob in observe_nearby_creature_details(
         memory,expected_guid=expected_guid,center=center,radius=radius,
-        ignored_guids=ignored_guids))
+        ignored_guids=ignored_guids) if not passive_creature(mob))
 
 
 def verified_nearby_creature_details(snapshot: ClientTelemetry, *, pid: int,
@@ -312,3 +339,28 @@ def verified_nearby_creatures(snapshot: ClientTelemetry, *, pid: int,
         return observe_nearby_creatures(memory, expected_guid=snapshot.player.guid,
                                         center=center, radius=radius,
                                         ignored_guids=ignored_guids)
+
+
+def fast_travel_observation(snapshot: ClientTelemetry, *, pid: int,
+                            radius: float = 35.) -> tuple[WorldPosition, bool]:
+    """Single read-only position sample plus a conservative creature census.
+
+    The PID was resolved by the normal screenshot/dual-position preflight.
+    Do not capture a screenshot, send input, or query the navmesh here.
+    Unclassified units count as hazards until a stationary scan can resolve them.
+    """
+    from wotlkbuddy.game.win32 import ProcessMemory
+    if snapshot.truncated or not snapshot.player.guid:
+        raise WorldPositionError('Complete player identity required for fast travel')
+    if not 1 <= radius <= 80:
+        raise ValueError('Invalid fast travel threat radius')
+    with ProcessMemory(pid,writable=False) as memory:
+        pos=observe_world_position(memory,expected_guid=snapshot.player.guid)
+        mobs=observe_nearby_creature_details(memory,expected_guid=snapshot.player.guid,
+                                            center=pos.position,radius=radius)
+        latest=observe_world_position(memory,expected_guid=snapshot.player.guid)
+        if latest.map_id!=pos.map_id or latest.position.distance_to(pos.position)>3:
+            raise WorldPositionError('Player moved too far during fast creature census')
+        hazard=any(not passive_creature(m) and abs(m.position.z-latest.z)<=8 and
+                   m.position.distance_to(latest.position)<=radius+2 for m in mobs)
+        return latest,hazard

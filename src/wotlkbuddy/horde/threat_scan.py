@@ -131,12 +131,19 @@ def scan_and_clear_hostiles(
             return defend(state)
         # Unknown hostility is never permission to attack or walk directly
         # into a potentially dangerous, unclassified creature.
-        urgent=[m for m in unknown if m.position.distance_to(origin)<=26 and
-                distance_to_corridor(m.position,origin,path_ahead)<=18]
+        def approaching_unknown(mob):
+            # A nearby object behind us is not a reason to forbid retreat.
+            # Keep the stop for paths that actually approach an unknown.
+            distance=mob.position.distance_to(origin)
+            corridor=distance_to_corridor(mob.position,origin,path_ahead)
+            moving_away=(corridor>=hypot(mob.position.x-origin.x,mob.position.y-origin.y)-1
+                         and path_ahead[0].distance_to(mob.position)>distance+1)
+            return distance<=26 and corridor<=18 and not moving_away
+        urgent=[m for m in unknown if approaching_unknown(m)]
         if urgent:
             remember_pack(driver,[m.position for m in urgent],monotonic())
             raise LiveControlError('Unsafe encounter: unclassified nearby object(s) on route: '+
-                ', '.join(f'{m.entry} {m.guid} {m.position.distance_to(origin):.1f}y' for m in urgent))
+                ', '.join(f'{m.entry} {m.guid} faction={m.faction} level={m.level} {m.position.distance_to(origin):.1f}y' for m in urgent))
         for enemy in enemies:
             distance=enemy.position.distance_to(origin)
             if distance>detection_yards or distance_to_corridor(enemy.position,origin,path_ahead)>corridor_yards:
