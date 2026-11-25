@@ -8,7 +8,7 @@ from time import monotonic, sleep as real_sleep
 
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.horde.combat import creature_entry_from_guid
-from wotlkbuddy.live.world_position import passive_creature, HOSTILE_PLAYER_FACTIONS
+from wotlkbuddy.live.world_position import passive_creature, observed_race_token, HOSTILE_PLAYER_FACTIONS
 
 
 class ObjectAwareness:
@@ -102,6 +102,7 @@ class ObjectAwareness:
         rows={m.guid:m for m in self.read(state,position.position)
               if m.entry>0 and relevant(m)}
         self._observe(state,rows)
+        race_token = observed_race_token(state)
 
         def exact(m):
             cached=self.classified.get(m.guid)
@@ -120,7 +121,7 @@ class ObjectAwareness:
         if probe and not preserve and not state.player.in_combat and callable(select):
             for mob in sorted(rows.values(),key=lambda m:m.position.distance_to(position.position)):
                 name=self.names.get(mob.entry)
-                if (exact(mob) or hint(mob) or passive_creature(mob) or not name or
+                if (exact(mob) or hint(mob) or passive_creature(mob, race_token=race_token) or not name or
                         stamp-self.probed.get(mob.entry,float('-inf'))<20):
                     continue
                 self.probed[mob.entry]=stamp
@@ -138,7 +139,7 @@ class ObjectAwareness:
             cached=exact(mob)
             if cached is not None:
                 enemy=cached[3]
-            elif passive_creature(mob):
+            elif passive_creature(mob, race_token=race_token):
                 passive+=1
                 continue
             else:
