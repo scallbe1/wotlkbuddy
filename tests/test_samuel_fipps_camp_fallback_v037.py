@@ -89,12 +89,12 @@ class CampGame(FakeGame):
         self.z=legs[-1].z
         self.at_camp=True
         return SimpleNamespace(stopped_reason='complete')
-    def run(self,db,*,reference=()):
+    def run(self,db,*,reference=(),with_hotspots=True):
         quest=PROFILE.quests[0]
         spec=quest.objectives[0]
         profile=replace(PROFILE,quests=(
             replace(quest,objectives=(
-                replace(spec,hotspots=(self.camp,)),)),))
+                replace(spec,hotspots=(self.camp,) if with_hotspots else ()),)),))
         return hunt_kill_objectives(
             profile=profile,quest_id=QID,pid=77,
             capture=self.capture,driver=self,nav=StaticNav(),spawns=db,
@@ -169,11 +169,26 @@ class SourcedCampFallbackTests(unittest.TestCase):
         try:
             with self.assertRaisesRegex(
                     LiveControlError,'No validated local spawn for objective mob'):
-                game.run(db)
+                game.run(db,with_hotspots=False)
         finally:
             db.close()
         self.assertEqual(game.routes,[])
         self.assertNotIn('/cast Fireball',game.commands)
+
+    def test_xml_only_hotspot_is_search_location_not_spawn_proof(self):
+        game=CampGame()
+        db=EmptySpawnDb()
+        try:
+            result=game.run(db)
+        finally:
+            db.close()
+        self.assertTrue(result.objectives_complete)
+        self.assertEqual(game.routes,[40.])
+        self.assertEqual(game.commands.count('/cast Fireball'),1)
+        self.assertTrue(any('explicit XML objective hotspots' in note
+                            for note in game.notes))
+        self.assertTrue(any('not trusting location as spawn proof' in note
+                            for note in game.notes))
 
     def test_database_spawn_takes_precedence_over_reference(self):
         game=CampGame()

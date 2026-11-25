@@ -120,5 +120,5 @@ def summarize_telemetry(telemetry: ClientTelemetry) -> str:
     lines.append('  Observed physical spells: ' + (occupied or 'none reported'))
     lines.append('  Verified 1-0 actions: ' + (ready_keys or 'none reported'))
     lines.append(
-        '  Next bot run will NOT place or replace action-bar spells.')
+        '  Guarded Mage hotbar maintenance may edit verified page-1 slots on the next bot run.')
     return '\n'.join(lines)

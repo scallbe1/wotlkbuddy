@@ -211,11 +211,13 @@ class MageShortForwardRecoveryTests(unittest.TestCase):
     def test_active_aggro_prevents_forward_movement(self):
         g=OutOfSightSpider(required_x=2.0,in_combat=True)
         with self.assertRaisesRegex(LiveControlError,
-                                    'actively attacking mob'):
+                                    'Aggro persists but no exact living attacker could be verified'):
             run(g,nav=Mesh(),target_xyz=g.target_position,
                 world_position=g.position,travel=g.travel)
         self.assertEqual(g.attempts,[])
-        self.assertEqual(g.commands.count('/cast Fireball'),2)
+        # The fixture marks combat but does not identify an exact attacker.
+        # Defensive targeting must fail closed before any attack or movement.
+        self.assertNotIn('/cast Fireball',g.commands)
 
 
 if __name__=='__main__':
