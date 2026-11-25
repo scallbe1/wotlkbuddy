@@ -117,7 +117,7 @@ def test_passive_encounter_survey_never_changes_target():
 
 def test_rat_and_turkey_do_not_block_navigation():
     rows=(NearbyCreature('0xF1300080340062CB',32820,Vec3(6,0,0),8,7,1),
-          NearbyCreature('0xF130000FEB0005A1',4075,Vec3(15,0,0),8,None,1))
+          NearbyCreature('0xF130000FEB0005A1',4075,Vec3(15,0,0),8,31,1))
     state,commands,awareness,where,driver=setup(rows)
     driver.awareness=awareness
     _,enemies,unknown=awareness.survey(state[0],where)
