@@ -85,7 +85,50 @@ def maintain_mage_supplies(
             state = fresh(state, 1.5)
         return state
 
-    for kind in ('water', 'food'):
+    def consume(state,kind,low_mark):
+        state = capture()
+        guard(state)
+        ratio = ((state.resources.mana/max(1,state.resources.max_mana))
+                 if kind == 'water' else
+                 state.player.health/max(1,state.player.max_health))
+        if ratio >= low_mark:
+            return state
+        supply = state.mage_supplies
+        count = supply.water_count if kind == 'water' else supply.food_count
+        bag, slot, item = ((supply.water_bag,supply.water_slot,supply.water_item_id)
+                           if kind == 'water' else
+                           (supply.food_bag,supply.food_slot,supply.food_item_id))
+        if count == 0:
+            log(f'No verified conjured {kind} for low resources; '
+                'natural regeneration remains available')
+            return state
+        if not (0 <= bag <= 4 and 1 <= slot <= 36 and item > 0):
+            raise LiveControlError('Invalid exact conjured item bag identity')
+        log(f'Using verified conjured {kind} item {item} from bag {bag} slot {slot}; '
+            f'HP {state.player.health}/{state.player.max_health}, mana {state.resources.mana}/{state.resources.max_mana}')
+        driver.chat(f'/use {bag} {slot}')
+        after = fresh(state, 1.0)
+        after_supply = after.mage_supplies
+        after_count = (after_supply.water_count if kind == 'water'
+                       else after_supply.food_count)
+        if after_count >= count:
+            raise LiveControlError('Conjured consumable did not leave verified bag; '
+                                   'refusing additional /use commands')
+        previous = ratio
+        for _ in range(16):
+            now_ratio = ((after.resources.mana/max(1,after.resources.max_mana))
+                         if kind == 'water' else
+                         after.player.health/max(1,after.player.max_health))
+            if now_ratio >= max(.85,low_mark) or (low_mark<=.70 and now_ratio >= previous + .20):
+                break
+            after = fresh(after, 1.6)
+        log(f'Finished {kind} regeneration observation: HP {after.player.health}/{after.player.max_health}, '
+            f'mana {after.resources.mana}/{after.resources.max_mana}')
+        return after
+
+    for kind, goal in (('water', mana_goal), ('food', health_goal)):
+        # Consume existing supplies first, then replenish only if necessary.
+        state=consume(state,kind,goal)
         casts = 0
         while casts < max_conjures:
             supply = state.mage_supplies
@@ -105,7 +148,11 @@ def maintain_mage_supplies(
                 log('No free bag slots for conjured supplies; not casting')
                 break
             if state.resources.mana < .45 * max(1, state.resources.max_mana):
-                state = restore_naturally(state, threshold=.55)
+                if kind=='food' and state.mage_supplies.water_count>0:
+                    state=consume(state,'water',.85)
+                if state.resources.mana < .45 * max(1, state.resources.max_mana):
+                    log(f'Waiting for natural mana regeneration: {state.resources.mana}/{state.resources.max_mana}')
+                    state = restore_naturally(state, threshold=.55)
             if state.resources.mana < .45 * max(1, state.resources.max_mana):
                 log('Mana too low to safely attempt conjuration')
                 break
@@ -121,45 +168,9 @@ def maintain_mage_supplies(
                     'increase; stopping instead of spamming casts')
             log(f'Conjured {kind}: {previous}->{newer}')
             casts += 1
+            # Newly created water must be used before considering food.
+            state=consume(state,kind,goal)
 
-    for kind, low_mark in (('water', mana_goal), ('food', health_goal)):
-        state = capture()
-        guard(state)
-        ratio = ((state.resources.mana/max(1,state.resources.max_mana))
-                 if kind == 'water' else
-                 state.player.health/max(1,state.player.max_health))
-        if ratio >= low_mark:
-            continue
-        supply = state.mage_supplies
-        count = supply.water_count if kind == 'water' else supply.food_count
-        bag, slot, item = ((supply.water_bag,supply.water_slot,supply.water_item_id)
-                           if kind == 'water' else
-                           (supply.food_bag,supply.food_slot,supply.food_item_id))
-        if count == 0:
-            log(f'No verified conjured {kind} for low resources; '
-                'natural regeneration remains available')
-            continue
-        if not (0 <= bag <= 4 and 1 <= slot <= 36 and item > 0):
-            raise LiveControlError('Invalid exact conjured item bag identity')
-        log(f'Using verified conjured {kind} item {item} from bag {bag} slot {slot}')
-        driver.chat(f'/use {bag} {slot}')
-        after = fresh(state, 1.0)
-        after_supply = after.mage_supplies
-        after_count = (after_supply.water_count if kind == 'water'
-                       else after_supply.food_count)
-        if after_count >= count:
-            raise LiveControlError('Conjured consumable did not leave verified bag; '
-                                   'refusing additional /use commands')
-        previous = ratio
-        for _ in range(16):
-            now_ratio = ((after.resources.mana/max(1,after.resources.max_mana))
-                         if kind == 'water' else
-                         after.player.health/max(1,after.player.max_health))
-            if now_ratio >= max(.85,low_mark) or (low_mark<=.70 and now_ratio >= previous + .20):
-                break
-            after = fresh(after, 1.6)
-        log(f'Finished {kind} regeneration observation')
-        state = after
     return state
 
 
