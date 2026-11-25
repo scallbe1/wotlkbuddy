@@ -855,7 +855,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                     not 1 <= item_id < 2**31 or not 1 <= qty <= 1000 or
                     not 0 <= quality <= 2 or not 1 <= price < 2**31 or
                     quest != 0 or locked != 0 or len(equip) > 27 or
-                    (quality > 0 and not equip.startswith('INVTYPE_')) or
+                    (quality > 0 and not equip.startswith('INVTYPE_') and
+                     not (quality==1 and equip=='VENDOR_JUNK')) or
                     (bag, slot) in merchant_items):
                 raise TelemetryError('Unsafe or duplicate merchant item')
             merchant_items[(bag, slot)] = MerchantItem(

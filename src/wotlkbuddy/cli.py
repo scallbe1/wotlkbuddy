@@ -310,6 +310,8 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     def resolve_aggro(snapshot):
         from wotlkbuddy.horde.sustain import maintain_mage_supplies
         state = defend_against_aggro(initial=snapshot, capture=cap, driver=driver, log=log)
+        if state.player.level>snapshot.player.level:
+            log(f'Level gained in combat: {snapshot.player.level} -> {state.player.level}; trainer priority will be refreshed on next phase')
         drain=getattr(driver,'drain_encounter_loot',None)
         if callable(drain) and not getattr(driver,'looting_encounter',False):
             state=drain(state)
@@ -376,7 +378,11 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     needs_recovery = (first.player.health/max(1,first.player.max_health)<.70 or
                       first.resources.mana/max(1,first.resources.max_mana)<.45)
     if not needs_recovery or args.only not in ('all','quests','train','vendor','objectives','collect','objects','turnin'):
-        maintain_mage_supplies(capture=cap, driver=driver, log=log)
+        first=maintain_mage_supplies(capture=cap, driver=driver, log=log)
+        from wotlkbuddy.horde.recovery_rest import maintain_travel_buffs
+        first=maintain_travel_buffs(state=first,capture=cap,driver=driver,log=log)
+        if first.player.in_combat:
+            first=driver.on_aggro(first)
 
     def set_native_status(phase: str, quest_id: int = 0) -> None:
         if args.no_hud:

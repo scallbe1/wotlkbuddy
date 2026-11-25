@@ -4,7 +4,7 @@ from wotlkbuddy.horde.recovery_rest import restore_self_buff
 
 def state(seq, active=False, combat=False):
     return NS(sequence=seq,truncated=False,
-        player=NS(guid='aarr',dead=False,in_combat=combat),
+        player=NS(guid='aarr',dead=False,in_combat=combat,target_guid=''),
         resources=NS(mana=200,max_mana=360),
         mage_buffs=NS(intellect_active=active,armor_active=True))
 

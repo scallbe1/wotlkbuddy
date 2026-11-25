@@ -80,7 +80,7 @@ def safe_sale_candidates(
             continue
         if protect_upgrades and item.equip_loc.startswith('INVTYPE_') and not state.gear_scan_complete:
             continue
-        if item.quality == 0 or (
+        if item.quality == 0 or (item.quality==1 and item.equip_loc=='VENDOR_JUNK') or (
                 0 < item.quality <= 2 and item.equip_loc.startswith('INVTYPE_')
                 and item.equip_loc not in ('INVTYPE_BAG', 'INVTYPE_AMMO',
                                            'INVTYPE_QUIVER', 'INVTYPE_TABARD')):
@@ -88,10 +88,18 @@ def safe_sale_candidates(
     return tuple(allowed)
 
 
+def protected_profile_items(state,profile):
+    active={q.quest_id for q in state.quests}
+    done={qid for qid,complete in state.quest_completions if complete}
+    return frozenset(obj.entry for quest in profile.quests
+                     if quest.quest_id in active or quest.quest_id not in done
+                     for obj in quest.objectives if obj.kind=='CollectItem')
+
+
 def estimated_vendor_copper(state, profile):
     if not state.inventory_sale_scan or not state.merchant_scan_complete or state.truncated:
         return None
-    protected=frozenset(obj.entry for quest in profile.quests for obj in quest.objectives if obj.kind=='CollectItem')
+    protected=protected_profile_items(state,profile)
     items=safe_sale_candidates(state,protected_item_ids=protected,require_open=False,protect_upgrades=True)
     return sum(i.vendor_price*i.quantity for i in items)
 
@@ -126,10 +134,7 @@ def sell_at_verified_merchant(
     guid = first.player.guid
     if not guid:
         raise LiveControlError('Player GUID missing before merchant transaction')
-    protected = frozenset(
-        obj.entry for quest in profile.quests for obj in quest.objectives
-        if obj.kind == 'CollectItem'
-    )
+    protected = protected_profile_items(first,profile)
 
     def guard(s: ClientTelemetry):
         if (s.truncated or s.player.guid != guid or s.player.dead or
@@ -194,6 +199,8 @@ def sell_at_verified_merchant(
                     protect_upgrades=protect_mage_gear)
             eligible = eligible_items(s)
             if not eligible:
+                retained=[(x.item_id,x.quantity) for x in s.merchant_items]
+                log(f'No further verified sale candidates; retained scanned items: {retained}')
                 break
             item = eligible[0]
             # A consecutive fresh frame must preserve the exact slot and

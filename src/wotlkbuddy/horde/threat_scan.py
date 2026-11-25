@@ -98,6 +98,10 @@ def scan_and_clear_hostiles(
             return callback(state)
         return defend_against_aggro(initial=state,capture=capture,driver=driver,log=log,sleep=sleep)
 
+    def finish(state):
+        guard(state)
+        return defend(state) if state.player.in_combat else state
+
     state=initial
     guard(state)
     if state.player.health/max(1,state.player.max_health)<.30:
@@ -188,7 +192,7 @@ def scan_and_clear_hostiles(
         if state.player.target_guid:
             driver.chat('/cleartarget')
             state=fresh(state)
-        return state
+        return finish(state)
 
     if state.player.in_combat:
         return defend(state)
@@ -231,7 +235,7 @@ def scan_and_clear_hostiles(
         if state.player.target_guid:
             driver.chat('/cleartarget')
             state=fresh(state)
-        return state
+        return finish(state)
     if direct_path_clear is not None:
         try:
             if not direct_path_clear(player_position.position, actual):
@@ -240,7 +244,7 @@ def scan_and_clear_hostiles(
                 if state.player.target_guid:
                     driver.chat('/cleartarget')
                     state=fresh(state)
-                return state
+                return finish(state)
         except (OSError, RuntimeError, ValueError, TimeoutError,
                 LiveControlError) as exc:
             log(f'Cannot verify direct approach for {chosen_guid} after '
@@ -248,7 +252,7 @@ def scan_and_clear_hostiles(
             if state.player.target_guid:
                 driver.chat('/cleartarget')
                 state=fresh(state)
-            return state
+            return finish(state)
     if state.mage_buffs is None or state.mage_buffs.knows_fireball is not True:
         raise LiveControlError('Cannot preemptively fight without learned Fireball')
     log(f'Preemptive hostile {chosen_entry}, GUID {chosen_guid}, '
@@ -343,7 +347,7 @@ def scan_and_clear_hostiles(
         if state.player.target_guid and state.player.target_guid != chosen_guid:
             driver.chat('/cleartarget')
             state = fresh(state)
-        return state
+        return finish(state)
     if (state.player.target_guid == chosen_guid and target and
             (target.dead or target.health == 0)):
         log(f'Preemptive hostile {chosen_entry} defeated before entering combat')
@@ -353,12 +357,12 @@ def scan_and_clear_hostiles(
         drain=getattr(driver,'drain_encounter_loot',None)
         if callable(drain):
             return drain(state)
-        return state
+        return finish(state)
     if state.player.target_guid == chosen_guid and target and (
             target.health < before_hp):
         log(f'Preemptive {chosen_guid} took verified damage; '
             'letting reactive defense handle any subsequent aggro')
-        return state
+        return finish(state)
     # Unknown result, not a successful kill. Never cast again at the same
     # GUID from the same firing position; navigation may move around the
     # obstruction, while reactive defense remains enabled if it attacks.
@@ -371,5 +375,5 @@ def scan_and_clear_hostiles(
         state = fresh(state)
     if state.player.in_combat:
         return defend(state)
-    return state
+    return finish(state)
 

@@ -294,23 +294,8 @@ def hunt_kill_objectives(
         return s
 
     def buffs(s: ClientTelemetry) -> ClientTelemetry:
-        if s.player.in_combat:
-            return s
-        for known, active, command, label in (
-                (s.mage_buffs.knows_intellect, s.mage_buffs.intellect_active,
-                 '/cast [target=player] Arcane Intellect', 'Arcane Intellect'),
-                (s.mage_buffs.knows_frost_armor, s.mage_buffs.armor_active,
-                 '/cast Frost Armor', 'Frost Armor')):
-            if not known or active:
-                continue
-            log(f'Maintaining Mage buff: {label}')
-            driver.chat(command)
-            s = fresh(s, 2.0)
-            has_buff = (s.mage_buffs.intellect_active if label == 'Arcane Intellect'
-                        else s.mage_buffs.armor_active)
-            if not has_buff:
-                raise LiveControlError(f'Cannot confirm {label} buff; stop before pulling')
-        return s
+        from wotlkbuddy.horde.recovery_rest import maintain_travel_buffs
+        return maintain_travel_buffs(state=s,capture=capture,driver=driver,log=log,sleep=sleep)
 
     def navigate(s: ClientTelemetry, dest: Vec3) -> ClientTelemetry:
         """Follow Detour; retry a height mismatch once from measured live XYZ.

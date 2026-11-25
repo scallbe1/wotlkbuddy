@@ -7,7 +7,7 @@ from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import follow_world_path
 
 
-def restore_self_buff(*,state,capture,driver,name,field,sleep=real_sleep):
+def restore_self_buff(*,state,capture,driver,name,field,sleep=real_sleep,log=lambda _:None):
     """Use a fixed self-target cast, then confirm aura on advancing frames."""
     if (name,field) not in (('Arcane Intellect','intellect_active'),
                             ('Frost Armor','armor_active')):
@@ -24,16 +24,57 @@ def restore_self_buff(*,state,capture,driver,name,field,sleep=real_sleep):
     state=check(capture())
     if state.player.in_combat or getattr(state.mage_buffs,field):
         return state
-    command='/cast [target=player] Arcane Intellect' if name=='Arcane Intellect' else '/cast Frost Armor'
-    previous=state.sequence
-    driver.chat(command)
-    for _ in range(20):
-        sleep(.25)
-        state=check(capture())
+    commands=['/cast [target=player] Arcane Intellect','/cast Arcane Intellect'] if name=='Arcane Intellect' else ['/cast Frost Armor']
+    for command in commands:
+        if name=='Arcane Intellect' and state.player.target_guid:
+            driver.chat('/cleartarget')
+            for _ in range(12):
+                sleep(.25)
+                state=check(capture())
+                if state.player.in_combat or getattr(state.mage_buffs,field):
+                    return state
+                if not state.player.target_guid:
+                    break
+            else:
+                log('Cannot verify cleared target before self-buff; deferring')
+                return state
+        previous=state.sequence
+        mana_before=state.resources.mana
+        driver.chat(command)
+        for _ in range(20):
+            sleep(.25)
+            state=check(capture())
+            if state.player.in_combat:
+                return state
+            if state.sequence!=previous and getattr(state.mage_buffs,field):
+                log(f'Confirmed {name} on player; mana {mana_before}->{state.resources.mana}')
+                return state
+        log(f'{name} not confirmed after {command}; mana {mana_before}->{state.resources.mana}, '
+            f'target={state.player.target_guid or "none"}')
+    return state
+
+def maintain_travel_buffs(*,state,capture,driver,log=lambda _:None,sleep=real_sleep):
+    """One bounded self-buff pass; intellect failure is not fatal to travel."""
+    if state.player.in_combat or state.mage_buffs is None:
+        return state
+    for name,known,field in (('Frost Armor','knows_frost_armor','armor_active'),
+                             ('Arcane Intellect','knows_intellect','intellect_active')):
+        if state.player.in_combat or state.mage_buffs is None:
+            break
+        if not getattr(state.mage_buffs,known) or getattr(state.mage_buffs,field):
+            continue
+        if state.resources.mana/max(1,state.resources.max_mana)<.45:
+            log(f'Deferring {name}: insufficient mana reserve')
+            break
+        log(f'Maintaining Mage buff: {name}')
+        state=restore_self_buff(state=state,capture=capture,driver=driver,
+                                name=name,field=field,sleep=sleep,log=log)
         if state.player.in_combat:
-            return state
-        if state.sequence!=previous and getattr(state.mage_buffs,field):
-            return state
+            break
+        if not getattr(state.mage_buffs,field):
+            if field=='armor_active':
+                raise LiveControlError('Cannot confirm Frost Armor buff; stop before pulling')
+            log('Arcane Intellect not verified after both cast methods; continue with verified resources, retry next phase')
     return state
 
 
@@ -96,7 +137,7 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
         if buffs:
             if buffs.knows_frost_armor and not buffs.armor_active:
                 missing.append(('Frost Armor','armor_active'))
-            if buffs.knows_intellect and not buffs.intellect_active:
+            if buffs.knows_intellect and not buffs.intellect_active and buff_attempts.get('intellect_active',0)<3:
                 missing.append(('Arcane Intellect','intellect_active'))
         supply=state.mage_supplies
         low_stock=bool(supply and state.resources.free_bag_slots>0 and (
@@ -128,14 +169,17 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
                     f'mana {state.resources.mana}/{state.resources.max_mana}; holding position')
             log(f'Restoring buff: {name} (attempt {buff_attempts[field]}/3)')
             state=restore_self_buff(state=state,capture=capture,driver=driver,
-                                    name=name,field=field,sleep=sleep)
+                                    name=name,field=field,sleep=sleep,log=log)
             if not state.player.in_combat and not getattr(state.mage_buffs,field,False):
                 log(f'{name} not yet verified on player; reassessing mana, cooldown and nearby threats')
             # Buff mana cost requires another sustain pass.
             supply_rounds=0
             continue
         if hp>=.90 and mana>=.85 and not missing:
-            log('Recovery complete: health, mana and learned buffs restored; resume questing')
+            if buffs and buffs.knows_intellect and not buffs.intellect_active:
+                log('Recovery complete: resources and armor restored; Arcane Intellect deferred after retries')
+            else:
+                log('Recovery complete: health, mana and learned buffs restored; resume questing')
             return state
         sleep(2)
     raise LiveControlError('Post-resurrection resources not restored within recovery budget')
