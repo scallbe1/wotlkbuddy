@@ -322,7 +322,7 @@ def scan_and_clear_hostiles(
         if state.player.in_combat:
             return defend(state)
         corridor_guids={g for _,g,_ in candidates}|{g for d,g in blocked_nearby if d<=18}
-        if plan is None or not plan.allowed or (corridor_count>crowd_limit and not corridor_guids.issubset({m.guid for m in plan.enemies})):
+        if plan is None or not plan.allowed or (awareness is None and corridor_count>crowd_limit and not corridor_guids.issubset({m.guid for m in plan.enemies})):
             remember_pack(driver,[m.position for m in plan.enemies] if plan else pack_positions,monotonic())
             raise LiveControlError('Unsafe encounter: '+(plan.reason if plan and not plan.allowed else 'corridor pack not fully accounted for in assessment'))
         target=state.combat_target

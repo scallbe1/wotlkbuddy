@@ -1,8 +1,7 @@
-"""Read-only spatial discovery, followed by ordinary verified target acquisition.
+"""Spatial discovery without repeated target cycling.
 
-A faction template is not a UnitReaction. Unknown creatures are retained as
-potential hazards; only client-confirmed red, living, attackable units can be
-offensive candidates. No target changes through process memory.
+Template observations are planning hints, not attack authorization. Every
+actual pull still requires an exact GUID and current client hostility/range.
 """
 from dataclasses import replace
 from time import monotonic, sleep as real_sleep
@@ -22,6 +21,9 @@ class ObjectAwareness:
         self.now=now
         self.names={}
         self.classified={}
+        self.templates={}
+        self.probed={}
+        self.last_tab=float('-inf')
         self.owner=None
 
     def _guard(self,state,owner):
@@ -54,10 +56,19 @@ class ObjectAwareness:
         if t.attackable and not t.dead and t.health>0 and 1<=t.reaction<=3:
             enemy=Enemy(guid,mob.entry,state.player.target_name,mob.position,
                         t.level,t.classification,t.health)
-        self.classified[guid]=(self.now(),mob.entry,mob.faction,enemy)
+        stamp=self.now()
+        self.classified[guid]=(stamp,mob.entry,mob.faction,enemy)
+        # A matching entry AND known faction may indicate a potential add.
+        # Never copy a friendly classification onto an unverified GUID.
+        if mob.faction is not None:
+            key=(mob.entry,mob.faction)
+            if enemy is not None:
+                self.templates[key]=(stamp,enemy)
+            else:
+                self.templates.pop(key,None)
 
     def acquire(self,state,guid,entry):
-        """Acquire a known object; Tab is bounded fallback, never discovery."""
+        """Try exact name, then at most one globally throttled Tab for this pull."""
         self._guard(state,state.player.guid)
         if state.player.in_combat or state.player.target_guid==guid:
             return state
@@ -67,59 +78,74 @@ class ObjectAwareness:
             state=self._fresh(state)
             if state.player.in_combat or state.player.target_guid==guid:
                 return state
-        for _ in range(16):
+        stamp=self.now()
+        if stamp-self.last_tab>=12:
+            self.last_tab=stamp
+            self.log(f'Target acquisition fallback: one Tab for {entry} {guid}')
             self.driver.chat('/targetenemy')
             state=self._fresh(state)
-            if state.player.in_combat or state.player.target_guid==guid:
-                return state
         return state
 
-    def survey(self,state,position,relevant=lambda _:True):
-        """Return spatially discovered rows, confirmed red enemies and unknowns."""
+    def survey(self,state,position,relevant=lambda _:True,*,probe=True):
+        """Map nearby creatures; no Tab input, even if classification is missing."""
         self._guard(state,state.player.guid)
         owner=(state.player.guid,position.map_id)
         if owner!=self.owner:
             self.owner=owner
             self.classified.clear()
+            self.templates.clear()
+            self.probed.clear()
         stamp=self.now()
-        self.classified={g:v for g,v in self.classified.items() if stamp-v[0]<=12}
+        self.classified={g:v for g,v in self.classified.items() if stamp-v[0]<=60}
+        self.templates={k:v for k,v in self.templates.items() if stamp-v[0]<=60}
         rows={m.guid:m for m in self.read(state,position.position)
               if m.entry>0 and relevant(m)}
         self._observe(state,rows)
-        def pending():
-            return {g for g,m in rows.items()
-                    if g not in self.classified or self.classified[g][1:3]!=(m.entry,m.faction)}
-        # Use profile and previously verified names first. A name is a hint,
-        # never proof that the selected same-name spawn is the intended GUID.
+
+        def exact(m):
+            cached=self.classified.get(m.guid)
+            return cached if cached and cached[1:3]==(m.entry,m.faction) else None
+
+        def hint(m):
+            return self.templates.get((m.entry,m.faction)) if m.faction is not None else None
+
+        # One deliberate named probe at most, and never disturb a selected
+        # hostile that is being assessed for a pull.
         select=getattr(self.driver,'target_objective_name',None)
-        attempted=set()
-        for guid in sorted(pending(),key=lambda g:rows[g].position.distance_to(position.position)):
-            if state.player.in_combat or len(attempted)>=6:
+        current=state.combat_target
+        preserve=bool(state.player.target_guid and current and current.attackable and
+                      not current.dead and current.reaction is not None and
+                      1<=current.reaction<=3)
+        if probe and not preserve and not state.player.in_combat and callable(select):
+            for mob in sorted(rows.values(),key=lambda m:m.position.distance_to(position.position)):
+                name=self.names.get(mob.entry)
+                if (exact(mob) or hint(mob) or not name or
+                        stamp-self.probed.get(mob.entry,float('-inf'))<20):
+                    continue
+                self.probed[mob.entry]=stamp
+                if select(name):
+                    state=self._fresh(state)
+                    self._observe(state,rows)
                 break
-            name=self.names.get(rows[guid].entry)
-            if not name or name in attempted or not callable(select):
-                continue
-            attempted.add(name)
-            if select(name):
-                state=self._fresh(state)
-                self._observe(state,rows)
-        # Classify unresolved objects with ordinary input. Do not terminate
-        # discovery on a repeated Tab target; the spatial census is independent.
-        for _ in range(16):
-            if not pending() or state.player.in_combat:
-                break
-            self.driver.chat('/targetenemy')
-            state=self._fresh(state)
-            self._observe(state,rows)
-        unknown=tuple(rows[g] for g in pending())
+
         enemies=[]
-        for guid,mob in rows.items():
-            cached=self.classified.get(guid)
-            if cached and cached[1:3]==(mob.entry,mob.faction) and cached[3] is not None:
+        unknown=[]
+        inferred=0
+        for mob in rows.values():
+            cached=exact(mob)
+            if cached is not None:
                 enemy=cached[3]
-                enemies.append(replace(enemy,position=mob.position,
+            else:
+                template=hint(mob)
+                if template is None:
+                    unknown.append(mob)
+                    continue
+                enemy=template[1]
+                inferred+=1
+            if enemy is not None:
+                enemies.append(replace(enemy,guid=mob.guid,position=mob.position,
                                        health=mob.health if mob.health is not None else enemy.health))
         if rows:
-            self.log(f'Object awareness: {len(rows)} nearby objects, {len(enemies)} confirmed hostile, '
-                     f'{len(unknown)} unclassified')
-        return state,tuple(enemies),unknown
+            self.log(f'Object awareness: {len(rows)} nearby objects, {len(enemies)-inferred} confirmed hostile, '
+                     f'{inferred} potential template-linked hostile, {len(unknown)} unclassified; 0 scan Tabs')
+        return state,tuple(enemies),tuple(unknown)

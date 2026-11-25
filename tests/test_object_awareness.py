@@ -57,22 +57,27 @@ def test_known_name_acquires_discovered_guid_without_tab():
     assert [e.guid for e in enemies]==[G1] and not unknown
     assert commands==['/targetexact Rot Hide Graverobber']
 
-def test_spatial_discovery_survives_repeated_tab_guid():
+def test_same_template_adds_are_mapped_without_tab():
     rows=(NearbyCreature(G1,ENTRY,Vec3(32,0,0),137,14),
           NearbyCreature(G2,ENTRY,Vec3(33,2,0),137,14))
-    state,commands,awareness,where,_=setup(rows,(G1,G1,G2))
+    state,commands,awareness,where,_=setup(rows)
+    awareness.names[ENTRY]='Rot Hide Graverobber'
     _,enemies,unknown=awareness.survey(state[0],where)
     assert {e.guid for e in enemies}=={G1,G2} and not unknown
-    assert commands==['/targetenemy']*3
+    assert commands==['/targetexact Rot Hide Graverobber']
+    for _ in range(20):
+        awareness.survey(state[0],where)
+    assert commands==['/targetexact Rot Hide Graverobber']
 
 def test_unclassified_object_is_retained_not_guessed_hostile():
     rows=(NearbyCreature(G1,ENTRY,Vec3(32,0,0),137,14),
           NearbyCreature(G3,1525,Vec3(24,2,0),120,14))
     state,commands,awareness,where,_=setup(rows,(G1,))
+    awareness.names[ENTRY]='Rot Hide Graverobber'
     _,enemies,unknown=awareness.survey(state[0],where)
     assert [e.guid for e in enemies]==[G1]
     assert [m.guid for m in unknown]==[G3]
-    assert len(commands)==16
+    assert commands==['/targetexact Rot Hide Graverobber']
 
 def test_unclassified_route_hazard_stops_before_advance():
     rows=(NearbyCreature(G3,1525,Vec3(23,0,0),120,14),)
@@ -83,4 +88,28 @@ def test_unclassified_route_hazard_stops_before_advance():
             path_ahead=(Vec3(30,0,0),),capture=lambda:state[0],driver=driver,
             target_position=lambda s:Vec3(23,0,0),sleep=lambda _:None,
             detection_yards=35,corridor_yards=18)
-    assert all(c=='/targetenemy' for c in commands)
+    assert commands==[]
+
+
+def test_acquisition_fallback_is_one_tab_then_cooldown():
+    rows=(NearbyCreature(G1,ENTRY,Vec3(32,0,0),137,14),
+          NearbyCreature(G2,ENTRY,Vec3(33,2,0),137,14))
+    state,commands,awareness,where,_=setup(rows,(G1,G2))
+    clock=[0.]
+    awareness.now=lambda:clock[0]
+    for _ in range(20):
+        awareness.acquire(state[0],G2,ENTRY)
+    assert commands==['/targetenemy']
+    clock[0]=12.
+    result=awareness.acquire(state[0],G2,ENTRY)
+    assert result.player.target_guid==G2
+    assert commands==['/targetenemy']*2
+
+
+def test_passive_encounter_survey_never_changes_target():
+    rows=(NearbyCreature(G1,ENTRY,Vec3(32,0,0),137,14),)
+    state,commands,awareness,where,_=setup(rows)
+    awareness.names[ENTRY]='Rot Hide Graverobber'
+    _,enemies,unknown=awareness.survey(state[0],where,probe=False)
+    assert enemies==() and len(unknown)==1
+    assert commands==[]

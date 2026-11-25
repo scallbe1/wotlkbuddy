@@ -989,7 +989,7 @@ def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> di
             known_corpse=getattr(args, 'corpse_world', None),
             read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav),
             read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore,
-            scout_surroundings=scout.survey, prepare_retreat=prepare_retreat, log=log)
+            scout_surroundings=scout.passive_survey, prepare_retreat=prepare_retreat, log=log)
 
 
 def _horde_continuous(args: argparse.Namespace) -> dict:
