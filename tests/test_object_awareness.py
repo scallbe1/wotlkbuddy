@@ -184,3 +184,40 @@ def test_exact_hostility_overrides_faction_hint():
     _, enemies, unknown = awareness.survey(state[0], where)
     assert [e.guid for e in enemies] == [G1] and not unknown
     assert not commands
+
+
+def test_friendly_undercity_and_horde_generic_do_not_block_trainer_route():
+    rows = (NearbyCreature('0xF13000875E0059DA', 34654, Vec3(8.3, 0, 0), 100, 714, 35),
+            NearbyCreature('0xF1300006D1000571', 1745, Vec3(19.6, 0, 0), 100, 71, 22),
+            NearbyCreature('0xF1300006D0000599', 1744, Vec3(19.6, 2, 0), 100, 71, 24),
+            NearbyCreature('0xF1300006CA000572', 1738, Vec3(21.1, 0, 0), 100, 71, 21))
+    state, commands, awareness, where, driver = setup(rows)
+    driver.awareness = awareness
+    _, enemies, unknown = awareness.survey(state[0], where)
+    assert enemies == unknown == ()
+    result = scan_and_clear_hostiles(
+        initial=state[0], player_position=where, path_ahead=(Vec3(25, 0, 0),),
+        capture=lambda: state[0], driver=driver, target_position=lambda s: Vec3(0, 0, 0),
+        sleep=lambda _: None, detection_yards=35, corridor_yards=18)
+    assert result == state[0] and not commands
+
+
+@pytest.mark.parametrize('faction', [71, 714])
+@pytest.mark.parametrize('race, expected', [('Scourge', True), ('Human', False), ('', False)])
+def test_trainer_route_faction_hints_require_horde_identity(faction, race, expected):
+    from wotlkbuddy.live.world_position import passive_creature
+    mob = NearbyCreature(G1, ENTRY, Vec3(12, 0, 0), 100, faction)
+    assert passive_creature(mob, race_token=race) is expected
+
+
+@pytest.mark.parametrize('faction', [71, 714])
+def test_live_hostile_reaction_overrides_trainer_route_faction_hint(faction):
+    row = NearbyCreature(G1, ENTRY, Vec3(12, 0, 0), 137, faction)
+    state, commands, awareness, where, _ = setup((row,))
+    s = state[0]
+    state[0] = replace(s, player=replace(s.player, target_guid=G1, target_name='Hostile'),
+                       combat_target=replace(s.combat_target, entry_id=ENTRY,
+                                             health=137, reaction=2, attackable=True, dead=False))
+    _, enemies, unknown = awareness.survey(state[0], where)
+    assert [e.guid for e in enemies] == [G1] and not unknown
+    assert not commands
