@@ -76,7 +76,7 @@ def survey_pull(*,initial,capture,driver,player_position,target_position,quest_e
     state=initial
     awareness=getattr(driver,'awareness',None)
     if awareness is not None:
-        state,enemies,unknown=awareness.survey(initial,position)
+        state,enemies,unknown=awareness.survey(initial,position,probe=False)
         if state.player.in_combat:
             return state,None
         chosen=next((m for m in enemies if m.guid==chosen_guid),None)
