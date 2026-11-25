@@ -211,114 +211,34 @@ def hunt_kill_objectives(
     if not nav.ping():
         raise LiveControlError('Navmesh worker is unavailable')
     started = now()
-    from wotlkbuddy.horde.hunt_objective_state import HuntObjectiveState
-    objectives = HuntObjectiveState()
-    kills = 0
-    last_target = 0
-    from wotlkbuddy.horde.hunt_retry import HuntRouteState, run_spawn_route, select_spawn_goal
-    routes = HuntRouteState()
-    from wotlkbuddy.horde.hunt_loot import LootStats, loot_corpse
-    loot_stats = LootStats()
-    # Share exact GUID exclusions with the proactive path scanner.
-    # An unreachable quest target must not be immediately pulled again by
-    # a different combat path during the same attended phase.
-    unhittable_guids = getattr(driver, 'blocked_combat_guids', None)
-    if unhittable_guids is None:
-        unhittable_guids = set()
-        driver.blocked_combat_guids = unhittable_guids
-    unhittable_positions: list[Vec3] = []
-    from wotlkbuddy.horde.hunt_engagement import BlockedEngagements, prepare_engagement, execute_engagement
-    blocked = BlockedEngagements()
-    from wotlkbuddy.horde.hunt_routes import recoverable_hunt_failure, remember_pack, alternate_hunt_routes
-
-
-    from wotlkbuddy.horde.hunt_telemetry import HuntTelemetry
-    telemetry = HuntTelemetry(
+    from wotlkbuddy.horde.hunt_session import wire_hunt_services
+    services = wire_hunt_services(
         capture=capture, driver=driver, guid=guid, quest_id=quest_id,
-        started=started, max_seconds=max_seconds, now=now, sleep=sleep, log=log)
-    guard, fresh, qlog = telemetry.guard, telemetry.fresh, telemetry.qlog
-    rest, buffs = telemetry.rest, telemetry.buffs
+        started=started, max_seconds=max_seconds, now=now, sleep=sleep,
+        log=log, pid=pid, nav=nav, target_xyz=target_xyz,
+        world_position=world_position, travel=travel, collect_items=collect_items)
+    return _run_hunt(
+        services=services, profile=profile, quest_id=quest_id, pid=pid,
+        capture=capture, driver=driver, nav=nav, spawns=spawns, max_kills=max_kills,
+        sleep=sleep, now=now, log=log, target_xyz=target_xyz, world_position=world_position,
+        collect_items=collect_items, reference_search_points=reference_search_points)
 
-    from wotlkbuddy.horde.hunt_navigation import navigate_hunt
 
-    def navigate(s: ClientTelemetry, dest: Vec3, *, camp_transit=False) -> ClientTelemetry:
-        return navigate_hunt(
-            s, dest, camp_transit=camp_transit, pid=pid, guid=guid, quest_id=quest_id,
-            capture=capture, driver=driver, nav=nav, world_position=world_position,
-            guard=guard, fresh=fresh, travel=travel, max_seconds=max_seconds,
-            now=now, started=started, log=log)
-
-    from wotlkbuddy.horde.hunt_firing import recover_firing_position
-
-    def approach_unhittable_target(
-        s: ClientTelemetry, target_guid: str, entry: int, attempt: int,
-    ) -> tuple[ClientTelemetry, bool]:
-        return recover_firing_position(
-            s, target_guid, entry, attempt, nav=nav, driver=driver, capture=capture,
-            world_position=world_position, target_xyz=target_xyz, pid=pid,
-            quest_id=quest_id, travel=travel, guard=guard, fresh=fresh,
-            max_seconds=max_seconds, started=started, now=now, sleep=sleep, log=log)
-
-    def clear_remaining_aggro(s: ClientTelemetry) -> ClientTelemetry:
-        if not s.player.in_combat:
-            return s
-        log('Active encounter: suspending quest work until verified attackers are cleared')
-        callback = getattr(driver, 'on_aggro', None)
-        if callable(callback):
-            s = callback(s)
-        else:
-            from wotlkbuddy.horde.defense import defend_against_aggro
-            s = defend_against_aggro(initial=s, capture=capture, driver=driver,
-                                     log=log, sleep=sleep)
-        guard(s)
-        if s.player.in_combat:
-            raise LiveControlError('Defensive encounter did not clear combat')
-        return s
-
-    from wotlkbuddy.horde.hunt_attack import attack_target
-
-    def record_kill(expected: int) -> None:
-        nonlocal kills, last_target
-        kills += 1
-        last_target = expected
-
-    def attack(s: ClientTelemetry, expected: int, objective_index: int,
-               previous_credit: tuple[int, int] | None) -> ClientTelemetry:
-        return attack_target(
-            s, expected, objective_index, previous_credit, driver=driver,
-            guard=guard, fresh=fresh, qlog=qlog,
-            clear_remaining_aggro=clear_remaining_aggro,
-            approach_unhittable_target=approach_unhittable_target,
-            collect_items=collect_items, record_kill=record_kill, log=log)
-
-    def loot(s: ClientTelemetry, corpse: Vec3 | None,
-             dead_guid: str, expected_entry: int) -> ClientTelemetry:
-        return loot_corpse(
-            s, corpse, dead_guid, expected_entry, driver=driver,
-            capture=capture, guard=guard, fresh=fresh, world_position=world_position,
-            target_xyz=target_xyz, pid=pid, nav=nav, travel=travel, quest_id=quest_id,
-            max_seconds=max_seconds, now=now, started=started, sleep=sleep,
-            collect_items=collect_items, tracked_item_id=lambda: objectives.active_tracked_item,
-            objective_index=lambda: observed.index, qlog=qlog, stats=loot_stats, log=log)
-
-    def drain_travel_corpses(s):
-        drain=getattr(driver,'drain_encounter_loot',None)
-        if callable(drain):
-            return drain(s)
-        pending=getattr(driver,'defeated_corpses',None)
-        if not isinstance(pending,dict) or s.player.in_combat:
-            return s
-        for corpse_guid,(entry,name) in list(pending.items())[:8]:
-            if s.player.in_combat:
-                break
-            if s.player.target_guid!=corpse_guid and name:
-                select=getattr(driver,'target_objective_name',None)
-                if callable(select) and select(name):
-                    s=fresh(s)
-            s=loot(s,None,corpse_guid,entry)
-            pending.pop(corpse_guid,None)
-        return s
-
+def _run_hunt(*, services, profile, quest_id, pid, capture, driver, nav, spawns,
+              max_kills, sleep, now, log, target_xyz, world_position,
+              collect_items, reference_search_points) -> HuntReport:
+    """Coordinate a bounded hunt using prepared services and verified snapshots."""
+    from wotlkbuddy.horde.hunt_engagement import prepare_engagement, execute_engagement
+    from wotlkbuddy.horde.hunt_retry import run_spawn_route, select_spawn_goal
+    from wotlkbuddy.horde.hunt_targeting import acquire_hunt_target
+    from wotlkbuddy.horde.hunt_search import search_spawn_candidates
+    progress, objectives, routes = services.progress, services.objectives, services.routes
+    loot_stats, blocked = services.loot_stats, services.blocked
+    unhittable_guids, unhittable_positions = services.unhittable_guids, services.unhittable_positions
+    guard, fresh, qlog = services.telemetry.guard, services.telemetry.fresh, services.telemetry.qlog
+    rest, buffs = services.telemetry.rest, services.telemetry.buffs
+    navigate, clear_remaining_aggro = services.navigate, services.clear_remaining_aggro
+    attack, loot, drain_travel_corpses = services.attack, services.loot, services.drain_travel_corpses
     for iteration in range(max_kills * 6):
         s = capture()
         guard(s)
@@ -328,19 +248,21 @@ def hunt_kill_objectives(
         if current_objective is None:
             collected = objectives.finalize(s, collect_items=collect_items)
             return HuntReport(
-                quest_id, s.player.name, kills, True, 'objectives_complete',
-                last_target, objectives.last_description,
+                quest_id, s.player.name, progress.kills, True, 'objectives_complete',
+                progress.last_target, objectives.last_description,
                 loot_stats.attempts, loot_stats.confirmed, loot_stats.skipped,
                 collected)
-        if kills >= max_kills:
+        if progress.kills >= max_kills:
             raise LiveControlError('Kill limit reached before objective completion')
         spec, observed = current_objective
+        progress.observed = observed
         prepared = objectives.prepare(
             s, current_objective, collect_items=collect_items, profile=profile,
             quest_id=quest_id, driver=driver, fresh=fresh, log=log)
         if prepared is None:
             continue
         s, spec, observed, allowed_sources = prepared
+        progress.observed = observed
         expected = allowed_sources[0]
         s = rest(s,full=bool(routes.route_replans and len(allowed_sources)==1))
         s = buffs(s)
@@ -355,7 +277,6 @@ def hunt_kill_objectives(
             driver.chat('/cleartarget')
             s = fresh(s)
 
-        from wotlkbuddy.horde.hunt_targeting import acquire_hunt_target
         s = acquire_hunt_target(
             s, driver=driver, spec=spec, allowed_sources=allowed_sources,
             unhittable_guids=unhittable_guids, force_spawn_search=routes.force_spawn_search,
@@ -385,7 +306,6 @@ def hunt_kill_objectives(
         # No eligible target ready. Search locations are not live target proof.
         routes.force_spawn_search=False
         _pid, world = world_position(s)
-        from wotlkbuddy.horde.hunt_search import search_spawn_candidates, next_unvisited_spawn
         search = search_spawn_candidates(
             spawns=spawns, world=world, spec=spec, allowed_sources=allowed_sources,
             expected=expected, refresh_rounds=routes.refresh_rounds,
