@@ -96,9 +96,20 @@ class SupplyTests(unittest.TestCase):
         self.assertIn('/cast Conjure Food',game.commands)
         self.assertIn('/use 0 1',game.commands)
         self.assertIn('/use 0 2',game.commands)
-        self.assertEqual(state.resources.mana,90)
+        # The default mana goal is 45%; food conjuration costs 10 mana.
+        self.assertEqual(state.resources.mana,80)
         self.assertEqual(state.player.health,55)
         self.assertNotIn('/run UseItemByName(16333)',game.commands)
+
+    def test_food_conjuration_does_not_leave_mana_below_requested_goal(self):
+        game=FakeSupplies()
+        state=maintain_mage_supplies(
+            capture=game.capture,driver=game,sleep=game.sleep,
+            reserve=4,max_conjures=2,mana_goal=.85)
+        self.assertGreaterEqual(state.resources.mana,85)
+        food_cast=game.commands.index('/cast Conjure Food')
+        self.assertIn('/use 0 1',game.commands[food_cast+1:])
+        self.assertEqual(game.commands.count('/cast Conjure Food'),2)
 
     def test_unlearned_food_never_conjured(self):
         game=FakeSupplies(food_learnt=False)
