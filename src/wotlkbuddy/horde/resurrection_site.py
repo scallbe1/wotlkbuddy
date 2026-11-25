@@ -127,6 +127,88 @@ def approach_path(nav, map_id, origin, corpse):
     raise LiveControlError('Corpse route never reaches reclaim vicinity')
 
 
+def alternate_approach_path(nav, map_id, origin, corpse, *, failed_points=(), log=lambda _:None):
+    """Find a complete ghost route to a different reclaim-side position.
+
+    Local mesh staging points permit an initial move away from a fence.
+    Neither a partial route nor a straight line through a fence is accepted.
+    """
+    if origin.distance_to(corpse)<=APPROACH_DISTANCE:
+        return ()
+    def project(desired):
+        try:
+            point=nav.nearest_point(map_id,desired)
+            if point is not None and point.distance_to(desired)<=3:
+                return point
+        except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError,TypeError):
+            pass
+        return None
+    def route(start,end):
+        try:
+            raw=nav.find_path(map_id,start,end)
+            if not raw or raw[0].distance_to(start)>2.5 or raw[-1].distance_to(end)>2:
+                return None
+            return validate_nav_path(raw,start,end,max_step=9)
+        except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError,TypeError):
+            return None
+    def avoids_failed(path):
+        # Ignore the actual starting point, which may itself be beside a
+        # fence. Reject routes that return to a previous failed location.
+        return not any(point.distance_to(f)<3 for point in path[1:]
+                       for f in failed_points if f.distance_to(origin)>3)
+    def length(path):
+        return sum(a.distance_to(b) for a,b in zip(path,path[1:]))
+    heading=atan2(origin.y-corpse.y,origin.x-corpse.x)
+    ends=[]
+    for offset in (0,pi/3,-pi/3,2*pi/3,-2*pi/3,pi):
+        angle=heading+offset
+        point=project(Vec3(corpse.x+33*cos(angle),corpse.y+33*sin(angle),corpse.z))
+        if point is not None and in_reclaim_ring(point,corpse):
+            ends.append(point)
+    # Try the alternative ring endpoints directly, then explicitly search
+    # for a reachable local staging point and a complete onward route.
+    candidates=[]
+    for end in ends:
+        path=route(origin,end)
+        if path and avoids_failed(path):
+            candidates.append(path)
+    if candidates:
+        best=min(candidates,key=length)
+        log(f'Alternate corpse approach: complete route to {best[-1].distance_to(corpse):.1f}y from body')
+        return best
+    heading=atan2(corpse.y-origin.y,corpse.x-origin.x)
+    for radius in (8.,16.):
+        for offset in (pi/2,-pi/2,pi,pi/4,-pi/4,3*pi/4,-3*pi/4,0):
+            angle=heading+offset
+            point=project(Vec3(origin.x+radius*cos(angle),origin.y+radius*sin(angle),origin.z))
+            if point is None or point.distance_to(origin)<4:
+                continue
+            if any(point.distance_to(f)<4 for f in failed_points):
+                continue
+            first=route(origin,point)
+            if not first or not avoids_failed(first):
+                continue
+            # Limit expensive onward queries. The corpse itself is a valid
+            # goal only when a complete route exists; stop at reclaim range.
+            for end in [corpse]+ends[:3]:
+                second=route(first[-1],end)
+                if not second:
+                    continue
+                joined=first+second[1:]
+                if not avoids_failed(joined):
+                    continue
+                for index,p in enumerate(joined[1:],1):
+                    if p.distance_to(corpse)<=MAX_OFFSET and abs(p.z-corpse.z)<=8:
+                        try:
+                            verified=validate_nav_path(joined[:index+1],origin,p,max_step=9)
+                        except LiveControlError:
+                            break
+                        log(f'Alternate corpse approach via staging XYZ ({point.x:.2f},{point.y:.2f},{point.z:.2f}); '
+                            f'complete route to reclaim vicinity')
+                        return verified
+    raise LiveControlError('No complete alternative corpse approach found from measured position')
+
+
 def plan_resurrection_sites(nav, map_id, origin, corpse, hazards, *, spawn_hints=(),
                             route_points=(), scout=False):
     """Rank reachable outer-ring navmesh points; never fall back to the body."""
