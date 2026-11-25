@@ -471,108 +471,17 @@ def follow_world_path(
         notify(f'Calibrated turn direction={right_sign:+d}, rate={turn_rate:.2f} rad/s')
 
     def recover_around_wall(waypoint: Vec3) -> bool:
-        """Bounded, measured Q/E sidestep of a *navmesh-checked* local segment.
-
-        Only enable via a live Detour query; never guess that a sidestep is safe.
-        This is local dynamic-obstacle recovery, not a substitute for navmesh routing.
-        """
         nonlocal current, world, moves, recoveries, strafes
-        if can_traverse is None or max_recoveries == 0:
-            return False
-        if recoveries >= max_recoveries:
-            raise LiveControlError('Obstacle recovery budget exhausted')
-        if any(_distance_xy(world.position, old) < 2.0 for old in recovery_locations):
-            raise LiveControlError('Obstacle persists near previously recovered location')
-        recovery_locations.append(world.position)
-        recoveries += 1
-        notify(f'Obstacle recovery {recoveries}/{max_recoveries}: try E/right '
-               'sidestep, then Q/left if blocked (maximum 3 pulses per side)')
-
-        def mesh_clear(start: Vec3, end: Vec3) -> bool:
-            guard()
-            try:
-                return can_traverse(start, end)
-            except (RuntimeError, OSError, ValueError, TimeoutError) as exc:
-                raise LiveControlError(f'Navmesh clearance unavailable during recovery: {exc}') from exc
-
-        # Right first, matching common wall corner avoidance. Do not cross a
-        # wall/ledge just because a navmesh query returns a nearby polygon.
-        for direction, key in ((-1, 'strafe-right'), (1, 'strafe-left')):
-            moved_laterally = False
-            for step in range(3):
-                guard()
-                before = world
-                angle = before.facing_rad + direction * pi / 2
-                ahead = Vec3(before.x + cos(angle)*1.7,
-                             before.y + sin(angle)*1.7, before.z)
-                if not mesh_clear(before.position, ahead):
-                    notify(f'  {key}: navmesh blocks proposed sideways step')
-                    break
-                pulse(key, 0.18)
-                strafes += 1
-                current, world = checked()
-                delta = _distance_xy(before.position, world.position)
-                if delta > 3.0 or abs(world.z - before.z) > 2.0:
-                    raise LiveControlError('Unexpected movement during obstacle sidestep')
-                if abs(_angle(world.facing_rad - before.facing_rad)) > 0.24:
-                    raise LiveControlError('Q/E key did not strafe: verify WoW movement bindings')
-                if delta < 0.25:
-                    notify(f'  {key}: blocked in game (moved {delta:.2f}y)')
-                    break
-                travelled = atan2(world.y-before.y, world.x-before.x)
-                if abs(_angle(travelled-angle)) > 0.72:
-                    raise LiveControlError('Sideways displacement disagrees with key direction')
-                moved_laterally = True
-                notify(f'  {key} step {step+1}: moved {delta:.2f}y; '
-                       f'position=({world.x:.2f},{world.y:.2f},{world.z:.2f})')
-                # Probe forward in current facing; if a real wall still blocks
-                # progress, continue laterally rather than steering into it.
-                probe = Vec3(world.x + cos(world.facing_rad)*1.6,
-                             world.y + sin(world.facing_rad)*1.6, world.z)
-                if not mesh_clear(world.position, probe):
-                    continue
-                before = world
-                pulse('forward', 0.20)
-                moves += 1
-                current, world = checked()
-                advanced = _distance_xy(before.position, world.position)
-                if advanced > 3.0 or abs(world.z-before.z) > 2.0:
-                    raise LiveControlError('Unexpected movement during forward clearance probe')
-                if advanced >= 0.50:
-                    # Clear the wall's leading corner before steering toward
-                    # the original waypoint. One successful forward pulse
-                    # followed by a diagonal turn can hit the *same* wall.
-                    staging = advanced
-                    staging_blocked = False
-                    for _ in range(2):
-                        before = world
-                        probe = Vec3(world.x + cos(world.facing_rad)*1.6,
-                                     world.y + sin(world.facing_rad)*1.6, world.z)
-                        if not mesh_clear(world.position, probe):
-                            staging_blocked = True
-                            break
-                        pulse('forward', 0.20)
-                        moves += 1
-                        current, world = checked()
-                        delta_forward = _distance_xy(before.position, world.position)
-                        if delta_forward > 3.0 or abs(world.z-before.z) > 2.0:
-                            raise LiveControlError('Unexpected staging movement past obstacle')
-                        if delta_forward < 0.50:
-                            staging_blocked = True
-                            break
-                        staging += delta_forward
-                    if not staging_blocked:
-                        notify(f'  Obstacle bypass: advanced {staging:.2f}y past wall; '
-                               'resuming Detour waypoints')
-                        return True
-                    notify('  Still next to obstruction after forward probe; '
-                           'trying another small lateral step')
-            # If right achieved a meaningful lateral displacement but the
-            # forward probe still fails, do NOT blindly strafe back left over
-            # the same area; keep the measured stop position for troubleshooting.
-            if moved_laterally:
-                break
-        return False
+        from wotlkbuddy.live.travel_sidestep import SidestepState, recover_sidestep
+        state = SidestepState(current, world, moves, recoveries, strafes)
+        try:
+            return recover_sidestep(
+                state, can_traverse=can_traverse, max_recoveries=max_recoveries,
+                recovery_locations=recovery_locations, guard=guard, pulse=pulse,
+                checked=checked, notify=notify)
+        finally:
+            current, world = state.current, state.world
+            moves, recoveries, strafes = state.moves, state.recoveries, state.strafes
 
     def backtrack_and_replan(reason: str) -> bool:
         """Retreat toward a recently measured clear position, then reroute.
