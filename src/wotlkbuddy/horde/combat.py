@@ -1208,7 +1208,7 @@ def hunt_kill_objectives(
                     staging = Vec3(corpse_xyz.x+dx/d*12,
                                    corpse_xyz.y+dy/d*12, corpse_xyz.z)
                     try:
-                        s = navigate(s, staging, camp_transit=remote_camp)
+                        s = navigate(s, staging)
                     except LiveControlError as exc:
                         if not recoverable_hunt_failure(exc):
                             raise
@@ -1513,7 +1513,7 @@ def hunt_kill_objectives(
         recently_visited[key]=recently_visited.get(key,0)+1
         staging_visited.append(staging)
         try:
-            s = navigate(s, staging)
+            s = navigate(s, staging, camp_transit=remote_camp)
         except LiveControlError as exc:
             # The low-level world follower already released all movement keys
             # on a heading mismatch. Do NOT relax that collision/telemetry
