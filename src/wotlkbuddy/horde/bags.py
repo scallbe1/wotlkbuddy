@@ -8,11 +8,7 @@ def best_bag_upgrade(state, excluded=()):
         return None
     candidates=[]
     for source,slot,item,size in state.bag_candidates:
-        matches=[row for row in state.bag_candidates if row[2]==item]
-        # EquipItemByName selects by ID. Do not assume a particular source
-        # when multiple copies are in different slots.
-        if len(matches)!=1:
-            continue
+        # Exact bag and slot are used, including when duplicate bags exist.
         for bag,old,capacity,family in state.bag_slots:
             if (bag==source or family!=0 or size<=capacity or
                     (item,bag) in excluded):
@@ -45,9 +41,10 @@ def equip_bag_upgrades(*,capture,driver,log=lambda _:None,sleep=real_sleep):
             break
         source,slot,item,size,bag,old_capacity=choice
         log(f'Equipping bag item {item}: bag {bag}, {old_capacity} -> {size} slots')
-        # Native client handles the replacement. No item deletion, manual
-        # bag emptying, or vendor action is used to force a failed swap.
-        driver.chat(f'/run EquipItemByName({item},{19+bag})')
+        # The addon rechecks the exact source and destination before
+        # performing the native pickup/equip. No items are deleted or sold.
+        old_item=next(row[1] for row in verified.bag_slots if row[0]==bag)
+        driver.chat(f'/wbtbag {source} {slot} {item} {bag} {old_item}')
         excluded.add((item,bag))
         for _wait in range(16):
             sleep(.35)
@@ -56,12 +53,11 @@ def equip_bag_upgrades(*,capture,driver,log=lambda _:None,sleep=real_sleep):
                 return tuple(equipped)
             if (state.sequence!=verified.sequence and state.bag_scan_complete and
                     (bag,item,size,0) in state.bag_slots and
-                    state.resources is not None and
-                    state.resources.free_bag_slots>=verified.resources.free_bag_slots+size-old_capacity):
+                    state.resources is not None):
                 equipped.append(item)
                 log(f'Bag upgrade confirmed: {size} slots; {state.resources.free_bag_slots} free inventory slots')
                 break
         else:
-            log(f'Bag {bag} upgrade not confirmed by client; retaining item and deferring swap')
+            log(f'Bag {bag} upgrade not confirmed by client: expected item {item}, {size} slots; observed {state.bag_slots}; retaining item and deferring swap')
             break
     return tuple(equipped)
