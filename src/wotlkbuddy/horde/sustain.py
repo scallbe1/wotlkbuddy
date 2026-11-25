@@ -13,12 +13,17 @@ from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 
 
+class SupplyCombatInterrupted(LiveControlError):
+    """Fresh same-character telemetry confirms combat during supply upkeep."""
+
+
 def maintain_mage_supplies(
     *, capture: Callable[[], ClientTelemetry], driver,
     log: Callable[[str], None] = lambda _: None,
     sleep: Callable[[float], None] = real_sleep,
     reserve: int = 4, max_conjures: int = 2,
     health_goal: float = .70, mana_goal: float = .45,
+    restock: bool = True,
 ) -> ClientTelemetry:
     """Restock and drink/eat with bounded input, after live identity checks.
 
@@ -32,8 +37,11 @@ def maintain_mage_supplies(
     guid = first.player.guid
     if (first.truncated or not guid or first.resources is None or
             first.resources.class_token.upper() != 'MAGE' or
-            first.player.dead or first.player.in_combat):
+            first.player.dead or driver.emergency_stop_requested() or
+            not driver.wow_is_foreground()):
         raise LiveControlError('Living out-of-combat Mage required for supplies')
+    if first.player.in_combat:
+        raise SupplyCombatInterrupted('Supplies interrupted by verified combat')
     if first.mage_supplies is None:
         log('Mage supplies telemetry unavailable; updated addon is required '
             'for verified conjuring and eating/drinking')
@@ -41,15 +49,23 @@ def maintain_mage_supplies(
 
     def guard(state: ClientTelemetry) -> None:
         if (state.truncated or state.player.guid != guid or
-                state.player.dead or state.player.in_combat or
+                state.player.dead or
                 state.resources is None or state.mage_supplies is None or
                 driver.emergency_stop_requested() or
                 not driver.wow_is_foreground()):
-            raise LiveControlError('Player, combat state or supply telemetry changed')
+            raise LiveControlError('Player identity, life state, focus or supply telemetry changed')
+        if state.player.in_combat:
+            raise SupplyCombatInterrupted('Supplies interrupted by verified combat')
 
     def fresh(previous: ClientTelemetry, delay: float = .6) -> ClientTelemetry:
         guard(previous)
-        sleep(delay)
+        # Observe combat during long conjure/drink waits, not only at their end.
+        remaining=delay
+        while remaining>.5:
+            sleep(.5)
+            guard(capture())
+            remaining-=.5
+        sleep(remaining)
         for _ in range(6):
             state = capture()
             guard(state)
@@ -76,6 +92,11 @@ def maintain_mage_supplies(
             count = supply.water_count if kind == 'water' else supply.food_count
             learned = (supply.knows_conjure_water if kind == 'water'
                        else supply.knows_conjure_food)
+            ratio=(state.resources.mana/max(1,state.resources.max_mana) if kind=='water'
+                   else state.player.health/max(1,state.player.max_health))
+            goal=mana_goal if kind=='water' else health_goal
+            if not restock and (count>0 or ratio>=goal):
+                break  # Drink/eat existing supplies before making more in exposed terrain.
             if count >= reserve or learned is not True:
                 # Untrained spells are expected at low levels; avoid repeating
                 # this non-action every time a spawn is checked.
@@ -140,3 +161,54 @@ def maintain_mage_supplies(
         log(f'Finished {kind} regeneration observation')
         state = after
     return state
+
+
+
+def recover_after_encounter(*, initial, capture, driver, defend, log=lambda _:None,
+                            sleep=real_sleep, max_rounds=4):
+    """Finish interrupted rests without leaving a verified active encounter."""
+    guid=initial.player.guid
+    def check(s):
+        if (not guid or s.truncated or s.player.guid!=guid or s.player.dead or
+                s.resources is None or s.resources.class_token.upper()!='MAGE' or
+                driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+            raise LiveControlError('Character, focus or life state changed during post-combat recovery')
+        return s
+    state=check(initial)
+    for _ in range(max_rounds):
+        state=check(capture())
+        if state.player.in_combat:
+            log('New aggro during resource recovery; defending before resuming rest')
+            state=check(defend(state))
+            continue
+        if (state.player.health/max(1,state.player.max_health)>=.70 and
+                state.resources.mana/max(1,state.resources.max_mana)>=.85):
+            return state
+        log('Combat cleared; restoring health and mana before movement')
+        try:
+            state=maintain_mage_supplies(capture=capture,driver=driver,log=log,
+                sleep=sleep,health_goal=.90,mana_goal=.90,restock=False)
+        except SupplyCombatInterrupted:
+            state=check(capture())
+            if state.player.in_combat:
+                log('Supply upkeep interrupted by verified aggro; defending')
+                state=check(defend(state))
+            continue
+        for _ in range(30):
+            state=check(state)
+            if state.player.in_combat:
+                log('New aggro during regeneration; defending')
+                state=check(defend(state))
+                break
+            if (state.player.health/max(1,state.player.max_health)>=.70 and
+                    state.resources.mana/max(1,state.resources.max_mana)>=.85):
+                return state
+            sleep(2)
+            state=capture()
+    state=check(capture())
+    if state.player.in_combat:
+        raise SupplyCombatInterrupted('Supplies interrupted by verified combat')
+    if (state.player.health/max(1,state.player.max_health)>=.70 and
+            state.resources.mana/max(1,state.resources.max_mana)>=.85):
+        return state
+    raise LiveControlError('Combat survived but health/mana did not recover; holding position')
