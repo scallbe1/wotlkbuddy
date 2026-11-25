@@ -83,10 +83,18 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
     guid=initial.player.guid
     def capture():
         state,pos=sample()
-        if (state.truncated or state.player.dead or state.player.guid!=guid or
-                state.resources is None or driver.emergency_stop_requested() or
-                not driver.wow_is_foreground()):
-            raise LiveControlError('Post-resurrection recovery interrupted')
+        if driver.emergency_stop_requested():
+            raise LiveControlError('Post-resurrection recovery interrupted: Escape pressed')
+        if not driver.wow_is_foreground():
+            raise LiveControlError('Post-resurrection recovery interrupted: WoW lost foreground focus')
+        if state.player.guid!=guid:
+            raise LiveControlError('Post-resurrection recovery interrupted: character GUID changed')
+        if state.player.dead:
+            raise LiveControlError('Post-resurrection recovery interrupted: character died again')
+        if state.truncated:
+            raise LiveControlError('Post-resurrection recovery interrupted: truncated telemetry')
+        if state.resources is None:
+            raise LiveControlError('Post-resurrection recovery interrupted: resource telemetry missing')
         return state
     def defend(state):
         return defend_against_aggro(initial=state,capture=capture,
@@ -140,10 +148,9 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
             if buffs.knows_intellect and not buffs.intellect_active and buff_attempts.get('intellect_active',0)<3:
                 missing.append(('Arcane Intellect','intellect_active'))
         supply=state.mage_supplies
-        low_stock=bool(supply and state.resources.free_bag_slots>0 and (
-            (supply.knows_conjure_food and supply.food_count<4) or
-            (supply.knows_conjure_water and supply.water_count<4)))
-        if supply_rounds<4 and (low_stock or hp<.90 or mana<.85):
+        # Resurrection recovery restores resources and buffs, not optional
+        # inventory reserves. Normal quest startup can replenish those later.
+        if supply_rounds<4 and (hp<.90 or mana<.85):
             supply_rounds+=1
             if supply_rounds==1 and supply:
                 for kind in ('food','water'):
@@ -151,7 +158,7 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
                         log(f'Conjure {kind.title()} not verified as learned; cannot cast it')
             try:
                 state=maintain_mage_supplies(capture=capture,driver=driver,log=log,
-                    sleep=sleep,health_goal=.90,mana_goal=.85)
+                    sleep=sleep,health_goal=.90,mana_goal=.85,restock=False)
             except LiveControlError:
                 state=capture()
                 if not state.player.in_combat:
@@ -181,5 +188,7 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
             else:
                 log('Recovery complete: health, mana and learned buffs restored; resume questing')
             return state
+        log(f'Waiting for recovery: HP {state.player.health}/{state.player.max_health}, '
+            f'mana {state.resources.mana}/{state.resources.max_mana}, missing buffs {[name for name,_ in missing]}')
         sleep(2)
     raise LiveControlError('Post-resurrection resources not restored within recovery budget')
