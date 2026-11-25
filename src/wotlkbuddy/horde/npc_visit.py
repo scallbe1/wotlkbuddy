@@ -18,6 +18,8 @@ from wotlkbuddy.live.world_travel import validate_nav_path, follow_world_path
 from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 from wotlkbuddy.horde.return_turnin import encounter_route_failure, height_route_failure
+from wotlkbuddy.horde.hunt_routes import (unsafe_route_encounter, detour_around_encounters,
+                                         EncounterRouteUnavailable)
 
 
 def visit_npc(
@@ -91,10 +93,43 @@ def visit_npc(
             deadline=now()+450
             encounter_replans=0
             height_failures=[]
+            rejected=[]
+            # All planning and patrol waits are supervised. An attack
+            # invalidates the route search; defend now and re-anchor later.
+            from wotlkbuddy.horde.hunt_routes import RouteCombatInterrupted
+            def supervise():
+                if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+                    raise LiveControlError('Escape pressed or WoW lost focus during encounter detour')
+                state,where=sample()
+                if state.player.dead:
+                    raise LiveControlError('Verified death during encounter detour')
+                if state.player.in_combat:
+                    raise RouteCombatInterrupted('Aggro/combat detected during encounter detour')
+                return state,where
+            def defend_and_replan():
+                state,where=sample()
+                if state.player.dead:
+                    raise LiveControlError('Verified death during encounter detour')
+                if state.player.in_combat:
+                    handler=getattr(driver,'on_aggro',None)
+                    if not callable(handler):
+                        raise LiveControlError('Aggro/combat detected; defensive handler unavailable or route fight budget exhausted')
+                    log('Aggro during NPC route planning/wait; immediately defending before replanning')
+                    handler(state)
+                    state,where=supervise()
+                raw=nav.find_path(world.map_id,where.position,dest)
+                if not raw or abs(raw[0].z-where.z)>2.5:
+                    raise LiveControlError('NPC replan does not start on measured floor')
+                return validate_nav_path(raw,where.position,dest,max_step=18.)
             while True:
                 remaining=deadline-now()
                 if remaining<15:
                     raise LiveControlError(f'NPC visit to {npc_name} exhausted travel time budget')
+                try:
+                    supervise()
+                except RouteCombatInterrupted:
+                    route=defend_and_replan()
+                    continue
                 result=travel(
                     route, sample=sample, keyboard=getattr(driver,'keyboard',driver),
                     stop_requested=driver.emergency_stop_requested,
@@ -111,17 +146,20 @@ def visit_npc(
                 reason=result.stopped_reason
                 if reason=='complete':
                     return result
-                encounter=encounter_route_failure(reason)
+                blocked=unsafe_route_encounter(reason)
+                encounter=blocked or encounter_route_failure(reason)
                 if not encounter and not height_route_failure(reason):
                     raise LiveControlError(f'NPC visit to {npc_name} stopped: {reason}')
                 state,measured=sample()
-                if (state.player.dead or state.player.in_combat or
-                        driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+                if (state.player.dead or driver.emergency_stop_requested() or not driver.wow_is_foreground()):
                     raise LiveControlError(f'Unsafe state after interrupted NPC route: {reason}')
+                if state.player.in_combat:
+                    route=defend_and_replan()
+                    continue
                 if encounter:
                     encounter_replans+=1
                     if encounter_replans>12:
-                        raise LiveControlError(f'NPC visit to {npc_name} exhausted encounter replan budget')
+                        raise EncounterRouteUnavailable(f'NPC visit to {npc_name} exhausted encounter replan budget: {reason}')
                     log(f'Encounter displacement recovery {encounter_replans}/12; retaining NPC {npc_name}')
                 else:
                     if len(height_failures)>=3 or any(measured.position.distance_to(pos)<8 for pos in height_failures):
@@ -131,6 +169,56 @@ def visit_npc(
                     return result  # final exact arrival and identity guard below
                 log(f'Replanning NPC route from actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}) '
                     f'to {npc_name} ({dest.x:.2f},{dest.y:.2f},{dest.z:.2f})')
+                if blocked:
+                    if len(route)>1:
+                        rejected.append(route[1])
+                    def guard_retry():
+                        if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+                            raise LiveControlError('Escape pressed or WoW lost focus during encounter detour')
+                        supervise()
+                        if now()>=deadline-15:
+                            raise EncounterRouteUnavailable(f'NPC visit to {npc_name} exhausted detour time')
+                    hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if monotonic()-t<90]
+                    if not hazards:
+                        raise EncounterRouteUnavailable(f'NPC visit to {npc_name}: blocking encounter has no verified positions')
+                    try:
+                        raw=detour_around_encounters(nav,world.map_id,measured.position,dest,hazards,
+                                                    rejected=rejected,guard=guard_retry,log=log)
+                        supervise()
+                        if raw is None:
+                            awareness=getattr(driver,'awareness',None)
+                            # Patrols are mobile. Wait briefly and refresh exact live
+                            # creature positions rather than blindly retry the route.
+                            if awareness is not None:
+                                log('No immediate safe detour; watching patrols for up to 12 seconds')
+                                for _ in range(6):
+                                    guard_retry()
+                                    for _tick in range(10):
+                                        sleep(.2)
+                                        state,measured=supervise()
+                                    from wotlkbuddy.live.world_position import passive_creature
+                                    live=[m.position for m in awareness.read(state,measured.position)
+                                          if not passive_creature(m) and abs(m.position.z-measured.z)<=8]
+                                    if not live:
+                                        # Fresh stationary threat scan still runs before moving.
+                                        raw=nav.find_path(world.map_id,measured.position,dest)
+                                        if raw and abs(raw[0].z-measured.z)<=2.5:
+                                            raw=validate_nav_path(raw,measured.position,dest,max_step=18.)
+                                            break
+                                        raw=None
+                                    else:
+                                        raw=detour_around_encounters(nav,world.map_id,measured.position,dest,live,
+                                            rejected=rejected,guard=guard_retry,log=log)
+                                        if raw:
+                                            break
+                            supervise()
+                            if raw is None:
+                                raise EncounterRouteUnavailable(f'NPC visit to {npc_name}: no safe detour around observed pack after patrol wait')
+                    except RouteCombatInterrupted:
+                        route=defend_and_replan()
+                        continue
+                    route=raw
+                    continue
                 raw=nav.find_path(world.map_id,measured.position,dest)
                 if not raw or abs(raw[0].z-measured.z)>2.5:
                     raise LiveControlError('NPC replan does not start on measured floor')

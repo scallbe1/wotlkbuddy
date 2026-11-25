@@ -1000,7 +1000,9 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
     live journal, server quest completion history, player GUID and profile
     before deciding on another objective. No guessed quests or raw movement.
     """
-    from wotlkbuddy.live.control import LiveControlError
+    from wotlkbuddy.live.control import LiveControlError, WindowsKeyboard
+    from wotlkbuddy.live.capture import capture_monitor
+    from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
     if not args.enable_input or not 2 <= args.countdown <= 20:
         raise ValueError('Continuous questing needs armed input and 2..20s countdown')
     if not 1 <= args.max_cycles <= 250 or not 5 <= args.auto_minutes <= 720:
@@ -1024,6 +1026,28 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
         child._last_training_level = train_level
         return _horde_progress(child, _skip_countdown=True, _emit_report=False)
 
+    def retry_blocked_route(exc,cycle):
+        # Unlike a true death/focus/identity failure, a temporarily blocked
+        # destination can be tried again on the next live progression cycle.
+        print(f'Route temporarily unavailable: {exc}; refreshing after patrol wait',
+              file=sys.stderr,flush=True)
+        keyboard=WindowsKeyboard()
+        initial=capture_monitor(args.monitor)
+        if initial.truncated or not initial.player.guid:
+            raise LiveControlError('Player telemetry lost during route retry') from exc
+        for _ in range(10):
+            if keyboard.emergency_stop_requested() or not keyboard.wow_is_foreground():
+                raise LiveControlError('Escape pressed or WoW lost focus during route retry') from exc
+            if time.monotonic()-start>=args.auto_minutes*60:
+                break
+            state=capture_monitor(args.monitor)
+            if state.truncated or state.player.guid!=initial.player.guid:
+                raise LiveControlError('Player identity changed during route retry') from exc
+            if state.player.dead or state.player.in_combat:
+                break  # next progression cycle handles verified combat/death
+            time.sleep(1.)
+        steps.append({'cycle':cycle+1,'action':'retry_blocked_route','reason':str(exc)})
+
     for cycle in range(args.max_cycles):
         if time.monotonic()-start >= args.auto_minutes*60:
             reason = 'time_limit'
@@ -1032,6 +1056,9 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
               'refreshing journal and objectives', file=sys.stderr, flush=True)
         try:
             report = phase('objectives')
+        except EncounterRouteUnavailable as exc:
+            retry_blocked_route(exc,cycle)
+            continue
         except LiveControlError as exc:
             if recoveries >= 3:
                 raise
@@ -1118,6 +1145,9 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
             break
         try:
             offers = phase('quests')
+        except EncounterRouteUnavailable as exc:
+            retry_blocked_route(exc,cycle)
+            continue
         except LiveControlError as exc:
             if recoveries >= 3:
                 raise

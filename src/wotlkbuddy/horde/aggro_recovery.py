@@ -14,6 +14,8 @@ def recoverable_aggro_error(exc):
         'Fireball is not verified on a digit-bound action button',
         'Proactive threat scan failed to restore safe live player/map state',
         'Aggro/combat detected; defensive handler unavailable or route fight budget exhausted',
+        'Aggro/combat detected during encounter detour',
+        'Aggro/combat detected during route retry',
         'Defensive fight cast limit reached',
         'Two Fireballs failed to damage verified attacker',
     ))
