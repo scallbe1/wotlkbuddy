@@ -15,7 +15,7 @@ from wotlkbuddy.live.codec import TelemetryError
 def driver():
     d=KeyboardQuestInput.__new__(KeyboardQuestInput)
     keys=[]
-    d._tap=lambda key, shifted=False: keys.append((key,shifted))
+    d._tap=lambda key, shifted=False, **kwargs: keys.append((key,shifted))
     return d,keys
 
 
@@ -162,3 +162,23 @@ def test_real_corrupt_checksum_is_never_silently_retried():
         with pytest.raises(TelemetryError,match='checksum'):
             capture_monitor(sleep=lambda _:None)
     assert fake.calls==1
+
+def test_navigation_distance_uses_real_position_and_respects_no_hud():
+    from wotlkbuddy.game.types import Vec3
+    d,keys=driver()
+    commands=[]
+    d.chat=commands.append
+    d.set_navigation_distance(Vec3(3,4,12),Vec3(0,0,0))
+    assert commands==['/wbtcoords 3 4 12 13']
+    d.native_hud_enabled=False
+    d.set_navigation_distance(Vec3(3,4,12),Vec3(0,0,0))
+    assert len(commands)==1
+
+def test_bounded_bag_and_distance_commands():
+    d,keys=driver()
+    d.chat('/wbtbag 0 5 5571 1 0')
+    d.chat('/wbtcoords 2157 657 35 555')
+    for invalid in ('/wbtbag 0 5 5571 5 0','/wbtbag 0 37 5571 1 0',
+                    '/wbtcoords 2157 657 35 -5','/wbtbag 0 5 5571 1 0;print(1)'):
+        with pytest.raises(ValueError):
+            d.chat(invalid)
