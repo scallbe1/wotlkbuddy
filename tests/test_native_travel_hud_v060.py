@@ -1,4 +1,5 @@
 """The native Action HUD names the sourced Detour destination across pauses."""
+import ast
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -104,11 +105,37 @@ def test_controller_uses_real_destination_status_only_during_detour():
     combat=code('src/wotlkbuddy/horde/combat.py')
     npc=code('src/wotlkbuddy/horde/npc_visit.py')
     turn=code('src/wotlkbuddy/horde/return_turnin.py')
-    assert "driver, 'enemies', lambda: travel(" in combat
-    assert "driver, 'npc', lambda: travel(" in npc
-    assert "target=npc_name)" in npc
-    assert "driver, 'npc', lambda: travel(" in turn
-    assert "target=step.npc_name)" in turn
+    def assert_navigation_wrapper(source, kind, target=None):
+        tree = ast.parse(source)
+        for call in ast.walk(tree):
+            if not (isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == 'navigate_with_status'
+                    and len(call.args) >= 3
+                    and ast.unparse(call.args[0]) == 'driver'
+                    and isinstance(call.args[1], ast.Constant)
+                    and call.args[1].value == kind):
+                continue
+            if target is not None:
+                assert any(kw.arg == 'target' and ast.unparse(kw.value) == target
+                           for kw in call.keywords)
+            callback = call.args[2]
+            if isinstance(callback, ast.Name):
+                bodies = [node for node in ast.walk(tree)
+                          if isinstance(node, ast.FunctionDef)
+                          and node.name == callback.id]
+            else:
+                bodies = [callback]
+            assert any(isinstance(node, ast.Call)
+                       and isinstance(node.func, ast.Name)
+                       and node.func.id == 'travel'
+                       for body in bodies for node in ast.walk(body))
+            return
+        pytest.fail(f'No navigation status wrapper for {kind}: {target}')
+
+    assert_navigation_wrapper(combat, 'enemies')
+    assert_navigation_wrapper(npc, 'npc', 'npc_name')
+    assert_navigation_wrapper(turn, 'npc', 'step.npc_name')
     addon=code('addons/WotLKBuddyTelemetry/WotLKBuddyTelemetry.lua')
     assert addon.index("elseif travelActionLabel(hudTravelKind") < addon.index(
         "elseif GetUnitSpeed and")
