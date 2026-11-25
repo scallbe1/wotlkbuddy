@@ -30,3 +30,57 @@ def test_long_camp_route_partition_preserves_final_destination():
     assert len(segments)>2
     assert segments[0][0]==a and segments[-1][-1]==b
     assert all(sum(x.distance_to(y) for x,y in zip(seg,seg[1:]))<=450 for seg in segments)
+
+
+def test_hunt_executor_actually_routes_to_remote_camp(monkeypatch):
+    """Exercise the real call site, not only the isolated route helpers."""
+    from types import SimpleNamespace
+    from test_horde_combat_v019 import FakeGame, PROFILE, Nav
+    from wotlkbuddy.horde import combat
+    from wotlkbuddy.horde.worlddata import Spawn
+    from wotlkbuddy.live.world_position import WorldPosition
+    from wotlkbuddy.live.control import LiveControlError
+    import pytest
+
+    class Game(FakeGame):
+        def chat(self, command):
+            if command=='/targetenemy':
+                self.commands.append(command)
+                return
+            super().chat(command)
+    class Mesh(Nav):
+        def find_path(self, map_id, start, end):
+            return (start,end)
+        def segment_clear(self, map_id, start, end):
+            return True
+
+    g=Game()
+    g.buffs=[True,True]
+    origin=Vec3(0,0,0)
+    target=Spawn(1501,0,1259.3,0,0)
+    pos=[origin]
+    routes=[]
+    class TestReachedTravel(Exception):
+        pass
+
+    monkeypatch.setattr(combat,'nearest_objective_spawns',lambda *a,**kw:())
+    monkeypatch.setattr(combat,'distant_objective_spawns',lambda *a,**kw:(target,))
+    def world(s):
+        p=pos[0]
+        return 77,WorldPosition(s.player.guid,0,p.x,p.y,p.z,0,1)
+    def travel(legs,**kwargs):
+        routes.append(legs)
+        if len(routes)==2:
+            raise TestReachedTravel
+        pos[0]=legs[-1]
+        return SimpleNamespace(stopped_reason='complete')
+    with pytest.raises(TestReachedTravel):
+        combat.hunt_kill_objectives(profile=PROFILE,quest_id=364,pid=77,
+            capture=g.capture,driver=g,nav=Mesh(),spawns=None,world_position=world,
+            travel=travel,sleep=g.sleep,now=lambda:g.t,max_kills=3)
+    assert len(routes)==2
+    assert routes[0][0]==origin
+    assert routes[1][0]==routes[0][-1]
+    for route in routes:
+        assert sum(a.distance_to(b) for a,b in zip(route,route[1:]))<=450
+    assert routes[1][-1].x>routes[0][-1].x
