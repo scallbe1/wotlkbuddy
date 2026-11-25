@@ -50,3 +50,20 @@ def test_wiring_does_not_send_input_and_initializes_missing_exclusions():
     assert not services.unhittable_guids
     driver.chat.assert_not_called()
     driver.interact.assert_not_called()
+
+
+def test_wired_navigation_delegates_to_hud_owning_service(monkeypatch):
+    from wotlkbuddy.horde import hunt_navigation
+    from wotlkbuddy.game.types import Vec3
+
+    delegate = Mock()
+    monkeypatch.setattr(hunt_navigation, 'navigate_hunt', delegate)
+    driver = NS(blocked_combat_guids=set())
+    services = wire(driver)
+    state, destination = object(), Vec3(10, 20, 30)
+    assert services.navigate(state, destination, camp_transit=True) is delegate.return_value
+    delegate.assert_called_once()
+    assert delegate.call_args.args == (state, destination)
+    assert delegate.call_args.kwargs['driver'] is driver
+    assert delegate.call_args.kwargs['camp_transit'] is True
+    assert delegate.call_args.kwargs['quest_id'] == 364
