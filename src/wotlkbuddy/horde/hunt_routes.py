@@ -99,6 +99,10 @@ def unsafe_route_encounter(reason):
             'stopping before pulling into group' in message)
 
 
+class RouteCombatInterrupted(LiveControlError):
+    """Live combat detected while planning; stop searching and defend."""
+
+
 class EncounterRouteUnavailable(LiveControlError):
     """No safe route to this particular destination within the retry budget."""
 
@@ -115,9 +119,12 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
         guard()
         try:
             raw=nav.find_path(map_id,a,b)
+            guard()
             if not raw or raw[0].distance_to(a)>3 or raw[-1].distance_to(b)>3 or abs(raw[0].z-a.z)>2.5:
                 return None
             return validate_nav_path(raw,a,b,max_step=18.,max_distance=max_distance)
+        except LiveControlError:
+            raise
         except (OSError,ValueError,RuntimeError,TimeoutError):
             return None
 
@@ -144,6 +151,7 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
                 desired=Vec3(h.x+radius*cos(angle),h.y+radius*sin(angle),h.z)
                 try:
                     point=nav.nearest_point(map_id,desired)
+                    guard()
                     if point is None or point.distance_to(desired)>6 or point.distance_to(origin)<5:
                         continue
                     first=route(origin,point)
@@ -158,6 +166,8 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
                         ranked.append((length,joined,point))
                         if len(ranked)>=4:
                             break
+                except LiveControlError:
+                    raise
                 except (OSError,ValueError,RuntimeError,TimeoutError):
                     continue
             if ranked:
