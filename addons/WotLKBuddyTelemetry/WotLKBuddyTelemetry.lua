@@ -296,6 +296,32 @@ end
 -- Observe the actual visible button's action index and tooltip independently
 -- of the legacy spellbook-ID interpretation. No action write on other pages.
 local barTooltip
+local bagTooltip
+local bagSizes={}
+local function observedBagSize(link)
+    if bagSizes[link] then return bagSizes[link] end
+    if not bagTooltip then
+        local ok,tip=pcall(CreateFrame,'GameTooltip','WotLKBuddyBagSizeTooltip',UIParent,'GameTooltipTemplate')
+        if not ok or not tip then return nil end
+        bagTooltip=tip
+    end
+    if not bagTooltip.SetHyperlink then return nil end
+    bagTooltip:SetOwner(UIParent,'ANCHOR_NONE')
+    bagTooltip:ClearLines()
+    local ok=pcall(bagTooltip.SetHyperlink,bagTooltip,link)
+    local size
+    if ok then
+        for i=2,math.min(bagTooltip:NumLines() or 0,12) do
+            local row=_G['WotLKBuddyBagSizeTooltipTextLeft'..i]
+            local value=row and row:GetText()
+            local n=value and tonumber(string.match(value,'^(%d+) Slot Bag$'))
+            if n and n>=1 and n<=36 then size=n; break end
+        end
+    end
+    bagTooltip:Hide()
+    if size then bagSizes[link]=size end
+    return size
+end
 local managedMageSpells = {
     Fireball=true, Frostbolt=true, ['Fire Blast']=true,
     ['Arcane Intellect']=true, ['Frost Armor']=true,
@@ -1214,6 +1240,51 @@ local function tickData()
         appendLine('WG\t' .. (weaponSafe and '1' or '0'))
     elseif payloadBytes + 4 <= CAPACITY - 20 then
         appendLine('Z\t0')
+    end
+    -- Compact, optional bag capacity snapshot. Never guess bag size from
+    -- GetItemInfo's stack limit, and never treat specialty bags as upgrades.
+    if GetItemFamily and GetCursorInfo and not GetCursorInfo() and
+            GetContainerItemLink and GetInventoryItemLink and GetItemInfo then
+        local bagRows,candidates={},{}
+        local complete=true
+        for bag=1,4 do
+            local link=GetInventoryItemLink('player',19+bag)
+            local id=link and tonumber(string.match(link,'item:(%d+)')) or 0
+            local size=GetContainerNumSlots(bag) or 0
+            local family=0
+            if link then family=GetItemFamily(link) end
+            if (id==0)~=(size==0) or family==nil then complete=false end
+            table.insert(bagRows,table.concat({'BE',bag,id,size,family or 0},'\t'))
+        end
+        for bag=0,4 do
+            for slot=1,(GetContainerNumSlots(bag) or 0) do
+                local link=GetContainerItemLink(bag,slot)
+                if link then
+                    local name,_,_,_,required,_,_,_,equipLoc=GetItemInfo(link)
+                    local _,_,locked=GetContainerItemInfo(bag,slot)
+                    if not name or not equipLoc then
+                        complete=false
+                    elseif equipLoc=='INVTYPE_BAG' and GetItemFamily(link)==0 and
+                            not locked and (required or 0)<=UnitLevel('player') then
+                        local id=tonumber(string.match(link,'item:(%d+)'))
+                        local size=observedBagSize(link)
+                        if id and size then
+                            table.insert(candidates,table.concat({'BC',bag,slot,id,size},'\t'))
+                        else
+                            complete=false
+                        end
+                    end
+                end
+            end
+        end
+        local needed=12
+        for _,row in ipairs(bagRows) do needed=needed+string.len(row)+1 end
+        for _,row in ipairs(candidates) do needed=needed+string.len(row)+1 end
+        if complete and #candidates<=64 and payloadBytes+needed<=CAPACITY-20 then
+            appendLine('BG\t'..#candidates)
+            for _,row in ipairs(bagRows) do appendLine(row) end
+            for _,row in ipairs(candidates) do appendLine(row) end
+        end
     end
     -- Merchant sales candidates are read only. Never emit bags, active quest
     -- items, soulbound equipment on the character, or item classes unknown to
