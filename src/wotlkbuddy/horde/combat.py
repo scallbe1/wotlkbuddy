@@ -219,6 +219,7 @@ def hunt_kill_objectives(
     # A verified position can be used to choose another Detour spawn route
     # after an off-axis collision. Never retry the same problematic spawn.
     navigation_mismatches = 0
+    failed_navigation: dict[tuple[int, int, int], LiveControlError] = {}
     loot_attempts = loot_confirmed = loot_skipped = 0
     active_tracked_item = 0
     collected_results: dict[int, tuple[int, int]] = {}
@@ -1480,6 +1481,9 @@ def hunt_kill_objectives(
                 remote_camp=True
                 reference_only=True
                 log('Exact spawn not found; using explicit XML objective hotspots as search locations only')
+        # Patrol refreshes may reset visits, but not proven terrain failures.
+        nearby = [p for p in nearby
+                  if (round(p.x), round(p.y), round(p.z)) not in failed_navigation]
         nearby.sort(key=lambda p: p.position.distance_to(world.position))
         if not nearby and refresh_rounds<2:
             refresh_rounds+=1
@@ -1491,6 +1495,8 @@ def hunt_kill_objectives(
             unhittable_positions.clear()
             continue
         if not nearby:
+            if failed_navigation:
+                raise list(failed_navigation.values())[-1]
             raise LiveControlError(
                 f'No verified nearby creature spawns or bounded reference '
                 f'search locations for XML sources {allowed_sources} '
@@ -1509,6 +1515,8 @@ def hunt_kill_objectives(
                 unhittable_guids.clear()
                 unhittable_positions.clear()
                 continue
+            if failed_navigation:
+                raise list(failed_navigation.values())[-1]
             raise LiveControlError('No new spawn positions within safe search radius after alternate searches')
         key = (round(goal.x), round(goal.y), round(goal.z))
         dx,dy = world.x-goal.x,world.y-goal.y
@@ -1573,6 +1581,7 @@ def hunt_kill_objectives(
                 force_spawn_search=True
                 log(f'Unsafe pack near spawn {key}; planning another quest route from live position')
                 continue
+            failed_navigation[key] = exc
             if height_failure:
                 log(f'Excluding wrong-floor spawn {key}; selecting another verified candidate')
                 continue
@@ -1584,7 +1593,7 @@ def hunt_kill_objectives(
             if navigation_mismatches >= 2:
                 raise LiveControlError(
                     'Two off-axis navigation failures; stopped to avoid repeated '
-                    'indoor/collision routing'
+                    'indoor/collision routing: ' + str(exc)
                 ) from exc
             continue
         if s.player.in_combat:
