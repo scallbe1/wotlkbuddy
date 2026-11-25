@@ -149,7 +149,34 @@ def visit_npc(
                     raw=detour_around_encounters(nav,world.map_id,measured.position,dest,hazards,
                                                 rejected=rejected,guard=guard_retry,log=log)
                     if raw is None:
-                        raise EncounterRouteUnavailable(f'NPC visit to {npc_name}: no safe detour around observed pack')
+                        awareness=getattr(driver,'awareness',None)
+                        # Patrols are mobile. Wait briefly and refresh exact live
+                        # creature positions rather than blindly retry the route.
+                        if awareness is not None:
+                            log('No immediate safe detour; watching patrols for up to 12 seconds')
+                            for _ in range(6):
+                                guard_retry()
+                                sleep(2.)
+                                state,measured=sample()
+                                if state.player.in_combat or state.player.dead:
+                                    raise LiveControlError('Aggro/combat detected during encounter detour wait')
+                                from wotlkbuddy.live.world_position import passive_creature
+                                live=[m.position for m in awareness.read(state,measured.position)
+                                      if not passive_creature(m) and abs(m.position.z-measured.z)<=8]
+                                if not live:
+                                    # Fresh stationary threat scan still runs before moving.
+                                    raw=nav.find_path(world.map_id,measured.position,dest)
+                                    if raw and abs(raw[0].z-measured.z)<=2.5:
+                                        raw=validate_nav_path(raw,measured.position,dest,max_step=18.)
+                                        break
+                                    raw=None
+                                else:
+                                    raw=detour_around_encounters(nav,world.map_id,measured.position,dest,live,
+                                        rejected=rejected,guard=guard_retry,log=log)
+                                    if raw:
+                                        break
+                        if raw is None:
+                            raise EncounterRouteUnavailable(f'NPC visit to {npc_name}: no safe detour around observed pack after patrol wait')
                     route=raw
                     continue
                 raw=nav.find_path(world.map_id,measured.position,dest)
