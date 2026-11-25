@@ -239,10 +239,9 @@ def follow_world_path(
     recovery_locations: list[Vec3] = []
     blocked_edges: list[tuple[Vec3,float]] = []
     blocked_waypoints: list[Vec3] = []
-    aggro_fights = 0
+    from wotlkbuddy.live.travel_observation import TravelObservationState, observe_travel
     next_waypoint_index = 1
-    last_threat_scan_xyz = world0.position
-    last_threat_scan_time = now()
+    observation_state = TravelObservationState(world0.position, now())
     breadcrumbs = [world0.position]
     destination = waypoints[-1]
     cautious = False
@@ -257,73 +256,16 @@ def follow_world_path(
     def checked(*, force_scan: bool = False, suppress_scan: bool = False,
                 observation: tuple[ClientTelemetry, WorldPosition] | None = None
                 ) -> tuple[ClientTelemetry, WorldPosition]:
-        nonlocal aggro_fights, last_threat_scan_xyz, last_threat_scan_time
-        # Accept a position already captured immediately after a key release.
-        # Threat scans and reactive combat can move the character; they must
-        # not inflate the distance attributed to a single forward W hold.
-        snap, pos = observation if observation is not None else sample()
-        if (snap.truncated or snap.player.guid != guid or
-                pos.player_guid.lower() != guid.lower() or
-                pos.map_id != expected_map_id or not valid_life_state(snap)):
-            raise LiveControlError('Character, map, telemetry, or alive state changed')
-        if snap.player.in_combat:
-            if on_aggro is None or aggro_fights >= max_aggro_fights:
-                raise LiveControlError(
-                    'Aggro/combat detected; defensive handler unavailable '
-                    'or route fight budget exhausted')
-            guard()
-            origin = pos
-            aggro_fights += 1
-            notify(f'Aggro during waypoint travel; stopping input for '
-                   f'verified attacker defense {aggro_fights}/{max_aggro_fights}')
-            after_defense = travel_input.interrupt('defense', on_aggro, snap)
-            guard()
-            if after_defense.player.guid != guid:
-                raise LiveControlError('Character changed during defensive combat')
-            snap, pos = sample()
-            if (snap.truncated or snap.player.guid != guid or
-                    pos.player_guid.lower() != guid.lower() or
-                    pos.map_id != expected_map_id or not valid_life_state(snap) or
-                    snap.player.in_combat):
-                raise LiveControlError(
-                    'Defense failed to restore safe same-character navigation')
-            if (_distance_xy(pos.position, origin.position) > 6 or
-                    abs(pos.z-origin.z) > 3):
-                raise LiveControlError(
-                    'Defensive combat displaced Mage away from original '
-                    'navmesh path; fresh Detour route required')
-            notify('Verified combat ended; resuming existing Detour waypoints')
-        if not suppress_scan and on_threat is not None and not snap.player.in_combat and (
-                force_scan or
-                _distance_xy(pos.position,last_threat_scan_xyz) >= threat_check_yards or
-                now()-last_threat_scan_time >= (8. if continuous_forward else 5.)):
-            # Movement keys are already released before checked() runs.
-            # Scan only the next Detour legs, not arbitrary creatures off-path.
-            guard()
-            origin=pos
-            upcoming=tuple(waypoints[next_waypoint_index:
-                                    min(len(waypoints),next_waypoint_index+6)])
-            notify('Scanning upcoming path legs for nearby creature threats before advancing')
-            travel_input.interrupt('threat_scan', on_threat, snap, pos, upcoming)
-            snap,pos=sample()
-            if (snap.truncated or snap.player.guid != guid or
-                    pos.player_guid.lower()!=guid.lower() or
-                    pos.map_id!=expected_map_id or not valid_life_state(snap)):
-                raise LiveControlError('Proactive threat scan failed to restore '
-                                       'safe live player/map state')
-            if snap.player.in_combat:
-                notify('Aggro began during threat scan; switching to reactive defense')
-                snap,pos=checked(suppress_scan=True,observation=(snap,pos))
-            if (_distance_xy(pos.position,origin.position)>2.0 or
-                    abs(pos.z-origin.z)>2.):
-                raise LiveControlError('Threat scan changed player position; '
-                                       'fresh Detour replan is required')
-            last_threat_scan_xyz=pos.position
-            last_threat_scan_time=now()
-        if expected_quest_id is not None and not any(
-                q.quest_id == expected_quest_id for q in snap.quests):
-            raise LiveControlError('Quest journal changed while walking; stopping')
-        return snap, pos
+        return observe_travel(
+            observation_state, sample=sample, guid=guid, expected_map_id=expected_map_id,
+            valid_life_state=valid_life_state, on_aggro=on_aggro,
+            max_aggro_fights=max_aggro_fights, guard=guard, notify=notify,
+            travel_input=travel_input, on_threat=on_threat,
+            threat_check_yards=threat_check_yards, now=now,
+            continuous_forward=continuous_forward,
+            upcoming_legs=lambda: tuple(waypoints[next_waypoint_index:next_waypoint_index+6]),
+            expected_quest_id=expected_quest_id, force_scan=force_scan,
+            suppress_scan=suppress_scan, observation=observation)
 
     def pulse(key: str, duration: float) -> float:
         """Hold one movement key for a bounded *wall-clock* interval.
