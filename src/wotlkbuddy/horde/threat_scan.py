@@ -143,7 +143,7 @@ def scan_and_clear_hostiles(
         if urgent:
             remember_pack(driver,[m.position for m in urgent],monotonic())
             raise LiveControlError('Unsafe encounter: unclassified nearby object(s) on route: '+
-                ', '.join(f'{m.entry} {m.guid} {m.position.distance_to(origin):.1f}y' for m in urgent))
+                ', '.join(f'{m.entry} {m.guid} faction={m.faction} level={m.level} {m.position.distance_to(origin):.1f}y' for m in urgent))
         for enemy in enemies:
             distance=enemy.position.distance_to(origin)
             if distance>detection_yards or distance_to_corridor(enemy.position,origin,path_ahead)>corridor_yards:
