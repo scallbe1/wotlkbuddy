@@ -222,7 +222,7 @@ def return_and_turnin(
                     progress=log,on_aggro=getattr(driver,'on_aggro',None),
                     on_threat=getattr(driver,'scan_hostiles',None),
                     waypoint_spacing=18.,continuous_forward=True,
-                    threat_check_yards=6.)
+                    fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
                 if result.stopped_reason!='complete':
                     reason=result.stopped_reason
                     encounter=encounter_route_failure(reason)
