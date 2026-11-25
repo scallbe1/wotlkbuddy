@@ -13,6 +13,7 @@ from typing import Callable
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.profile import HordeProfile, OrderStep
 from wotlkbuddy.horde.interaction import navigate_with_status
+from wotlkbuddy.horde.hunt_routes import unsafe_route_encounter, detour_around_encounters, EncounterRouteUnavailable
 from wotlkbuddy.horde.turnin import turnin_profile_quest
 from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, distance_world
 from wotlkbuddy.live.codec import ClientTelemetry
@@ -190,6 +191,7 @@ def return_and_turnin(
             index=0
             height_failures=[]
             encounter_replans=0
+            rejected=[]
             while pending:
                 leg=pending.pop(0)
                 index+=1
@@ -225,7 +227,8 @@ def return_and_turnin(
                     fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
                 if result.stopped_reason!='complete':
                     reason=result.stopped_reason
-                    encounter=encounter_route_failure(reason)
+                    blocked=unsafe_route_encounter(reason)
+                    encounter=blocked or encounter_route_failure(reason)
                     if not encounter and not height_route_failure(reason):
                         raise LiveControlError('Return-to-NPC navigation stopped: '+reason)
                     state,measured=sample()
@@ -235,7 +238,7 @@ def return_and_turnin(
                     if encounter:
                         encounter_replans+=1
                         if encounter_replans>12:
-                            raise LiveControlError('Delivery encounter replan budget exhausted')
+                            raise EncounterRouteUnavailable('Delivery encounter replan budget exhausted')
                         label=f'Delivery encounter displacement recovery {encounter_replans}/12'
                     else:
                         if (len(height_failures)>=MAX_HEIGHT_REPLANS or
@@ -252,7 +255,23 @@ def return_and_turnin(
                     if max_seconds-(monotonic()-start_time)<15:
                         raise LiveControlError('Return-to-NPC time budget exhausted during height recovery')
                     try:
-                        rebuilt=fresh_delivery_route(nav,world.map_id,measured.position,destination)
+                        if blocked:
+                            if len(leg)>1:
+                                rejected.append(leg[1])
+                            def guard_retry():
+                                if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+                                    raise LiveControlError('Escape pressed or WoW lost focus during delivery detour')
+                                if monotonic()-start_time>=max_seconds-15:
+                                    raise EncounterRouteUnavailable('Delivery detour time exhausted')
+                            hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if monotonic()-t<90]
+                            rebuilt=detour_around_encounters(nav,world.map_id,measured.position,destination,hazards,
+                                max_distance=MAX_DELIVERY_PATH,rejected=rejected,guard=guard_retry,log=log) if hazards else None
+                            if not rebuilt:
+                                raise EncounterRouteUnavailable('No safe delivery detour around observed pack')
+                        else:
+                            rebuilt=fresh_delivery_route(nav,world.map_id,measured.position,destination)
+                    except (EncounterRouteUnavailable, LiveControlError):
+                        raise
                     except (RuntimeError,OSError,ValueError,TimeoutError) as exc:
                         raise LiveControlError(f'Cannot re-anchor delivery on measured floor: {exc}') from exc
                     pending=list(delivery_legs(rebuilt))
