@@ -389,7 +389,9 @@ def follow_world_path(
         steering=0
         keyboard.key_down(scan)
         try:
-            while now()-began<2.0:
+            for _ in range(68):
+                if now()-began>=2.0:
+                    break
                 guard()
                 t=now()
                 if turn_key is not None and t>=turn_end:
