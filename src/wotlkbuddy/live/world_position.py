@@ -216,10 +216,19 @@ def verified_target_position(snapshot: ClientTelemetry, *, pid: int) -> Vec3:
                                        target_guid=snapshot.player.target_guid)
 
 
-def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
+@dataclass(frozen=True)
+class NearbyCreature:
+    guid: str
+    entry: int
+    position: Vec3
+    health: int | None
+    faction: int | None
+
+
+def observe_nearby_creature_details(memory: MemoryReader, *, expected_guid: str,
                              center: Vec3, radius: float = 80,
-                             ignored_guids=()) -> tuple[Vec3, ...]:
-    """Read creature positions from the existing verified object manager.
+                             ignored_guids=()) -> tuple[NearbyCreature, ...]:
+    """Read nearby potential hazards without selecting or modifying targets.
 
     Ghost visibility may be incomplete. Exclude descriptor-confirmed dead
     units and same-faction-template units; other living/unknown creatures
@@ -262,13 +271,35 @@ def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
                             faction = memory.read_u32(descriptor+4*0x37)
                     except (OSError,ValueError,WorldPositionError):
                         pass
-                    creatures.append((point,hp,faction))
+                    creatures.append(NearbyCreature(f'0x{object_guid:016X}', (object_guid >> 24) & 0xFFFFFF, point,hp,faction))
         current = memory.read_u32(current + NEXT_OBJECT_OFFSET)
     if (_u64(memory, manager + LOCAL_GUID_OFFSET) != own or
             memory.read_u32(WORLD_MAP_ID_ADDRESS) != origin.map_id):
         raise WorldPositionError('Character or map changed during creature scan')
-    return tuple(point for point,hp,faction in creatures
-                 if hp != 0 and not (own_faction and faction==own_faction))
+    return tuple(mob for mob in creatures
+                 if mob.health != 0 and not (own_faction and mob.faction==own_faction))
+
+
+def observe_nearby_creatures(memory: MemoryReader, *, expected_guid: str,
+                             center: Vec3, radius: float = 80,
+                             ignored_guids=()) -> tuple[Vec3, ...]:
+    """Compatibility projection for corpse recovery and other hazard readers."""
+    return tuple(mob.position for mob in observe_nearby_creature_details(
+        memory,expected_guid=expected_guid,center=center,radius=radius,
+        ignored_guids=ignored_guids))
+
+
+def verified_nearby_creature_details(snapshot: ClientTelemetry, *, pid: int,
+                                      center: Vec3, radius: float = 50
+                                      ) -> tuple[NearbyCreature, ...]:
+    from wotlkbuddy.game.win32 import ProcessMemory
+    if snapshot.truncated or not snapshot.player.guid:
+        raise WorldPositionError('Verified character required for creature awareness')
+    if not 1 <= radius <= 80:
+        raise ValueError('Invalid creature awareness radius')
+    with ProcessMemory(pid,writable=False) as memory:
+        return observe_nearby_creature_details(memory,expected_guid=snapshot.player.guid,
+                                               center=center,radius=radius)
 
 
 def verified_nearby_creatures(snapshot: ClientTelemetry, *, pid: int,

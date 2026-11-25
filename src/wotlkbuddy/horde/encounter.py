@@ -74,6 +74,40 @@ def survey_pull(*,initial,capture,driver,player_position,target_position,quest_e
     chosen_guid=initial.player.target_guid
     position=player_position(initial)
     state=initial
+    awareness=getattr(driver,'awareness',None)
+    if awareness is not None:
+        state,enemies,unknown=awareness.survey(initial,position)
+        if state.player.in_combat:
+            return state,None
+        chosen=next((m for m in enemies if m.guid==chosen_guid),None)
+        if chosen is None:
+            return state,PullPlan(False,(),'selected enemy absent from verified spatial census')
+        state=awareness.acquire(state,chosen.guid,chosen.entry)
+        if state.player.in_combat:
+            return state,None
+        t=state.combat_target
+        if (state.player.target_guid!=chosen_guid or not t or t.dead or
+                not t.attackable or t.reaction is None or not 1<=t.reaction<=3):
+            return state,PullPlan(False,(),'could not verify exact hostile after spatial survey')
+        try:
+            chosen=Enemy(chosen.guid,chosen.entry,chosen.name,target_position(state),
+                         t.level,t.classification,t.health)
+        except (OSError,ValueError,RuntimeError):
+            return state,PullPlan(False,(),'target position unavailable after spatial survey')
+        plan=assess_encounter(state.player,state.resources,position.position,chosen,enemies,quest_entries)
+        # Unknown creatures near player or any likely linked mob are risk,
+        # not silent omissions. Mage prefers isolated pulls.
+        uncertain=[m for m in unknown if abs(m.position.z-position.z)<=8 and
+                   (m.position.distance_to(position.position)<=18 or
+                    any(m.position.distance_to(e.position)<=16 for e in plan.enemies))]
+        if uncertain:
+            plan=PullPlan(False,plan.enemies,'unclassified creature near potential pull: '+
+                          ', '.join(str(m.entry) for m in uncertain))
+        elif len(plan.enemies)>1:
+            plan=PullPlan(False,plan.enemies,'prefer isolated enemy; nearby linked group')
+        log(f'Object encounter: {len(enemies)} red, {len(unknown)} unknown, '
+            f'{len(plan.enemies)} linked; {"PULL" if plan.allowed else "AVOID"}: {plan.reason}')
+        return state,plan
     observed={}
     seen=set()
     def fresh(before):

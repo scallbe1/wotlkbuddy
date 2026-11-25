@@ -312,15 +312,20 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         state = defend_against_aggro(initial=snapshot, capture=cap, driver=driver, log=log)
         if state.player.level>snapshot.player.level:
             log(f'Level gained in combat: {snapshot.player.level} -> {state.player.level}; trainer priority will be refreshed on next phase')
+        from wotlkbuddy.horde.sustain import recover_after_encounter
+        def recover(current):
+            return recover_after_encounter(initial=current,capture=cap,driver=driver,
+                defend=lambda s:defend_against_aggro(initial=s,capture=cap,driver=driver,log=log),
+                log=log)
+        # Restore resources before detouring to corpses.
+        state=recover(state)
         drain=getattr(driver,'drain_encounter_loot',None)
         if callable(drain) and not getattr(driver,'looting_encounter',False):
             state=drain(state)
             if state.player.in_combat:
                 state=defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
-        from wotlkbuddy.horde.sustain import recover_after_encounter
-        return recover_after_encounter(initial=state,capture=cap,driver=driver,
-            defend=lambda s:defend_against_aggro(initial=s,capture=cap,driver=driver,log=log),
-            log=log)
+            state=recover(state)
+        return state
     driver.on_aggro = resolve_aggro
     # Configure facing before startup defense, not only after hotbar setup.
     from wotlkbuddy.live.world_position import verified_target_position
@@ -349,6 +354,12 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
     from wotlkbuddy.horde.encounter import survey_pull
+    from wotlkbuddy.horde.awareness import ObjectAwareness
+    from wotlkbuddy.live.world_position import verified_nearby_creature_details
+    driver.awareness=ObjectAwareness(
+        read=lambda state,center: verified_nearby_creature_details(
+            state,pid=pid,center=center,radius=50),
+        capture=cap,driver=driver,log=log)
     driver.assess_pull = lambda snapshot, entries=(): survey_pull(
         initial=snapshot,capture=cap,driver=driver,
         player_position=lambda s: verified_live_position(s,pid=pid)[1],
@@ -358,7 +369,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         initial=snapshot, player_position=where, path_ahead=ahead,
         capture=cap, driver=driver,
         target_position=lambda s: verified_target_position(s, pid=pid),
-        log=log, detection_yards=args.scan_yards,
+        log=log, detection_yards=args.scan_yards,corridor_yards=18.,
         direct_path_clear=getattr(driver, 'direct_path_clear', None))
     needs_recovery = (first.player.health/max(1,first.player.max_health)<.70 or
                       first.resources.mana/max(1,first.resources.max_mana)<.45)
@@ -411,6 +422,11 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         chosen = select_profile_from_loader(
             profiles_root, level=first.player.level, race='Undead')
         quest_profile = load_horde_profile(chosen)
+        driver.awareness.names.update({src.entry:src.name
+            for quest in quest_profile.quests for objective in quest.objectives
+            for src in objective.sources if src.kind=='mob' and src.name})
+        driver.awareness.names.update({step.entry:step.npc_name
+            for step in quest_profile.steps if step.entry and step.npc_name})
         log(f'NPC services and quest profile: {quest_profile.name}')
         with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
                 NavigationProxy(py32, dll) as nav:
@@ -2062,8 +2078,8 @@ def main(argv: list[str] | None = None) -> int:
                              help='Bound kills while collecting quest item drops')
     progression.add_argument('--max-seconds', type=float, default=900,
                              help='Bound the objective hunt duration')
-    progression.add_argument('--scan-yards', type=float, default=27.,
-                             help='Proactive red-hostile scan radius (12..35 yd)')
+    progression.add_argument('--scan-yards', type=float, default=35.,
+                             help='Proactive ranged pull radius (12..35 yd); object awareness scans 50 yd')
     progression.add_argument('--max-cycles', type=int, default=80,
                              help='Bound continuous quest/offer stages (1..250)')
     progression.add_argument('--auto-minutes', type=int, default=180,

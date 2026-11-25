@@ -61,7 +61,7 @@ def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,ex
         if visited.get(key,0)>=2:
             continue
         heading=atan2(origin.y-center.y,origin.x-center.x)
-        for radius in (23.,17.):
+        for radius in (32.,28.,23.,17.):
             for offset in (0.,pi/3,-pi/3,2*pi/3,-2*pi/3,pi):
                 angle=heading+offset
                 desired=Vec3(center.x+radius*cos(angle),center.y+radius*sin(angle),center.z)

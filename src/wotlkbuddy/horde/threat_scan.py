@@ -119,59 +119,97 @@ def scan_and_clear_hostiles(
     pack_positions = []
     from wotlkbuddy.horde.hunt_routes import remember_pack
     from time import monotonic
-    for _ in range(max_targets):
+    awareness=getattr(driver,'awareness',None)
+    if awareness is not None:
+        origin=player_position.position
+        def relevant(mob):
+            return (abs(mob.position.z-origin.z)<=8 and
+                    (mob.position.distance_to(origin)<=20 or
+                     distance_to_corridor(mob.position,origin,path_ahead)<=18))
+        state,enemies,unknown=awareness.survey(state,player_position,relevant)
         if state.player.in_combat:
             return defend(state)
-        driver.chat('/targetenemy')
-        state=fresh(state)
-        target=state.combat_target
-        current_guid=state.player.target_guid
-        if not current_guid or current_guid in seen:
-            break
-        seen.add(current_guid)
-        previously_blocked = current_guid in blocked
-        if not target or not target.attackable or target.dead or target.health<=0:
-            continue
-        if target.reaction is None:
-            raise LiveControlError('Target reaction unavailable: updated addon needed '
-                                   'to safely identify aggressive mobs before aggro')
-        if not 1<=target.reaction<=3:
-            continue  # yellow neutral and green friendly mobs are not threats.
-        if (creature_entry_from_guid(current_guid)!=target.entry_id or
-                target.entry_id<=0):
-            continue
-        try:
-            position=target_position(state)
-        except (WorldPositionError,OSError,ValueError):
-            continue
-        distance=player_position.position.distance_to(position)
-        if (distance>detection_yards or
-                abs(position.z-player_position.z)>6 or
-                distance_to_corridor(position,player_position.position,
-                                     path_ahead)>corridor_yards):
-            continue
-        pack_positions.append(position)
-        if previously_blocked:
-            blocked_nearby.append((distance,current_guid))
-            continue  # Still a hazard, even when excluded as a pull target.
-        # Range is not line of sight. In a cave the navmesh can verify
-        # whether a short direct route is blocked by rock. If so, defer
-        # the pull while Detour walks around the corner; no wall-casts.
-        if direct_path_clear is not None:
-            try:
-                if not direct_path_clear(player_position.position, position):
-                    blocked_nearby.append((distance, current_guid))
-                    log(f'Hostile {current_guid}: direct ranged approach not clear; '
-                        'checking other visible enemies before advancing')
-                    continue
-            except (OSError, RuntimeError, ValueError, TimeoutError,
-                    LiveControlError) as exc:
-                log(f'Cannot verify direct cave approach for {current_guid}: '
-                    f'{exc}; deferring preemptive cast')
+        # Unknown hostility is never permission to attack or walk directly
+        # into a potentially dangerous, unclassified creature.
+        urgent=[m for m in unknown if m.position.distance_to(origin)<=26 and
+                distance_to_corridor(m.position,origin,path_ahead)<=18]
+        if urgent:
+            remember_pack(driver,[m.position for m in urgent],monotonic())
+            raise LiveControlError('Unsafe encounter: unclassified nearby object(s) on route: '+
+                ', '.join(f'{m.entry} {m.guid} {m.position.distance_to(origin):.1f}y' for m in urgent))
+        for enemy in enemies:
+            distance=enemy.position.distance_to(origin)
+            if distance>detection_yards or distance_to_corridor(enemy.position,origin,path_ahead)>corridor_yards:
                 continue
-        candidates.append((distance,current_guid,target.entry_id))
-        if len(candidates)>max(crowd_limit,3):
-            break
+            pack_positions.append(enemy.position)
+            if enemy.guid in blocked:
+                blocked_nearby.append((distance,enemy.guid))
+                continue
+            if direct_path_clear is not None:
+                try:
+                    if not direct_path_clear(origin,enemy.position):
+                        blocked_nearby.append((distance,enemy.guid))
+                        log(f'Hostile {enemy.entry} at {distance:.1f}y: ranged approach geometry not verified')
+                        continue
+                except (OSError,RuntimeError,ValueError,TimeoutError) as exc:
+                    blocked_nearby.append((distance,enemy.guid))
+                    log(f'Cannot verify geometry for {enemy.entry}: {exc}')
+                    continue
+            candidates.append((distance,enemy.guid,enemy.entry))
+    else:
+        for _ in range(max_targets):
+            if state.player.in_combat:
+                return defend(state)
+            driver.chat('/targetenemy')
+            state=fresh(state)
+            target=state.combat_target
+            current_guid=state.player.target_guid
+            if not current_guid or current_guid in seen:
+                break
+            seen.add(current_guid)
+            previously_blocked = current_guid in blocked
+            if not target or not target.attackable or target.dead or target.health<=0:
+                continue
+            if target.reaction is None:
+                raise LiveControlError('Target reaction unavailable: updated addon needed '
+                                       'to safely identify aggressive mobs before aggro')
+            if not 1<=target.reaction<=3:
+                continue  # yellow neutral and green friendly mobs are not threats.
+            if (creature_entry_from_guid(current_guid)!=target.entry_id or
+                    target.entry_id<=0):
+                continue
+            try:
+                position=target_position(state)
+            except (WorldPositionError,OSError,ValueError):
+                continue
+            distance=player_position.position.distance_to(position)
+            if (distance>detection_yards or
+                    abs(position.z-player_position.z)>6 or
+                    distance_to_corridor(position,player_position.position,
+                                         path_ahead)>corridor_yards):
+                continue
+            pack_positions.append(position)
+            if previously_blocked:
+                blocked_nearby.append((distance,current_guid))
+                continue  # Still a hazard, even when excluded as a pull target.
+            # Range is not line of sight. In a cave the navmesh can verify
+            # whether a short direct route is blocked by rock. If so, defer
+            # the pull while Detour walks around the corner; no wall-casts.
+            if direct_path_clear is not None:
+                try:
+                    if not direct_path_clear(player_position.position, position):
+                        blocked_nearby.append((distance, current_guid))
+                        log(f'Hostile {current_guid}: direct ranged approach not clear; '
+                            'checking other visible enemies before advancing')
+                        continue
+                except (OSError, RuntimeError, ValueError, TimeoutError,
+                        LiveControlError) as exc:
+                    log(f'Cannot verify direct cave approach for {current_guid}: '
+                        f'{exc}; deferring preemptive cast')
+                    continue
+            candidates.append((distance,current_guid,target.entry_id))
+            if len(candidates)>max(crowd_limit,3):
+                break
     assess=getattr(driver,'assess_pull',None)
     corridor_count=len(candidates)+sum(d<=18 for d,_ in blocked_nearby)
     # A known three-pack should reach the strength assessment rather than
@@ -201,23 +239,31 @@ def scan_and_clear_hostiles(
     if state.resources.mana < 20:
         # Only require combat mana if there is a detected red mob ahead.
         raise LiveControlError('Mage lacks minimum mana to clear hostile travel path')
-    candidates.sort()
+    # Prefer a ranged opening, not the nearest melee-range enemy.
+    candidates.sort(key=(lambda row: (0,row[0]) if row[0]<=20 else (1,abs(row[0]-32))) if awareness is not None else None)
     distance, chosen_guid, chosen_entry=candidates[0]
     # Reacquire the exact GUID after cycling: never select by ambiguous name.
     if state.player.target_guid!=chosen_guid:
-        for _ in range(max_targets+2):
-            driver.chat('/targetenemy')
-            state=fresh(state)
+        if awareness is not None:
+            state=awareness.acquire(state,chosen_guid,chosen_entry)
             if state.player.in_combat:
                 return defend(state)
-            if state.player.target_guid==chosen_guid:
-                break
+            if state.player.target_guid!=chosen_guid:
+                raise LiveControlError('Unsafe encounter: could not acquire exact discovered hostile GUID')
         else:
-            raise LiveControlError('Could not reselect exact scanned hostile GUID')
+            for _ in range(max_targets+2):
+                driver.chat('/targetenemy')
+                state=fresh(state)
+                if state.player.in_combat:
+                    return defend(state)
+                if state.player.target_guid==chosen_guid:
+                    break
+            else:
+                raise LiveControlError('Could not reselect exact scanned hostile GUID')
     target=state.combat_target
     if (not target or target.entry_id!=chosen_entry or target.dead or
             not target.attackable or target.reaction is None or
-            target.reaction>3 or target.fireball_in_range is not True):
+            not 1<=target.reaction<=3 or target.fireball_in_range is not True):
         raise LiveControlError('Preemptive target lost exact hostility/range verification')
     actual=target_position(state)
     measured=player_position.position.distance_to(actual)
