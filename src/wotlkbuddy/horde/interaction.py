@@ -190,7 +190,8 @@ class KeyboardQuestInput:
                      re.fullmatch(r'[A-Za-z :]{1,48}',
                                   command[len('/wbttalent '):])) and
                 not re.fullmatch(r'/run LearnTalent\(([1-3]),([1-9]|[1-3][0-9]|4[0-5])\)', command) and
-                not re.fullmatch(r'/wbtcoords (?:-?[0-9]{1,6} ){2}-?[0-9]{1,6}',command) and
+                not re.fullmatch(r'/wbtcoords (?:-?[0-9]{1,6} ){2}-?[0-9]{1,6}(?: [0-9]{1,6})?',command) and
+                not re.fullmatch(r'/wbtbag [0-4] (?:[1-9]|[12][0-9]|3[0-6]) [1-9][0-9]{0,7} [1-4] (?:0|[1-9][0-9]{0,7})',command) and
                 command != '/wbtbar inspect' and
                 not re.fullmatch(r'/wbtbar upgrade (?:[1-9]|10) [1-9][0-9]{0,9} [1-9][0-9]{0,9}',command) and
                 not re.fullmatch(r'/wbtbar (?:clear|put) (?:[1-9]|10) [1-9][0-9]{0,9}',command) and
@@ -243,6 +244,11 @@ class KeyboardQuestInput:
     def set_navigation_destination(self, point) -> None:
         if getattr(self,'native_hud_enabled',True):
             self.chat(f'/wbtcoords {round(point.x)} {round(point.y)} {round(point.z)}')
+
+    def set_navigation_distance(self, point, position) -> None:
+        if getattr(self,'native_hud_enabled',True):
+            yards=round(point.distance_to(position))
+            self.chat(f'/wbtcoords {round(point.x)} {round(point.y)} {round(point.z)} {yards}')
 
     def learn_verified_talent(self, tree: int, index: int) -> None:
         """Spend exactly one previously verified class-specific talent point."""
