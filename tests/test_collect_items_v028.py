@@ -65,7 +65,7 @@ class CollectionGame:
         self.commands.append(command)
         if command.startswith('/wbttrack '):
             self.tracked = int(command.split()[1])
-        elif command == '/cast Arcane Intellect':
+        elif command in ('/cast [target=player] Arcane Intellect', '/cast Arcane Intellect'):
             self.buffs[0] = True
         elif command == '/cast Frost Armor':
             self.buffs[1] = True

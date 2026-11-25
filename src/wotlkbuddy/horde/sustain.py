@@ -171,6 +171,10 @@ def maintain_mage_supplies(
             # Newly created water must be used before considering food.
             state=consume(state,kind,goal)
 
+    # Food conjuration spends mana after the water pass. Recheck the
+    # requested mana goal using existing verified water, without restocking
+    # again or exceeding the bounded consume observation.
+    state = consume(state, 'water', mana_goal)
     return state
 
 
