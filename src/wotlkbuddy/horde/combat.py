@@ -1145,43 +1145,72 @@ def hunt_kill_objectives(
         # Find a live target already on screen first. If none can be selected,
         # navigate near a verified nearby spawn constrained to profile hotspots.
         if not s.player.in_combat and not force_spawn_search:
-            # Profile names can avoid cycling unrelated neutral units. The
-            # selected target must still pass the exact entry and GUID checks.
-            select_name = getattr(driver, 'target_objective_name', None)
-            if callable(select_name) and not (s.combat_target and
-                    s.combat_target.entry_id in allowed_sources and
-                    s.combat_target.attackable and not s.combat_target.dead):
-                names = tuple(dict.fromkeys(source.name for source in spec.sources
-                              if source.kind == 'mob' and source.entry in allowed_sources
-                              and source.name))
-                for name in names[:4]:
-                    if not select_name(name):
-                        continue
-                    s = fresh(s)
-                    if s.player.in_combat or (s.combat_target and
-                            s.combat_target.entry_id in allowed_sources and
-                            s.combat_target.attackable and not s.combat_target.dead and
-                            creature_entry_from_guid(s.player.target_guid) == s.combat_target.entry_id):
+            awareness=getattr(driver,'awareness',None)
+            if awareness is not None:
+                _,where=world_position(s)
+                rows=awareness.read(s,where.position)
+                possible=[m for m in rows if m.entry in allowed_sources and
+                          m.guid not in unhittable_guids and
+                          abs(m.position.z-where.z)<=8]
+                def rank(m):
+                    neighbors=sum(other.guid!=m.guid and
+                                  other.position.distance_to(m.position)<=16
+                                  for other in rows)
+                    distance=m.position.distance_to(where.position)
+                    return (neighbors, distance>35, abs(distance-32))
+                selected=False
+                for mob in sorted(possible,key=rank)[:3]:
+                    s=awareness.acquire(s,mob.guid,mob.entry)
+                    if s.player.in_combat:
                         break
-            visited: set[str] = set()
-            for _ in range(7):
-                if s.player.in_combat:
-                    break
-                if s.player.target_guid in unhittable_guids:
-                    log(f'Skipping previously blocked spider '
-                        f'{s.player.target_guid}; exact GUID only')
+                    t=s.combat_target
+                    if (s.player.target_guid==mob.guid and t and
+                            t.entry_id==mob.entry and t.attackable and not t.dead):
+                        selected=True
+                        log(f'Object-selected quest creature {mob.entry} {mob.guid}, '
+                            f'{mob.position.distance_to(where.position):.1f}y')
+                        break
+                if not selected and not s.player.in_combat and s.player.target_guid:
                     driver.chat('/cleartarget')
                     s=fresh(s)
-                if (s.combat_target and
+            else:
+                # Profile names can avoid cycling unrelated neutral units. The
+                # selected target must still pass the exact entry and GUID checks.
+                select_name = getattr(driver, 'target_objective_name', None)
+                if callable(select_name) and not (s.combat_target and
                         s.combat_target.entry_id in allowed_sources and
-                        s.combat_target.attackable and not s.combat_target.dead
-                        and s.player.target_guid not in unhittable_guids):
-                    break
-                driver.chat('/targetenemy')
-                s = fresh(s)
-                if s.player.target_guid in visited:
-                    break
-                visited.add(s.player.target_guid)
+                        s.combat_target.attackable and not s.combat_target.dead):
+                    names = tuple(dict.fromkeys(source.name for source in spec.sources
+                                  if source.kind == 'mob' and source.entry in allowed_sources
+                                  and source.name))
+                    for name in names[:4]:
+                        if not select_name(name):
+                            continue
+                        s = fresh(s)
+                        if s.player.in_combat or (s.combat_target and
+                                s.combat_target.entry_id in allowed_sources and
+                                s.combat_target.attackable and not s.combat_target.dead and
+                                creature_entry_from_guid(s.player.target_guid) == s.combat_target.entry_id):
+                            break
+                visited: set[str] = set()
+                for _ in range(7):
+                    if s.player.in_combat:
+                        break
+                    if s.player.target_guid in unhittable_guids:
+                        log(f'Skipping previously blocked spider '
+                            f'{s.player.target_guid}; exact GUID only')
+                        driver.chat('/cleartarget')
+                        s=fresh(s)
+                    if (s.combat_target and
+                            s.combat_target.entry_id in allowed_sources and
+                            s.combat_target.attackable and not s.combat_target.dead
+                            and s.player.target_guid not in unhittable_guids):
+                        break
+                    driver.chat('/targetenemy')
+                    s = fresh(s)
+                    if s.player.target_guid in visited:
+                        break
+                    visited.add(s.player.target_guid)
 
         if s.player.in_combat:
             s = clear_remaining_aggro(s)
@@ -1205,9 +1234,10 @@ def hunt_kill_objectives(
                     d = hypot(dx,dy)
                     if d < 0.1:
                         raise LiveControlError('Target location equals player; range UI inconsistent')
-                    # Stand off about 12 yards, leaving time for ranged Mage casts.
-                    staging = Vec3(corpse_xyz.x+dx/d*12,
-                                   corpse_xyz.y+dy/d*12, corpse_xyz.z)
+                    # Stand at ranged opening distance rather than melee aggro range.
+                    stand_off=min(32., max(12., d-3.)) if getattr(driver,'awareness',None) else 12.
+                    staging = Vec3(corpse_xyz.x+dx/d*stand_off,
+                                   corpse_xyz.y+dy/d*stand_off, corpse_xyz.z)
                     try:
                         s = navigate(s, staging)
                     except LiveControlError as exc:
@@ -1485,8 +1515,9 @@ def hunt_kill_objectives(
         if d < 0.1:
             recently_visited[key]=2
             continue
+        stand_off=min(32.,max(5.,d-3.)) if getattr(driver,'awareness',None) else 10.
         staging = (goal.position if reference_only and remote_camp else
-                   Vec3(goal.x+dx/d*10,goal.y+dy/d*10,goal.z))
+                   Vec3(goal.x+dx/d*stand_off,goal.y+dy/d*stand_off,goal.z))
         hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if now()-t<90]
         if hazards or route_replans:
             alternatives=alternate_hunt_routes(nav,world.map_id,world.position,nearby,hazards,recently_visited,
