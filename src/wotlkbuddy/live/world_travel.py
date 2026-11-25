@@ -189,6 +189,7 @@ def follow_world_path(
     ghost_only: bool = False,
     replan_path: Callable[[Vec3, Vec3], Sequence[Vec3]] | None = None,
     destination_status: Callable[[Vec3], None] | None = None,
+    distance_status: Callable[[Vec3, Vec3], None] | None = None,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -661,8 +662,14 @@ def follow_world_path(
                 notify('Wall route search unsuccessful; trying another measured escape direction')
         return False
 
+    # HUD input is sent only with movement keys released, and is throttled
+    # to avoid slowing every short Detour step. Coordinates stay unchanged.
+    last_hud_position=world.position
     try:
-        if destination_status is not None:
+        if distance_status is not None:
+            guard()
+            distance_status(destination,world.position)
+        elif destination_status is not None:
             guard()
             destination_status(destination)
         if on_threat is not None:
@@ -674,7 +681,13 @@ def follow_world_path(
             next_waypoint_index = index
             notify(f'Action: navigating waypoint {index}/{len(waypoints)-1} XYZ '
                    f'({waypoint.x:.2f},{waypoint.y:.2f},{waypoint.z:.2f}) toward goal '
-                   f'({destination.x:.2f},{destination.y:.2f},{destination.z:.2f})')
+                   f'({destination.x:.2f},{destination.y:.2f},{destination.z:.2f}); '
+                   f'{world.position.distance_to(destination):.1f}y away')
+            if (distance_status is not None and
+                    world.position.distance_to(last_hud_position)>=15):
+                guard()
+                distance_status(destination,world.position)
+                last_hud_position=world.position
             count = 0
             stalls = 0
             prev_distance = _distance_xy(world.position, waypoint)
