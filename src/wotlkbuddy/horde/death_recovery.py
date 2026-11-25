@@ -109,6 +109,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
             return True
         destination = path[-1]
         failures = []
+        failed_ends = []
         deadline = now()+600
         if callable(set_status):
             set_status('deathrun')
@@ -155,6 +156,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                     raise LiveControlError(label+' navigation could not find a different reachable floor: '+reason)
                 breadcrumbs.append(measured)
                 failures.append(measured)
+                failed_ends.append(path[-1])
                 log(f'{label} terrain mismatch; replanning {attempt+1}/4 from '
                     f'actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}); '
                     f'moved {start.distance_to(measured):.1f}y on last route')
@@ -163,13 +165,13 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                         if partial_replan or repeated:
                             log('Old corpse approach blocked; searching alternative reclaim-side routes')
                             path=alternate_approach_path(nav,corpse_map,measured,corpse,
-                                failed_points=failures,log=log)
+                                failed_points=failures,excluded_ends=failed_ends,log=log)
                         else:
                             try:
                                 path = approach_path(nav,corpse_map,measured,corpse)
                             except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
                                 path=alternate_approach_path(nav,corpse_map,measured,corpse,
-                                    failed_points=failures,log=log)
+                                    failed_points=failures,excluded_ends=failed_ends,log=log)
                     else:
                         raw = nav.find_path(corpse_map,measured,destination)
                         if not raw or raw[-1].distance_to(destination)>2:

@@ -127,7 +127,7 @@ def approach_path(nav, map_id, origin, corpse):
     raise LiveControlError('Corpse route never reaches reclaim vicinity')
 
 
-def alternate_approach_path(nav, map_id, origin, corpse, *, failed_points=(), log=lambda _:None):
+def alternate_approach_path(nav, map_id, origin, corpse, *, failed_points=(), excluded_ends=(), log=lambda _:None):
     """Find a complete ghost route to a different reclaim-side position.
 
     Local mesh staging points permit an initial move away from a fence.
@@ -163,7 +163,8 @@ def alternate_approach_path(nav, map_id, origin, corpse, *, failed_points=(), lo
     for offset in (0,pi/3,-pi/3,2*pi/3,-2*pi/3,pi):
         angle=heading+offset
         point=project(Vec3(corpse.x+33*cos(angle),corpse.y+33*sin(angle),corpse.z))
-        if point is not None and in_reclaim_ring(point,corpse):
+        if (point is not None and in_reclaim_ring(point,corpse) and
+                not any(point.distance_to(end)<8 for end in excluded_ends)):
             ends.append(point)
     # Try the alternative ring endpoints directly, then explicitly search
     # for a reachable local staging point and a complete onward route.
@@ -198,7 +199,8 @@ def alternate_approach_path(nav, map_id, origin, corpse, *, failed_points=(), lo
                 if not avoids_failed(joined):
                     continue
                 for index,p in enumerate(joined[1:],1):
-                    if p.distance_to(corpse)<=MAX_OFFSET and abs(p.z-corpse.z)<=8:
+                    if (in_reclaim_ring(p,corpse) and
+                            not any(p.distance_to(end)<8 for end in excluded_ends)):
                         try:
                             verified=validate_nav_path(joined[:index+1],origin,p,max_step=9)
                         except LiveControlError:

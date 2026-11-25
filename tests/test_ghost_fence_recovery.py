@@ -66,3 +66,14 @@ def test_partial_routes_never_authorize_ghost_movement():
     nav.find_path.side_effect=lambda _,a,b:[a,a]
     with pytest.raises(LiveControlError,match='No complete alternative'):
         alternate_approach_path(nav,0,origin,corpse)
+
+
+def test_previous_reclaim_endpoint_excluded_on_repeat():
+    origin=Vec3(100,0,0)
+    corpse=Vec3(0,0,0)
+    nav=Mock()
+    nav.nearest_point.side_effect=lambda _,p:p
+    nav.find_path.side_effect=lambda _,a,b:[a,b]
+    previous=Vec3(33,0,0)
+    path=alternate_approach_path(nav,0,origin,corpse,excluded_ends=(previous,))
+    assert path[-1].distance_to(previous)>=8
