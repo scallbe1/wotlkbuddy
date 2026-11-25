@@ -90,3 +90,82 @@ def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,ex
             break
     ranked.sort(key=lambda x:x[0])
     return [(spawn,point) for _,spawn,point in ranked[:limit]]
+
+
+def unsafe_route_encounter(reason):
+    """An ordinary rejected pull is a route-planning event, not a fatal error."""
+    message=str(reason).lower()
+    return ('unsafe encounter:' in message or 'possible pack' in message or
+            'stopping before pulling into group' in message)
+
+
+class EncounterRouteUnavailable(LiveControlError):
+    """No safe route to this particular destination within the retry budget."""
+
+
+def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
+                             max_distance=800.,avoid_radius=20.,
+                             rejected=(),guard=lambda:None,log=lambda _:None):
+    """Find a complete Detour path around recent hostile positions.
+
+    A shortest-path retry is insufficient: explicitly search alternative
+    waypoints around the blocking pack. No unchecked straight-line shortcuts.
+    """
+    def route(a,b):
+        guard()
+        try:
+            raw=nav.find_path(map_id,a,b)
+            if not raw or raw[0].distance_to(a)>3 or raw[-1].distance_to(b)>3 or abs(raw[0].z-a.z)>2.5:
+                return None
+            return validate_nav_path(raw,a,b,max_step=18.,max_distance=max_distance)
+        except (OSError,ValueError,RuntimeError,TimeoutError):
+            return None
+
+    def acceptable(path):
+        if not path or not path_avoids_pack(path,hazards,radius=avoid_radius):
+            return False
+        # Never retry the same failed initial corridor from the same location.
+        if any(path[min(1,len(path)-1)].distance_to(p)<3 for p in rejected):
+            return False
+        return sum(a.distance_to(b) for a,b in zip(path,path[1:]))<=max_distance
+
+    direct=route(origin,destination)
+    if acceptable(direct):
+        return direct
+    local=sorted((h for h in hazards if h.distance_to(origin)<=100),
+                 key=lambda h:h.distance_to(origin))[:3]
+    ranked=[]
+    for h in local:
+        heading=atan2(destination.y-h.y,destination.x-h.x)
+        for radius in (28.,40.,55.):
+            for offset in (pi/2,-pi/2,pi/3,-pi/3,2*pi/3,-2*pi/3,pi):
+                guard()
+                angle=heading+offset
+                desired=Vec3(h.x+radius*cos(angle),h.y+radius*sin(angle),h.z)
+                try:
+                    point=nav.nearest_point(map_id,desired)
+                    if point is None or point.distance_to(desired)>6 or point.distance_to(origin)<5:
+                        continue
+                    first=route(origin,point)
+                    if not acceptable(first):
+                        continue
+                    second=route(point,destination)
+                    if not second:
+                        continue
+                    joined=first+second[1:]
+                    if acceptable(joined):
+                        length=sum(a.distance_to(b) for a,b in zip(joined,joined[1:]))
+                        ranked.append((length,joined,point))
+                        if len(ranked)>=4:
+                            break
+                except (OSError,ValueError,RuntimeError,TimeoutError):
+                    continue
+            if ranked:
+                break
+        if ranked:
+            break
+    if ranked:
+        length,path,point=min(ranked,key=lambda item:item[0])
+        log(f'Pack detour verified via ({point.x:.1f},{point.y:.1f},{point.z:.1f}); {length:.1f}y route')
+        return path
+    return None
