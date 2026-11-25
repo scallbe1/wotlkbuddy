@@ -106,7 +106,8 @@ def visit_npc(
                     distance_status=getattr(driver,'set_navigation_distance',None),
                     progress=log,on_aggro=getattr(driver,'on_aggro',None),
                     on_threat=getattr(driver,'scan_hostiles',None),
-                    waypoint_spacing=18.,continuous_forward=True,threat_check_yards=14.)
+                    waypoint_spacing=18.,continuous_forward=True,
+                    fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
                 reason=result.stopped_reason
                 if reason=='complete':
                     return result
