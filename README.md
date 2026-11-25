@@ -2,7 +2,7 @@
 
 Python-first, experimental questing and character-progression automation for **World of Warcraft: Wrath of the Lich King 3.3.5a (build 12340)**, intended for authorized private-server testing.
 
-**Status:** Active development / pre-alpha. The primary live test character is an Undead Mage. The package metadata currently reports version 0.19.0; the main branch contains substantial development beyond the original v0.19 milestone.
+**Status:** Active development / pre-alpha. The primary live test character is an Undead Mage. Current development version: **0.61.0**.
 
 ## Current capabilities
 
