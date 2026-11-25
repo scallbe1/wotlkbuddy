@@ -203,7 +203,7 @@ class TrainerMultiServiceTests(unittest.TestCase):
     def test_real_keyboard_allowlist_for_indexed_gossip(self):
         driver = KeyboardQuestInput.__new__(KeyboardQuestInput)
         pressed=[]
-        driver._tap=lambda code, shifted=False: pressed.append(code)
+        driver._tap=lambda code, shifted=False, typing=False: pressed.append(code)
         for index in (1,2,32):
             pressed.clear()
             driver.chat(f'/run SelectGossipOption({index})')

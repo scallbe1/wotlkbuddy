@@ -235,7 +235,7 @@ class MerchantTests(unittest.TestCase):
     def test_keyboard_whitelist_exact_merchant_slots(self):
         d=KeyboardQuestInput.__new__(KeyboardQuestInput)
         calls=[]
-        d._tap=lambda code,shifted=False: calls.append(code)
+        d._tap=lambda code,shifted=False, typing=False: calls.append(code)
         for cmd in ('/run UseContainerItem(0,1)',
                     '/run UseContainerItem(4,36)',
                     '/click MerchantFrameCloseButton'):
