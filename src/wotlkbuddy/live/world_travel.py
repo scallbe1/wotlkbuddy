@@ -234,17 +234,15 @@ def follow_world_path(
     if stop_requested() or not keyboard.wow_is_foreground():
         raise LiveControlError('Escape or WoW foreground focus required before movement')
     start_time = now()
-    current, world = first, world0
-    turns = moves = reached = recoveries = strafes = 0
+    from wotlkbuddy.live.travel_state import TravelSessionState
+    state = TravelSessionState(first, world0, waypoints)
     recovery_locations: list[Vec3] = []
     blocked_edges: list[tuple[Vec3,float]] = []
     blocked_waypoints: list[Vec3] = []
     from wotlkbuddy.live.travel_observation import TravelObservationState, observe_travel
-    next_waypoint_index = 1
     observation_state = TravelObservationState(world0.position, now())
     breadcrumbs = [world0.position]
     destination = waypoints[-1]
-    cautious = False
     notify(f'Navigation goal: map {expected_map_id}, XYZ ({destination.x:.2f},{destination.y:.2f},{destination.z:.2f}); '
            f'from ({world0.x:.2f},{world0.y:.2f},{world0.z:.2f})')
 
@@ -263,7 +261,7 @@ def follow_world_path(
             travel_input=travel_input, on_threat=on_threat,
             threat_check_yards=threat_check_yards, now=now,
             continuous_forward=continuous_forward,
-            upcoming_legs=lambda: tuple(waypoints[next_waypoint_index:next_waypoint_index+6]),
+            upcoming_legs=state.upcoming_legs,
             expected_quest_id=expected_quest_id, force_scan=force_scan,
             suppress_scan=suppress_scan, observation=observation)
 
@@ -281,155 +279,113 @@ def follow_world_path(
             travel_input=travel_input, arrival_yards=arrival_yards,
             right_sign=right_sign, turn_rate=turn_rate, sleep=sleep)
 
-    current, world, turns, right_sign, turn_rate = calibrate_turn(
+    state.current, state.world, state.turns, right_sign, turn_rate = calibrate_turn(
         cache=_TURN_CALIBRATIONS, keyboard=keyboard, guid=guid,
-        current=current, world=world, turns=turns, pulse=pulse,
+        current=state.current, world=state.world, turns=state.turns, pulse=pulse,
         checked=checked, notify=notify)
 
     def recover_around_wall(waypoint: Vec3) -> bool:
-        nonlocal current, world, moves, recoveries, strafes
-        from wotlkbuddy.live.travel_sidestep import SidestepState, recover_sidestep
-        state = SidestepState(current, world, moves, recoveries, strafes)
-        try:
-            return recover_sidestep(
-                state, can_traverse=can_traverse, max_recoveries=max_recoveries,
-                recovery_locations=recovery_locations, guard=guard, pulse=pulse,
-                checked=checked, notify=notify)
-        finally:
-            current, world = state.current, state.world
-            moves, recoveries, strafes = state.moves, state.recoveries, state.strafes
+        from wotlkbuddy.live.travel_sidestep import recover_sidestep
+        return recover_sidestep(
+            state, can_traverse=can_traverse, max_recoveries=max_recoveries,
+            recovery_locations=recovery_locations, guard=guard, pulse=pulse,
+            checked=checked, notify=notify)
 
     def backtrack_and_replan(reason: str) -> bool:
-        nonlocal current, world, moves, turns, recoveries, waypoints, cautious, strafes
-        nonlocal next_waypoint_index
-        from wotlkbuddy.live.travel_backtrack import BacktrackState, backtrack_and_replan as recover
-        state = BacktrackState(current, world, moves, turns, recoveries, waypoints,
-                               cautious, strafes, next_waypoint_index)
-
-        def publish():
-            nonlocal current, world, moves, turns, recoveries, waypoints, cautious, strafes
-            nonlocal next_waypoint_index
-            current, world = state.current, state.world
-            moves, turns, recoveries = state.moves, state.turns, state.recoveries
-            waypoints, cautious, strafes = state.waypoints, state.cautious, state.strafes
-            next_waypoint_index = state.next_waypoint_index
-
-        def observe(**kwargs):
-            # checked() uses the outer active route for upcoming threat legs.
-            publish()
-            return checked(**kwargs)
-
-        try:
-            return recover(
-                state, reason, replan_path=replan_path, can_traverse=can_traverse,
-                max_recoveries=max_recoveries, guard=guard, recovery_locations=recovery_locations,
-                blocked_waypoints=blocked_waypoints, blocked_edges=blocked_edges,
-                breadcrumbs=breadcrumbs, notify=notify, right_sign=right_sign,
-                turn_rate=turn_rate, pulse=pulse, sample=sample, checked=observe,
-                destination=destination, arrival_yards=arrival_yards,
-                validate_nav_path=validate_nav_path, route_reuses_collision=route_reuses_collision,
-                alternate_wall_route=alternate_wall_route)
-        finally:
-            publish()
+        from wotlkbuddy.live.travel_backtrack import backtrack_and_replan as recover
+        return recover(
+            state, reason, replan_path=replan_path, can_traverse=can_traverse,
+            max_recoveries=max_recoveries, guard=guard, recovery_locations=recovery_locations,
+            blocked_waypoints=blocked_waypoints, blocked_edges=blocked_edges,
+            breadcrumbs=breadcrumbs, notify=notify, right_sign=right_sign,
+            turn_rate=turn_rate, pulse=pulse, sample=sample, checked=checked,
+            destination=destination, arrival_yards=arrival_yards,
+            validate_nav_path=validate_nav_path, route_reuses_collision=route_reuses_collision,
+            alternate_wall_route=alternate_wall_route)
 
     def recover_collision(reason):
         # A failed route query does not exhaust physical escape options. Try
         # another measured retreat/side before giving up, within one budget.
-        while recoveries<max_recoveries:
+        while state.recoveries<max_recoveries:
             guard()
-            previous=recoveries
+            previous=state.recoveries
             try:
                 return backtrack_and_replan(reason)
             except LiveControlError as exc:
                 if ('Backtracked but fresh Detour route unavailable:' not in str(exc) or
-                        recoveries==previous or recoveries>=max_recoveries):
+                        state.recoveries==previous or state.recoveries>=max_recoveries):
                     raise
                 notify('Wall route search unsuccessful; trying another measured escape direction')
         return False
 
     # HUD input is sent only with movement keys released, and is throttled
     # to avoid slowing every short Detour step. Coordinates stay unchanged.
-    last_hud_position=world.position
+    last_hud_position=state.world.position
     try:
         if distance_status is not None:
             guard()
-            distance_status(destination,world.position)
+            distance_status(destination,state.world.position)
         elif destination_status is not None:
             guard()
             destination_status(destination)
         if on_threat is not None:
-            current, world = checked(force_scan=True)
+            state.current, state.world = checked(force_scan=True)
         if continuous_forward and fast_observe is not None:
             notify('Smooth travel: bounded continuous W with passive position and threat checks')
         index=1
-        while index<len(waypoints):
-            waypoint=waypoints[index]
+        while index<len(state.waypoints):
+            waypoint=state.waypoints[index]
             rerouted=False
-            next_waypoint_index = index
-            notify(f'Action: navigating waypoint {index}/{len(waypoints)-1} XYZ '
+            state.next_waypoint_index = index
+            notify(f'Action: navigating waypoint {index}/{len(state.waypoints)-1} XYZ '
                    f'({waypoint.x:.2f},{waypoint.y:.2f},{waypoint.z:.2f}) toward goal '
                    f'({destination.x:.2f},{destination.y:.2f},{destination.z:.2f}); '
-                   f'{world.position.distance_to(destination):.1f}y away')
+                   f'{state.world.position.distance_to(destination):.1f}y away')
             if (distance_status is not None and
-                    world.position.distance_to(last_hud_position)>=15):
+                    state.world.position.distance_to(last_hud_position)>=15):
                 guard()
-                distance_status(destination,world.position)
-                last_hud_position=world.position
-            from wotlkbuddy.live.travel_waypoint import WaypointState, execute_waypoint
-            leg = WaypointState(current, world, moves, turns)
-
-            def recover_leg(callback, *args):
-                nonlocal current, world, moves, turns
-                current, world, moves, turns = leg.current, leg.world, leg.moves, leg.turns
-                try:
-                    return callback(*args)
-                finally:
-                    leg.current, leg.world, leg.moves, leg.turns = current, world, moves, turns
-
-            try:
-                rerouted = execute_waypoint(
-                    leg, waypoint, index=index, waypoint_count=len(waypoints)-1,
-                    arrival_yards=arrival_yards, guard=guard, turn_rate=turn_rate,
-                    right_sign=right_sign, pulse=pulse, sample=sample, checked=checked,
-                    cautious=cautious, on_threat=on_threat,
-                    continuous_forward=continuous_forward, ghost_only=ghost_only,
-                    fast_observe=fast_observe, smooth_forward=smooth_forward,
-                    recover_collision=lambda reason: recover_leg(recover_collision, reason),
-                    replan_path=replan_path,
-                    recover_around_wall=lambda point: recover_leg(recover_around_wall, point),
-                    breadcrumbs=breadcrumbs)
-            finally:
-                current, world, moves, turns = leg.current, leg.world, leg.moves, leg.turns
+                distance_status(destination,state.world.position)
+                last_hud_position=state.world.position
+            from wotlkbuddy.live.travel_waypoint import execute_waypoint
+            rerouted = execute_waypoint(
+                state, waypoint, index=index, waypoint_count=len(state.waypoints)-1,
+                arrival_yards=arrival_yards, guard=guard, turn_rate=turn_rate,
+                right_sign=right_sign, pulse=pulse, sample=sample, checked=checked,
+                cautious=state.cautious, on_threat=on_threat,
+                continuous_forward=continuous_forward, ghost_only=ghost_only,
+                fast_observe=fast_observe, smooth_forward=smooth_forward,
+                recover_collision=recover_collision, replan_path=replan_path,
+                recover_around_wall=recover_around_wall, breadcrumbs=breadcrumbs)
             if rerouted:
                 index=1
-                reached=0
+                state.reached=0
                 continue
-            if abs(world.z - waypoint.z) > 5:
+            if abs(state.world.z - waypoint.z) > 5:
                 # Include the live-vs-mesh height disagreement so a failed
                 # route can be diagnosed without guessing a different floor.
                 raise LiveControlError(
                     f'Waypoint {index} is on another height/floor: '
-                    f'live z={world.z:.2f}, Detour z={waypoint.z:.2f}, '
-                    f'delta={world.z-waypoint.z:+.2f}y, '
-                    f'XY remaining={_distance_xy(world.position, waypoint):.2f}y')
-            reached += 1
-            if index == len(waypoints)-1 or index % 4 == 0:
-                notify(f'World waypoint {index}/{len(waypoints)-1} reached; '
-                       f'position=({world.x:.2f},{world.y:.2f},{world.z:.2f})')
+                    f'live z={state.world.z:.2f}, Detour z={waypoint.z:.2f}, '
+                    f'delta={state.world.z-waypoint.z:+.2f}y, '
+                    f'XY remaining={_distance_xy(state.world.position, waypoint):.2f}y')
+            state.reached += 1
+            if index == len(state.waypoints)-1 or index % 4 == 0:
+                notify(f'World waypoint {index}/{len(state.waypoints)-1} reached; '
+                       f'position=({state.world.x:.2f},{state.world.y:.2f},{state.world.z:.2f})')
             index+=1
     except LiveControlError as exc:
         # Nothing is retried automatically. Caller may use the reported live
         # position to regenerate a new mesh path on the next invocation.
         notify(f'World navigation stopped: {exc}')
-        return WorldTravelReport(player.name, world.map_id, len(waypoints)-1,
-                                 reached, moves, turns,
+        return WorldTravelReport(player.name, state.world.map_id, len(state.waypoints)-1,
+                                 state.reached, state.moves, state.turns,
                                  (world0.x,world0.y,world0.z),
-                                 (world.x,world.y,world.z),
-                                 str(exc), _distance_xy(world.position, waypoints[-1]),
-                                 recoveries, strafes)
-    return WorldTravelReport(player.name, world.map_id, len(waypoints)-1,
-                             reached, moves, turns,
+                                 (state.world.x,state.world.y,state.world.z),
+                                 str(exc), _distance_xy(state.world.position, state.waypoints[-1]),
+                                 state.recoveries, state.strafes)
+    return WorldTravelReport(player.name, state.world.map_id, len(state.waypoints)-1,
+                             state.reached, state.moves, state.turns,
                              (world0.x,world0.y,world0.z),
-                             (world.x,world.y,world.z),
-                             'complete', _distance_xy(world.position, waypoints[-1]),
-                             recoveries, strafes)
+                             (state.world.x,state.world.y,state.world.z),
+                             'complete', _distance_xy(state.world.position, state.waypoints[-1]),
+                             state.recoveries, state.strafes)
