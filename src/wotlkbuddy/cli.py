@@ -17,6 +17,8 @@ from wotlkbuddy.game.types import GameObject, Unit, Vec3
 from wotlkbuddy.profiles.honorbuddy import read_profile
 from wotlkbuddy.profiles.quest import read_quest_profile
 from wotlkbuddy.quests.model import QuestDefinition, QuestObjectiveRequirement
+from wotlkbuddy.horde.session_delivery import execute_profile_return as _execute_profile_return
+from wotlkbuddy.horde.session_recovery import recover_horde_death as _recover_horde_death
 
 
 def _run_demo(args: argparse.Namespace) -> None:
@@ -200,40 +202,6 @@ def _horde_mage_plan(args: argparse.Namespace) -> None:
     print('This is a plan only. WORLD-XYZ navigation, target interactions, '
           'combat, inventory, trainer, talent UI and loot drivers are not yet wired.',
           file=sys.stderr)
-
-
-def _execute_profile_return(*, profile, quest_id, pid, capture, driver,
-                            nav_dll, python32, spawns_db, max_seconds=450,
-                            progress=None):
-    """Reusable attended Detour delivery for complete profile quests."""
-    from pathlib import Path
-    from wotlkbuddy.horde.return_turnin import return_and_turnin
-    from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
-    from wotlkbuddy.navigation.proxy import NavigationProxy
-    from wotlkbuddy.live.control import LiveControlError
-    dll = Path(nav_dll).expanduser().resolve()
-    python = Path(python32).expanduser().resolve()
-    if not dll.is_file() or not (dll.parent / 'mmaps').is_dir() or not python.is_file():
-        raise ValueError('Return requires Navigation.dll, adjacent mmaps and x86 Python')
-    log = progress or (lambda line: print(line, file=sys.stderr, flush=True))
-    with CreatureSpawnDatabase(resolve_creature_spawns(spawns_db)) as db, \
-            NavigationProxy(python, dll) as nav:
-        result = return_and_turnin(
-            profile=profile, quest_id=quest_id, pid=pid, capture=capture,
-            driver=driver, nav=nav, spawns=db,
-            max_seconds=max_seconds, log=log)
-    print('Quest turn-in:', json.dumps(result.to_dict(), indent=2,
-                                        ensure_ascii=False))
-    # A quest reward may be a new cloth upgrade; verify and equip it now.
-    from wotlkbuddy.horde.gear import equip_mage_upgrades
-    if capture().gear_scan_complete:
-        try:
-            upgraded = equip_mage_upgrades(capture=capture, driver=driver, log=log)
-            if upgraded:
-                print('Equipped upgrades:', list(upgraded))
-        except LiveControlError as exc:
-            log(f'Post-reward gear check stopped: {exc}')
-    return result
 
 
 def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
@@ -878,119 +846,6 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     if _emit_report:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     return report
-
-
-def _recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dict:
-    from wotlkbuddy.horde.death_recovery import recover_corpse
-    from wotlkbuddy.live.lua_corpse_position import resolve_lua_corpse
-    from wotlkbuddy.horde.interaction import KeyboardQuestInput
-    from wotlkbuddy.live.capture import capture_monitor
-    from wotlkbuddy.live.control import LiveControlError
-    from wotlkbuddy.live.world_position import verified_live_position, verified_nearby_creatures
-    from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
-    from wotlkbuddy.horde.defense import defend_against_aggro
-    from wotlkbuddy.horde.sustain import maintain_mage_supplies
-    from wotlkbuddy.horde.resurrection_site import nearby_threats, plan_rest_site
-    from wotlkbuddy.horde.ghost_scout import GhostScout
-    from wotlkbuddy.live.world_travel import follow_world_path
-    from wotlkbuddy.horde.ranged_pull import face_target_in_place
-    from wotlkbuddy.live.world_position import verified_target_position
-    from wotlkbuddy.navigation.proxy import NavigationProxy
-    from pathlib import Path
-    cap = lambda: capture_monitor(args.monitor)
-    try:
-        first = cap()
-    except Exception:
-        if original_error is not None:
-            raise original_error
-        raise
-    if first.truncated:
-        if original_error is not None:
-            raise original_error
-        raise LiveControlError('Recovery requires complete dead-character telemetry')
-    from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error,settle_aggro
-    recovery_pid=getattr(args,'pid',None)
-    if not first.player.dead:
-        if original_error is None or not recoverable_aggro_error(original_error):
-            if original_error is not None:
-                raise original_error
-            raise LiveControlError('Recovery requires complete dead-character telemetry')
-        # The phase may have stopped before the final incoming hit. Keep
-        # supervising a verified live encounter instead of exiting to shell.
-        recovery_driver=KeyboardQuestInput(interact_key=args.interact_key)
-        recovery_driver.native_hud_enabled=not getattr(args,'no_hud',False)
-        # Resolve once from the actual GUID-matched client, even when --pid
-        # was omitted. Every position callback must use the same integer PID.
-        recovery_pid,_=verified_live_position(first,pid=getattr(args,'pid',None))
-        print(f'Aggro recovery: verified WoW PID {recovery_pid}',file=sys.stderr,flush=True)
-        recovery_driver.face_combat_target=lambda state: face_target_in_place(
-            state,capture=cap,driver=recovery_driver,
-            player_position=lambda s:verified_live_position(s,pid=recovery_pid)[1],
-            target_position=lambda s:verified_target_position(s,pid=recovery_pid),
-            log=lambda line:print(line,file=sys.stderr,flush=True))
-        log_recovery=lambda line:print(line,file=sys.stderr,flush=True)
-        log_recovery('Quest phase interrupted by unresolved aggro; keeping control until combat clears or death is verified')
-        first=settle_aggro(initial=first,capture=cap,driver=recovery_driver,
-            defend=lambda state:defend_against_aggro(initial=state,capture=cap,
-                driver=recovery_driver,log=log_recovery),log=log_recovery)
-        if not first.player.dead:
-            log_recovery('Combat cleared alive; refreshing quest and resource state')
-            return {'status':'combat_cleared','character_guid':first.player.guid}
-    print('Verified death; starting corpse recovery',file=sys.stderr,flush=True)
-    if not args.nav_dll or not args.python32:
-        raise ValueError('Corpse recovery needs --nav-dll and --python32')
-    dll = Path(args.nav_dll).expanduser().resolve()
-    py32 = Path(args.python32).expanduser().resolve()
-    if not dll.is_file() or not (dll.parent / 'mmaps').is_dir() or not py32.is_file():
-        raise ValueError('Corpse recovery needs Navigation.dll, mmaps and x86 Python')
-    driver = KeyboardQuestInput(interact_key=args.interact_key)
-    driver.native_hud_enabled = not getattr(args, 'no_hud', False)
-    pid = recovery_pid
-    def sample():
-        nonlocal pid
-        state = cap()
-        pid, pos = verified_live_position(state, pid=pid)
-        return state, pos
-    log = lambda line: print(line, file=sys.stderr, flush=True)
-
-    from wotlkbuddy.horde.recovery_rest import recover_and_buff
-    retreat_hints = []
-
-    def prepare_retreat(state,where,breadcrumbs):
-        retreat_hints.extend(breadcrumbs)
-        path = plan_rest_site(nav,where.map_id,where.position,hazards(state,where.position),
-                             route_hints=retreat_hints)
-        if path:
-            retreat_hints.extend(path)
-            log(f'Pre-reclaim retreat planned: {where.position.distance_to(path[-1]):.1f}y to safer terrain')
-        else:
-            log('No pre-reclaim retreat confirmed; will reassess immediately after resurrection')
-
-    def restore(state):
-        driver.face_combat_target = lambda s: face_target_in_place(
-            s,capture=cap,driver=driver,
-            player_position=lambda s: verified_live_position(s,pid=pid)[1],
-            target_position=lambda s: verified_target_position(s,pid=pid),log=log)
-        return recover_and_buff(initial=state,sample=sample,driver=driver,nav=nav,
-                                read_hazards=hazards,route_hints=retreat_hints,log=log)
-
-    scout = GhostScout(sample=sample,driver=driver,log=log)
-    with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, NavigationProxy(py32, dll) as nav:
-        def hazards(state, corpse):
-            _, where = verified_live_position(state,pid=pid)
-            return verified_nearby_creatures(state,pid=pid,center=corpse,
-                ignored_guids=scout.ignored_guids())
-
-        def spawn_hints(state, corpse):
-            _, where = verified_live_position(state,pid=pid)
-            return tuple(spawn.position for spawn in db.nearby(where.map_id,corpse))
-
-        return recover_corpse(
-            sample=sample, driver=driver, nav=nav,
-            known_corpse=getattr(args, 'corpse_world', None),
-            read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav),
-            read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore,
-            scout_surroundings=scout.passive_survey, prepare_retreat=prepare_retreat, log=log)
 
 
 def _horde_continuous(args: argparse.Namespace) -> dict:
