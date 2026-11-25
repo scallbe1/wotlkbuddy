@@ -45,3 +45,25 @@ def test_blocked_mesh_does_not_invent_shortcut():
             return None
     assert detour_around_encounters(BlockedMesh(),0,Vec3(0,0,0),
         Vec3(100,0,0),(Vec3(35,0,0),)) is None
+
+
+def test_detour_search_propagates_aggro_immediately():
+    import pytest
+    from wotlkbuddy.horde.hunt_routes import RouteCombatInterrupted
+    calls=[]
+    def guard():
+        calls.append(True)
+        if len(calls)==2:
+            raise RouteCombatInterrupted('Aggro/combat detected during encounter detour')
+    with pytest.raises(RouteCombatInterrupted):
+        detour_around_encounters(OpenMesh(),0,Vec3(0,0,0),
+            Vec3(100,0,0),(Vec3(35,0,0),),guard=guard)
+    assert len(calls)==2
+
+
+def test_detour_wait_error_enters_live_aggro_recovery():
+    from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error
+    from wotlkbuddy.live.control import LiveControlError
+    assert recoverable_aggro_error(LiveControlError(
+        'Aggro/combat detected during encounter detour wait'))
+    assert not recoverable_aggro_error(LiveControlError('Escape pressed or WoW lost focus'))
