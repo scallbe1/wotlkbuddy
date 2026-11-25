@@ -241,62 +241,12 @@ def hunt_kill_objectives(
     staging_visited=[]
     required_waits=0
 
-    def guard(s: ClientTelemetry) -> None:
-        if (driver.emergency_stop_requested() or not driver.wow_is_foreground()):
-            raise LiveControlError('Escape pressed or WoW no longer has focus')
-        if now() - started > max_seconds:
-            raise LiveControlError('Quest combat time budget exhausted')
-        if (s.truncated or s.player.guid != guid or s.player.dead or
-                s.resources is None or s.combat_target is None or s.mage_buffs is None):
-            raise LiveControlError('Character/telemetry changed or died during combat')
-        # Do not abandon an active fight at arbitrary HP. Rest gates new pulls.
-
-    def fresh(before: ClientTelemetry, delay: float = 0.15) -> ClientTelemetry:
-        guard(before)
-        sleep(delay)
-        # Accept only a newer checksum-validated frame, including older addons.
-        for _ in range(10):
-            current = capture()
-            guard(current)
-            if current.sequence != before.sequence:
-                return current
-            sleep(.08)
-        raise LiveControlError('Telemetry stream stalled after combat input')
-
-    def qlog(s: ClientTelemetry) -> QuestRecord:
-        q = next((q for q in s.quests if q.quest_id == quest_id), None)
-        if q is None:
-            raise LiveControlError('Hunting quest disappeared from journal')
-        return q
-
-    def rest(s: ClientTelemetry, full=False) -> ClientTelemetry:
-        if s.player.in_combat:
-            return s
-        # Conjure/use only verified supply IDs and exact observed bag slots.
-        # Older addon versions fall back to natural regeneration below.
-        from wotlkbuddy.horde.sustain import maintain_mage_supplies
-        s = maintain_mage_supplies(
-            capture=capture, driver=driver, sleep=sleep, log=log,
-            health_goal=.98 if full else .70,mana_goal=.95 if full else .45)
-        health_goal,mana_goal=(.98,.95) if full else (.70,.45)
-        # Low-level Mage may not yet have Conjure Food trained.
-        if s.resources is None:
-            return s
-        until = min(started+max_seconds, now()+40)
-        while not s.player.in_combat and now() < until and (s.player.health/s.player.max_health < health_goal or
-                                 s.resources.mana/max(1,s.resources.max_mana) < mana_goal):
-            log('Resting for natural health/mana regeneration')
-            s = fresh(s, 3)
-        if s.player.in_combat:
-            return s
-        if s.player.health/s.player.max_health < .70 or \
-                s.resources.mana/max(1,s.resources.max_mana) < .45:
-            raise LiveControlError('Health/mana did not recover within 40 seconds')
-        return s
-
-    def buffs(s: ClientTelemetry) -> ClientTelemetry:
-        from wotlkbuddy.horde.recovery_rest import maintain_travel_buffs
-        return maintain_travel_buffs(state=s,capture=capture,driver=driver,log=log,sleep=sleep)
+    from wotlkbuddy.horde.hunt_telemetry import HuntTelemetry
+    telemetry = HuntTelemetry(
+        capture=capture, driver=driver, guid=guid, quest_id=quest_id,
+        started=started, max_seconds=max_seconds, now=now, sleep=sleep, log=log)
+    guard, fresh, qlog = telemetry.guard, telemetry.fresh, telemetry.qlog
+    rest, buffs = telemetry.rest, telemetry.buffs
 
     def navigate(s: ClientTelemetry, dest: Vec3, *, camp_transit=False) -> ClientTelemetry:
         """Follow Detour; retry a height mismatch once from measured live XYZ.
