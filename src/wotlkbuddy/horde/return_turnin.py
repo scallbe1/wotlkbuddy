@@ -185,6 +185,7 @@ def return_and_turnin(
 
         def execute_delivery():
             status=getattr(driver,'set_navigation_destination',None)
+            distance=getattr(driver,'set_navigation_distance',None)
             pending=list(legs)
             index=0
             height_failures=[]
@@ -217,6 +218,7 @@ def return_and_turnin(
                     can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
                     replan_path=lambda a,b:nav.find_path(world.map_id,a,b),
                     destination_status=(lambda _:status(destination)) if callable(status) else None,
+                    distance_status=(lambda _,position:distance(destination,position)) if callable(distance) else None,
                     progress=log,on_aggro=getattr(driver,'on_aggro',None),
                     on_threat=getattr(driver,'scan_hostiles',None),
                     waypoint_spacing=18.,continuous_forward=True,
