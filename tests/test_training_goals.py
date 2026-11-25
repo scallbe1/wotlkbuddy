@@ -25,8 +25,10 @@ def test_level6_vs_5_3_3_pack_uses_combined_strength():
     assert not assess_encounter(p,r,Vec3(0,0,0),a,(a,b,c),(1667,)).allowed
 
 
-def test_empty_training_record_refreshes_after_significant_cash_gain():
+def test_empty_training_record_does_not_refresh_after_cash_gain():
     g=TrainingGoal(6,61,8,(),'Isabella',2124,0,(1,2,3),1)
     assert not g.due(6,61,8)
     assert not g.due(6,155,8)
-    assert g.due(6,235,5)
+    assert not g.due(6,235,5)
+    assert g.due(7,235,5)
+    assert not TrainingGoal(7,298,4,(),'Cain Firesong',2128,0,(1,2,3),1).due(7,400,4)

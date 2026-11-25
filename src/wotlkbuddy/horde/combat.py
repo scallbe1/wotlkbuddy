@@ -16,7 +16,7 @@ from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.interaction import navigate_with_status
 from wotlkbuddy.horde.profile import HordeProfile, QuestSpec
 from wotlkbuddy.horde.worlddata import (
-    CreatureSpawnDatabase, Spawn, nearest_objective_spawns)
+    CreatureSpawnDatabase, Spawn, nearest_objective_spawns, distant_objective_spawns)
 from wotlkbuddy.live.codec import ClientTelemetry, QuestRecord
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_position import (
@@ -297,7 +297,7 @@ def hunt_kill_objectives(
         from wotlkbuddy.horde.recovery_rest import maintain_travel_buffs
         return maintain_travel_buffs(state=s,capture=capture,driver=driver,log=log,sleep=sleep)
 
-    def navigate(s: ClientTelemetry, dest: Vec3) -> ClientTelemetry:
+    def navigate(s: ClientTelemetry, dest: Vec3, *, camp_transit=False) -> ClientTelemetry:
         """Follow Detour; retry a height mismatch once from measured live XYZ.
 
         A route that reaches an XY waypoint on the wrong floor is invalid.
@@ -319,7 +319,16 @@ def hunt_kill_objectives(
                 return s
             path = nav.find_path(world.map_id, world.position, dest)
             legs = validate_nav_path(
-                path, world.position, dest, max_step=18.0)
+                path, world.position, dest, max_step=18.0,
+                max_distance=6000 if camp_transit else 800)
+            if camp_transit:
+                from wotlkbuddy.horde.return_turnin import delivery_legs
+                segments=delivery_legs(legs)
+                if not segments:
+                    raise LiveControlError('No complete verified route to distant quest camp')
+                legs=segments[0]
+                log(f'Distant camp transit: first of {len(segments)} validated segments; '
+                    f'final camp XYZ ({dest.x:.2f},{dest.y:.2f},{dest.z:.2f})')
             log(f'Detour approaching target location via {len(legs)-1} longer legs'
                 + (f' (height replan {height_replans}/1)'
                    if height_replans else ''))
@@ -1199,7 +1208,7 @@ def hunt_kill_objectives(
                     staging = Vec3(corpse_xyz.x+dx/d*12,
                                    corpse_xyz.y+dy/d*12, corpse_xyz.z)
                     try:
-                        s = navigate(s, staging)
+                        s = navigate(s, staging, camp_transit=remote_camp)
                     except LiveControlError as exc:
                         if not recoverable_hunt_failure(exc):
                             raise
@@ -1378,6 +1387,16 @@ def hunt_kill_objectives(
             if all(spawn.position.distance_to(blocked)>5.0
                    for blocked in unhittable_positions)]
         reference_only = False
+        remote_camp = False
+        if not nearby and spec.hotspots:
+            for source_entry in allowed_sources:
+                nearby.extend(distant_objective_spawns(spawns,entry=source_entry,
+                    map_id=world.map_id,origin=world.position,hotspots=spec.hotspots))
+            nearby=[p for p in nearby if all(p.position.distance_to(b)>5 for b in unhittable_positions)]
+            if nearby:
+                remote_camp=True
+                nearest=min(p.position.distance_to(world.position) for p in nearby)
+                log(f'Local scan empty; XML hotspot and same-map spawn DB identify distant quest camp {nearest:.1f}y away')
         if not nearby and reference_search_points:
             # The public Classic reference is a *camp search waypoint*,
             # not a verified NPC spawn. Route there using Detour only when
@@ -1419,6 +1438,16 @@ def hunt_kill_objectives(
                 log('No eligible reference search area on this map '
                     '(max 600y from player, within 100y of XML hotspot); '
                     + (', '.join(offsets) if offsets else 'no matching NPC entry'))
+        if not nearby and spec.hotspots and not collect_items:
+            # Explicit XML search areas are not creature spawn proof. Use
+            # them only as navigation targets, then require the live mob ID.
+            nearby=[Spawn(expected,world.map_id,h.x,h.y,h.z) for h in spec.hotspots
+                if 4<world.position.distance_to(h)<=4000 and
+                all(h.distance_to(b)>5 for b in unhittable_positions)]
+            if nearby:
+                remote_camp=True
+                reference_only=True
+                log('Exact spawn not found; using explicit XML objective hotspots as search locations only')
         nearby.sort(key=lambda p: p.position.distance_to(world.position))
         if not nearby and refresh_rounds<2:
             refresh_rounds+=1
@@ -1455,7 +1484,8 @@ def hunt_kill_objectives(
         if d < 0.1:
             recently_visited[key]=2
             continue
-        staging = Vec3(goal.x+dx/d*10,goal.y+dy/d*10,goal.z)
+        staging = (goal.position if reference_only and remote_camp else
+                   Vec3(goal.x+dx/d*10,goal.y+dy/d*10,goal.z))
         hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if now()-t<90]
         if hazards or route_replans:
             alternatives=alternate_hunt_routes(nav,world.map_id,world.position,nearby,hazards,recently_visited,
@@ -1528,6 +1558,14 @@ def hunt_kill_objectives(
             s = clear_remaining_aggro(s)
             continue
         s=drain_travel_corpses(s)
+        if remote_camp:
+            _,arrived=world_position(s)
+            if arrived.position.distance_to(staging)>8:
+                # The first verified segment is not arrival at a camp.
+                # Re-evaluate live threats and remaining route on next pass.
+                recently_visited.pop(key,None)
+                log(f'Continuing toward quest camp; {arrived.position.distance_to(staging):.1f}y remain')
+                continue
         if reference_only:
             log(f'At source-labeled search area for creature {goal.entry}; '
                 'looking for live NPC by exact entry/GUID, '
