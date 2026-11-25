@@ -240,7 +240,7 @@ def scan_and_clear_hostiles(
         # Only require combat mana if there is a detected red mob ahead.
         raise LiveControlError('Mage lacks minimum mana to clear hostile travel path')
     # Prefer a ranged opening, not the nearest melee-range enemy.
-    candidates.sort(key=(lambda row: (abs(row[0]-32),row[0])) if awareness is not None else None)
+    candidates.sort(key=(lambda row: (0,row[0]) if row[0]<=20 else (1,abs(row[0]-32))) if awareness is not None else None)
     distance, chosen_guid, chosen_entry=candidates[0]
     # Reacquire the exact GUID after cycling: never select by ambiguous name.
     if state.player.target_guid!=chosen_guid:
