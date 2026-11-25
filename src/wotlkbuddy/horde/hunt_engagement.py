@@ -98,7 +98,7 @@ def prepare_engagement(s, expected, *, routes, allowed_sources, unhittable_guids
                         s=fresh(s)
                     return s, expected, corpse_xyz, 'retry'
                 if (s.player.target_guid!=selected_guid or not s.combat_target or
-                        s.combat_targenot policy.in_range(s)):
+                        not policy.in_range(s)):
                     log('Target moved during encounter survey; reacquiring')
                     return s, expected, corpse_xyz, 'retry'
             return s, expected, corpse_xyz, 'attack'
