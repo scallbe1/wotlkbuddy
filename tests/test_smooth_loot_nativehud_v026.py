@@ -110,7 +110,7 @@ class SmootherMovementLootTests(unittest.TestCase):
     def test_fixed_native_goal_and_phase_slash_commands_only(self):
         d=KeyboardQuestInput.__new__(KeyboardQuestInput)
         pressed=[]
-        d._tap=lambda code, shifted=False: pressed.append(code)
+        d._tap=lambda code, shifted=False, typing=False: pressed.append(code)
         for cmd in ('/wbtgoal 3901','/wbtgoal 0',
                     '/wbtphase hunt','/wbtphase turnin','/wbthud hide'):
             pressed.clear()

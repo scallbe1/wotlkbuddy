@@ -53,7 +53,7 @@ class GoalActionHudTests(unittest.TestCase):
     def test_only_allowlisted_trainer_close_command_is_sent(self):
         driver = KeyboardQuestInput.__new__(KeyboardQuestInput)
         pressed = []
-        driver._tap = lambda code, shifted=False: pressed.append(code)
+        driver._tap = lambda code, shifted=False, typing=False: pressed.append(code)
         driver.chat('/click ClassTrainerFrameCloseButton')
         self.assertGreater(len(pressed), 2)
         pressed.clear()

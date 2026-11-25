@@ -64,7 +64,7 @@ class KeyboardRewardAllowlistTests(unittest.TestCase):
     def setUp(self):
         self.driver = KeyboardQuestInput.__new__(KeyboardQuestInput)
         self.taps = []
-        self.driver._tap = lambda code, *, shifted=False: self.taps.append(
+        self.driver._tap = lambda code, *, shifted=False, typing=False: self.taps.append(
             (code, shifted))
 
     def test_permits_selected_reward_indices_including_old_zero(self):

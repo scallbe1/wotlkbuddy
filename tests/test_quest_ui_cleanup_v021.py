@@ -224,7 +224,7 @@ class QuestUiCleanupTests(unittest.TestCase):
     def test_keyboard_allows_goodbye_but_rejects_arbitrary_lua(self):
         d = KeyboardQuestInput.__new__(KeyboardQuestInput)
         pressed = []
-        d._tap = lambda code, shifted=False: pressed.append(code)
+        d._tap = lambda code, shifted=False, typing=False: pressed.append(code)
         d.chat('/run CloseGossip()')
         self.assertGreater(len(pressed), 3)
         pressed.clear()
