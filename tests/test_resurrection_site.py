@@ -16,7 +16,7 @@ def test_selects_reachable_offset_away_from_hostile_spawns():
         assert acceptable_site(point,corpse,hazards)
         assert 18<=point.distance_to(corpse)<=37
         assert len(nearby_threats(point,hazards))<=1
-        assert path[-1]==point
+        assert path[-1].distance_to(point) <= 1e-9  # interpolation roundoff only
 
 
 def test_no_safe_navmesh_site_does_not_fall_back_to_corpse():
