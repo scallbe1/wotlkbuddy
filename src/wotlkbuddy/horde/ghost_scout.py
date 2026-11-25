@@ -24,6 +24,21 @@ class GhostScout:
         return frozenset(g for g,(reaction,seen) in self.reactions.items()
                          if reaction>=4 and self.now()-seen<=90)
 
+    def passive_survey(self):
+        """Retain only exact observed reactions; do not turn or target."""
+        state,_=self.sample()
+        if (state.truncated or not state.player.dead or not state.death_state
+                or not state.death_state.ghost or self.driver.emergency_stop_requested()
+                or not self.driver.wow_is_foreground()):
+            raise LiveControlError('Passive ghost survey interrupted')
+        target=state.combat_target
+        tg=state.player.target_guid
+        if (tg and target and target.entry_id>0 and not target.dead
+                and creature_entry_from_guid(tg)==target.entry_id
+                and target.reaction is not None and 1<=target.reaction<=8):
+            self.reactions[parse_unit_guid(tg)]=(target.reaction,self.now())
+        self.log('Passive ghost survey: object positions retained; 0 scan Tabs')
+
     def survey(self):
         state, origin=self.sample()
         guid=state.player.guid
