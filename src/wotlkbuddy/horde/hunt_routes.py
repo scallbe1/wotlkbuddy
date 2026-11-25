@@ -119,12 +119,14 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
         guard()
         try:
             raw=nav.find_path(map_id,a,b)
+        except (OSError,ValueError,RuntimeError,TimeoutError):
             guard()
+            return None
+        guard()
+        try:
             if not raw or raw[0].distance_to(a)>3 or raw[-1].distance_to(b)>3 or abs(raw[0].z-a.z)>2.5:
                 return None
             return validate_nav_path(raw,a,b,max_step=18.,max_distance=max_distance)
-        except LiveControlError:
-            raise
         except (OSError,ValueError,RuntimeError,TimeoutError):
             return None
 
