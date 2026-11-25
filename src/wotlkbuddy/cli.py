@@ -285,15 +285,9 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         driver.chat(f'/wbtphase {phase}')
 
     report = {}
-    vendor_sales = []
-
-    def serialize_vendor_sale(sale):
-        if sale is None:
-            return None
-        result = asdict(sale)
-        vendor_sales.append(result)
-        report['vendor_sales'] = vendor_sales
-        return result
+    from wotlkbuddy.horde.session_inventory import SessionInventory, bind_encounter_loot
+    inventory = SessionInventory(report)
+    serialize_vendor_sale = inventory.record_sale
 
     if args.only in ('all', 'gear'):
         hud.set(goal='Equip better Mage armor', action='Checking bags and equipment')
@@ -334,21 +328,8 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                     raise LiveControlError('WoW PID changed between NPC actions')
                 return state, coords
 
-            from wotlkbuddy.horde.encounter_loot import loot_encounter
-            from wotlkbuddy.live.world_position import observe_target_position
-            from wotlkbuddy.game.win32 import ProcessMemory
-            def corpse_position(state, corpse_guid):
-                with ProcessMemory(pid,writable=False) as memory:
-                    return observe_target_position(memory,player_guid=state.player.guid,target_guid=corpse_guid)
-            from wotlkbuddy.horde.bags import equip_bag_upgrades
-            def drain_and_equip(state):
-                state=loot_encounter(initial=state,sample=location,driver=driver,nav=nav,
-                    corpse_position=corpse_position,log=log)
-                if not state.player.in_combat and state.bag_candidates:
-                    equip_bag_upgrades(capture=cap,driver=driver,log=log)
-                    state=cap()
-                return state
-            driver.drain_encounter_loot=drain_and_equip
+            bind_encounter_loot(
+                cap=cap, location=location, driver=driver, nav=nav, pid=pid, log=log)
             if needs_recovery:
                 from wotlkbuddy.horde.recovery_rest import recover_and_buff
                 from wotlkbuddy.live.world_position import verified_nearby_creatures
@@ -356,29 +337,13 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                 recover_and_buff(initial=cap(),sample=location,driver=driver,nav=nav,
                     read_hazards=lambda s,center: verified_nearby_creatures(s,pid=pid,center=center),log=log)
 
-            # Equip newly looted bags before evaluating inventory pressure.
-            bag_upgrades=equip_bag_upgrades(capture=cap,driver=driver,log=log)
-            if bag_upgrades:
-                report['equipped_bag_ids']=bag_upgrades
-            # Reconcile bag upgrades on every objective phase, including
-            # restart after a previously successful quest reward.
-            if args.only in ('objectives','collect','objects','turnin','vendor','train','quests') and cap().gear_scan_complete:
-                upgraded=equip_mage_upgrades(capture=cap,driver=driver,log=log)
-                if upgraded:
-                    report['equipped_item_ids']=upgraded
+            inventory.reconcile_upgrades(args.only, cap=cap, driver=driver, log=log)
+
             def ensure_reward_bag_space():
-                state, _ = location()
-                minimum = max(2, quest_profile.min_free_bag_slots + 1)
-                if state.resources.free_bag_slots >= minimum:
-                    return None
-                hud.set(goal='Free bag space for quest rewards',
-                        action='Finding safe non-quest items to sell')
-                set_native_status('vendor')
-                sold = free_bag_space(
-                    profile=quest_profile, profiles_root=profiles_root,
-                    pid=pid, capture=cap, driver=driver, nav=nav, spawns=db,
-                    min_free_slots=minimum, log=log)
-                return serialize_vendor_sale(sold)
+                return inventory.ensure_reward_space(
+                    quest_profile=quest_profile, profiles_root=profiles_root,
+                    pid=pid, cap=cap, driver=driver, nav=nav, db=db,
+                    location=location, hud=hud, set_native_status=set_native_status, log=log)
 
             # A previous run may have completed a reward and left the next
             # detail open. Resume it before vendor movement or quest hunting.
