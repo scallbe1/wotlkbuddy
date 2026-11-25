@@ -8,6 +8,7 @@ return function()
     local hudTravelKind,hudTravelName='',''
     local hudQuestName='The Scarlet Crusade'
     local statusFrame={Show=function() end}
+    local destinationText={SetText=function() end}
     SlashCmdList={}
 ]] .. code .. [[
     return function(questName)

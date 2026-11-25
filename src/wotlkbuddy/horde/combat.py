@@ -347,6 +347,7 @@ def hunt_kill_objectives(
                             can_traverse=lambda a,b: nav.segment_clear(world.map_id,a,b),
                             replan_path=lambda a,b:nav.find_path(world.map_id,a,b),
             destination_status=getattr(driver,'set_navigation_destination',None),
+                    distance_status=getattr(driver,'set_navigation_distance',None),
                             progress=log, on_aggro=getattr(driver, 'on_aggro', None),
                             on_threat=getattr(driver, 'scan_hostiles', None),
                             waypoint_spacing=18.0, continuous_forward=True,

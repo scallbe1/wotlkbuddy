@@ -25,7 +25,22 @@ def test_verified_native_bag_equip():
     calls=[]
     d=SimpleNamespace(chat=calls.append,wow_is_foreground=lambda:True,emergency_stop_requested=lambda:False)
     assert equip_bag_upgrades(capture=lambda:next(samples),driver=d,sleep=lambda _:None)==(5571,)
-    assert calls==['/run EquipItemByName(5571,20)']
+    assert calls==['/wbtbag 0 5 5571 1 0']
+
+def test_duplicate_bags_can_be_selected_by_exact_slot():
+    s=replace(state(),bag_candidates=((0,5,5571,6),(0,6,5571,6)))
+    choice=best_bag_upgrade(s)
+    assert choice[0]==0 and choice[1] in (5,6) and choice[2:]==(5571,6,1,0)
+
+def test_bag_confirmation_uses_equipped_identity_and_capacity_even_if_free_count_lags():
+    from types import SimpleNamespace
+    s=state()
+    after=replace(s,sequence=3,bag_slots=((1,5571,6,0),*s.bag_slots[1:]),bag_candidates=())
+    samples=iter([s,replace(s,sequence=2),after])
+    calls=[]
+    d=SimpleNamespace(chat=calls.append,wow_is_foreground=lambda:True,emergency_stop_requested=lambda:False)
+    assert equip_bag_upgrades(capture=lambda:next(samples),driver=d,sleep=lambda _:None)==(5571,)
+    assert calls==['/wbtbag 0 5 5571 1 0']
 
 def test_bag_payload_complete_and_old_addon_compatible():
     p=b'P\tAarr\t0x000000000000025F\t7\t60\t60\t0\t0\t.2\t.3\t2\t12\tBrill\t\t\n'
