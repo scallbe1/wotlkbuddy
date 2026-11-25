@@ -18,6 +18,8 @@ from wotlkbuddy.live.world_travel import validate_nav_path, follow_world_path
 from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 from wotlkbuddy.horde.return_turnin import encounter_route_failure, height_route_failure
+from wotlkbuddy.horde.hunt_routes import (unsafe_route_encounter, detour_around_encounters,
+                                         EncounterRouteUnavailable)
 
 
 def visit_npc(
@@ -91,6 +93,7 @@ def visit_npc(
             deadline=now()+450
             encounter_replans=0
             height_failures=[]
+            rejected=[]
             while True:
                 remaining=deadline-now()
                 if remaining<15:
@@ -111,7 +114,8 @@ def visit_npc(
                 reason=result.stopped_reason
                 if reason=='complete':
                     return result
-                encounter=encounter_route_failure(reason)
+                blocked=unsafe_route_encounter(reason)
+                encounter=blocked or encounter_route_failure(reason)
                 if not encounter and not height_route_failure(reason):
                     raise LiveControlError(f'NPC visit to {npc_name} stopped: {reason}')
                 state,measured=sample()
@@ -121,7 +125,7 @@ def visit_npc(
                 if encounter:
                     encounter_replans+=1
                     if encounter_replans>12:
-                        raise LiveControlError(f'NPC visit to {npc_name} exhausted encounter replan budget')
+                        raise EncounterRouteUnavailable(f'NPC visit to {npc_name} exhausted encounter replan budget: {reason}')
                     log(f'Encounter displacement recovery {encounter_replans}/12; retaining NPC {npc_name}')
                 else:
                     if len(height_failures)>=3 or any(measured.position.distance_to(pos)<8 for pos in height_failures):
@@ -131,6 +135,23 @@ def visit_npc(
                     return result  # final exact arrival and identity guard below
                 log(f'Replanning NPC route from actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}) '
                     f'to {npc_name} ({dest.x:.2f},{dest.y:.2f},{dest.z:.2f})')
+                if blocked:
+                    if len(route)>1:
+                        rejected.append(route[1])
+                    def guard_retry():
+                        if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+                            raise LiveControlError('Escape pressed or WoW lost focus during encounter detour')
+                        if now()>=deadline-15:
+                            raise EncounterRouteUnavailable(f'NPC visit to {npc_name} exhausted detour time')
+                    hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if monotonic()-t<90]
+                    if not hazards:
+                        raise EncounterRouteUnavailable(f'NPC visit to {npc_name}: blocking encounter has no verified positions')
+                    raw=detour_around_encounters(nav,world.map_id,measured.position,dest,hazards,
+                                                rejected=rejected,guard=guard_retry,log=log)
+                    if raw is None:
+                        raise EncounterRouteUnavailable(f'NPC visit to {npc_name}: no safe detour around observed pack')
+                    route=raw
+                    continue
                 raw=nav.find_path(world.map_id,measured.position,dest)
                 if not raw or abs(raw[0].z-measured.z)>2.5:
                     raise LiveControlError('NPC replan does not start on measured floor')
