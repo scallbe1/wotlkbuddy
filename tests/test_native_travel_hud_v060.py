@@ -133,7 +133,11 @@ def test_controller_uses_real_destination_status_only_during_detour():
             return
         pytest.fail(f'No navigation status wrapper for {kind}: {target}')
 
-    assert_navigation_wrapper(combat, 'enemies')
+    hunt_navigation=code('src/wotlkbuddy/horde/hunt_navigation.py')
+    assert_navigation_wrapper(hunt_navigation, 'enemies')
+    # The hunt executor must delegate to the service that owns the HUD wrapper.
+    assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+               and node.func.id == 'navigate_hunt' for node in ast.walk(ast.parse(combat)))
     assert_navigation_wrapper(npc, 'npc', 'npc_name')
     assert_navigation_wrapper(turn, 'npc', 'step.npc_name')
     addon=code('addons/WotLKBuddyTelemetry/WotLKBuddyTelemetry.lua')
