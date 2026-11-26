@@ -96,6 +96,8 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
             if name=='Polymorph':
                 log(f'Hotbar: Polymorph not confirmed learned: {state.spellbook_diagnostic}')
             continue
+        if name=='Polymorph':
+            driver.verified_polymorph_id=probe.spell_id
         if existing is not None:
             if existing[2]==probe.spell_id or existing not in state.visible_hotbar:
                 continue
@@ -115,6 +117,8 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
             (empty,'spell',probe.spell_id,name) in s.visible_hotbar)
         if after is None:
             log(f'Placement of {name} not verified on visible button {empty}; no retry')
+            if name=='Polymorph':
+                log('Polymorph learned and verified; enabling exact-target control fallback for this phase')
             return tuple(changed)
         log(f'Hotbar: assigned {name} to button {empty}')
         changed.append('added '+name)
