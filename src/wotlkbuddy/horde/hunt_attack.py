@@ -24,7 +24,13 @@ def quest_credit_advanced(snapshot: ClientTelemetry, *, previous_credit, objecti
 def recover_encounter(snapshot: ClientTelemetry, *, collect_items, target_guid,
                       expected, driver, fresh, clear_remaining_aggro,
                       credit_advanced, record_kill, log) -> ClientTelemetry:
-    snapshot = clear_remaining_aggro(snapshot)
+    driver.engaged_target_guid=target_guid
+    driver.engaged_target_entry=expected
+    try:
+        snapshot = clear_remaining_aggro(snapshot)
+    finally:
+        driver.engaged_target_guid=None
+        driver.engaged_target_entry=None
     if collect_items:
         # Defense may have changed the selection several times.
         # Only exact corpse identity can prove the original kill.

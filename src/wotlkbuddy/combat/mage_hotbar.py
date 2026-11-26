@@ -3,7 +3,7 @@ from time import sleep as real_sleep
 from wotlkbuddy.live.control import LiveControlError
 
 MAGE_ACTIONS=('Fireball','Frostbolt','Fire Blast','Arcane Intellect',
-              'Frost Armor','Conjure Food','Conjure Water')
+              'Frost Armor','Conjure Food','Conjure Water','Polymorph','Frost Nova')
 
 
 def cleanup_plan(rows,bound):
