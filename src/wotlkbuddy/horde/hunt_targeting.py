@@ -6,7 +6,7 @@ from wotlkbuddy.live.codec import ClientTelemetry
 
 def acquire_hunt_target(s: ClientTelemetry, *, driver, spec, allowed_sources,
                         unhittable_guids, force_spawn_search, world_position,
-                        fresh, log, creature_entry_from_guid) -> ClientTelemetry:
+                        fresh, log, creature_entry_from_guid, terrain=None) -> ClientTelemetry:
     """Preserve the object-awareness and bounded legacy targeting policies."""
     # Find a live target already on screen first. If none can be selected,
     # navigate near a verified nearby spawn constrained to profile hotspots.
@@ -39,6 +39,8 @@ def acquire_hunt_target(s: ClientTelemetry, *, driver, spec, allowed_sources,
                     log(f'Object-selected quest creature {mob.entry} {mob.guid}, '
                         f'{mob.position.distance_to(where.position):.1f}y, height {mob.position.z-where.z:+.1f}y')
                     break
+            if terrain is not None and not s.player.in_combat:
+                terrain.scan(where,failed=not selected and any(m.entry in allowed_sources and m.guid not in unhittable_guids for m in rows))
             if not selected and not s.player.in_combat and s.player.target_guid:
                 driver.chat('/cleartarget')
                 s=fresh(s)
