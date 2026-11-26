@@ -33,9 +33,12 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
     first=capture()
     guid=first.player.guid
     def check(s):
-        if (s.truncated or s.player.guid!=guid or s.player.dead or s.player.in_combat or
+        if (s.truncated or s.player.guid!=guid or
                 driver.emergency_stop_requested() or not driver.wow_is_foreground()):
-            raise LiveControlError('Mage hotbar maintenance interrupted')
+            raise LiveControlError('Mage hotbar maintenance interrupted by identity, telemetry, Escape or focus')
+        if s.player.dead or s.player.in_combat:
+            raise LiveControlError('Mage hotbar maintenance interrupted by verified death' if s.player.dead else
+                                   'Mage hotbar maintenance interrupted by combat')
     def full(s):
         return s.actionbar_page==1 and {r.button for r in s.raw_action_slots if r.view=='base'}==set(range(1,11))
     def fresh(before,pred,attempts=12):
@@ -98,6 +101,9 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
             continue
         if name=='Polymorph':
             driver.verified_polymorph_id=probe.spell_id
+            learned=getattr(driver,'learned_control',None)
+            if isinstance(learned,dict):
+                learned['Polymorph']=probe.spell_id
         if existing is not None:
             if existing[2]==probe.spell_id or existing not in state.visible_hotbar:
                 continue
