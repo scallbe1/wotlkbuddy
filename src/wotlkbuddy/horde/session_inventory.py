@@ -67,4 +67,9 @@ def bind_encounter_loot(*, cap, location, driver, nav, pid, log):
             state = cap()
         return state
 
+    def loot_nearby(state):
+        return loot_encounter(initial=state, sample=location, driver=driver, nav=nav,
+                              corpse_position=corpse_position, log=log, nearby_only=True)
+
+    driver.loot_nearby_corpses = loot_nearby
     driver.drain_encounter_loot = drain_and_equip

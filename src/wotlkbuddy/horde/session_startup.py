@@ -31,24 +31,17 @@ def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[st
     driver.native_hud_enabled = not args.no_hud
     from wotlkbuddy.horde.defense import defend_against_aggro
     def resolve_aggro(snapshot):
-        from wotlkbuddy.horde.sustain import maintain_mage_supplies
-        state = defend_against_aggro(initial=snapshot, capture=cap, driver=driver, log=log)
+        from wotlkbuddy.horde.post_encounter import finish_encounter
+        from wotlkbuddy.horde.sustain import recover_after_encounter
+        def defend(current):
+            return defend_against_aggro(initial=current, capture=cap, driver=driver, log=log)
+        state = defend(snapshot)
         if state.player.level>snapshot.player.level:
             log(f'Level gained in combat: {snapshot.player.level} -> {state.player.level}; trainer priority will be refreshed on next phase')
-        from wotlkbuddy.horde.sustain import recover_after_encounter
         def recover(current):
             return recover_after_encounter(initial=current,capture=cap,driver=driver,
-                defend=lambda s:defend_against_aggro(initial=s,capture=cap,driver=driver,log=log),
-                log=log)
-        # Restore resources before detouring to corpses.
-        state=recover(state)
-        drain=getattr(driver,'drain_encounter_loot',None)
-        if callable(drain) and not getattr(driver,'looting_encounter',False):
-            state=drain(state)
-            if state.player.in_combat:
-                state=defend_against_aggro(initial=state,capture=cap,driver=driver,log=log)
-            state=recover(state)
-        return state
+                defend=defend, log=log)
+        return finish_encounter(state, recover=recover, defend=defend, driver=driver, log=log)
     driver.on_aggro = resolve_aggro
     # Configure facing before startup defense, not only after hotbar setup.
     from wotlkbuddy.live.world_position import verified_target_position
