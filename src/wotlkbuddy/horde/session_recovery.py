@@ -45,6 +45,9 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
         # supervising a verified live encounter instead of exiting to shell.
         recovery_driver=KeyboardQuestInput(interact_key=args.interact_key)
         recovery_driver.native_hud_enabled=not getattr(args,'no_hud',False)
+        from wotlkbuddy.horde.hunt_terrain import attach_hunt_memory
+        from wotlkbuddy.horde.combat_awareness import bind_combat_awareness
+        attach_hunt_memory(recovery_driver,first.player.guid,getattr(args,'_hunt_memory',None))
         # Resolve once from the actual GUID-matched client, even when --pid
         # was omitted. Every position callback must use the same integer PID.
         recovery_pid,_=verified_live_position(first,pid=getattr(args,'pid',None))
@@ -54,6 +57,7 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
             player_position=lambda s:verified_live_position(s,pid=recovery_pid)[1],
             target_position=lambda s:verified_target_position(s,pid=recovery_pid),
             log=log_console)
+        bind_combat_awareness(recovery_driver,pid=recovery_pid,cap=cap,log=log_console)
         log_recovery=log_console
         log_recovery('Quest phase interrupted by unresolved aggro; keeping control until combat clears or death is verified')
         first=settle_aggro(initial=first,capture=cap,driver=recovery_driver,
