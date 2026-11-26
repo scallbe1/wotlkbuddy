@@ -66,10 +66,11 @@ def path_avoids_pack(path, hazards, radius=15):
     return True
 
 
-def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,excluded_staging=()):
+def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,excluded_staging=(),guard=lambda:None):
     """Rank reachable ranged staging positions, not the closest spawn alone."""
     ranked=[]
     for spawn in spawns:
+        guard()
         center=spawn.position
         key=(round(center.x),round(center.y),round(center.z))
         if visited.get(key,0)>=2:
@@ -79,8 +80,10 @@ def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,ex
             for offset in (0.,pi/3,-pi/3,2*pi/3,-2*pi/3,pi):
                 angle=heading+offset
                 desired=Vec3(center.x+radius*cos(angle),center.y+radius*sin(angle),center.z)
+                guard()
                 try:
                     point=nav.nearest_point(map_id,desired)
+                    guard()
                     if point is None or point.distance_to(desired)>4:
                         continue
                     if origin.distance_to(point)<5 or any(point.distance_to(p)<5 for p in excluded_staging):
@@ -88,6 +91,7 @@ def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,ex
                     if any(abs(point.z-h.z)<=6 and point.distance_to(h)<18 for h in hazards):
                         continue
                     raw=nav.find_path(map_id,origin,point)
+                    guard()
                     if not raw or raw[-1].distance_to(point)>3:
                         continue
                     path=validate_nav_path(raw,origin,point,max_step=9)
@@ -96,6 +100,8 @@ def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,ex
                     length=sum(a.distance_to(b) for a,b in zip(path,path[1:]))
                     clearance=min((point.distance_to(h) for h in hazards),default=60.)
                     ranked.append((length+max(0,35-clearance)*2,spawn,point))
+                except LiveControlError:
+                    raise
                 except (OSError,ValueError,RuntimeError,TimeoutError):
                     continue
             if len(ranked)>=limit:
