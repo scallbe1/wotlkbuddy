@@ -21,6 +21,7 @@ class HuntRouteState:
     force_spawn_search: bool = False
     staging_visited: list[Vec3] = field(default_factory=list)
     required_waits: int = 0
+    structured_attempts: int = 0
     terrain: HuntTerrain = field(default_factory=HuntTerrain)
 
 
@@ -118,6 +119,13 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
                     clear_remaining_aggro, navigate, capture, guard,
                     world_position, pid, drain_travel_corpses, log):
     """Attempt one bounded spawn approach, then return for a fresh hunt iteration."""
+    if len(allowed_sources)==1 and routes.route_replans>=2:
+        from wotlkbuddy.horde.structured_approach import explore_required_approach
+        if explore_required_approach(s,routes=routes,goal=goal,world=world,
+                driver=driver,nav=nav,navigate=navigate,capture=capture,guard=guard,
+                world_position=world_position,clear_remaining_aggro=clear_remaining_aggro,
+                drain_travel_corpses=drain_travel_corpses,log=log):
+            return
     key = (round(goal.x), round(goal.y), round(goal.z))
     dx,dy = world.x-goal.x,world.y-goal.y
     d = hypot(dx,dy)
