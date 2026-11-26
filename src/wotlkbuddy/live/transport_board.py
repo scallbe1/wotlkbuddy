@@ -130,6 +130,27 @@ def _prepare_approach(args, keyboard, pid, start, owner, grab, guard, emit):
     return start
 
 
+def _run_collision_trial(args, keyboard, pid, start, owner, grab, guard, emit):
+    """Direct mode uses its own corridor, never the camera staging pose."""
+    from wotlkbuddy.live.transport_collision import route_region, traverse
+
+    aligned = route_region(start) == 'lower'
+    emit('approach', **start.to_dict(), aligned=aligned, mode='collision')
+    if not aligned:
+        emit('collision_route_start_invalid', **start.to_dict())
+        return
+    if not args.enable_input:
+        emit('collision_dry_run_ready', **start.to_dict())
+        return
+    from wotlkbuddy.game.win32 import ProcessMemory
+    from wotlkbuddy.live.world_position import observe_world_position
+
+    with ProcessMemory(pid, writable=False) as memory:
+        traverse(keyboard=keyboard, owner=owner, grab=grab, guard=guard,
+                 emit=emit, seconds=args.seconds,
+                 read_position=lambda: observe_world_position(memory, expected_guid=owner))
+
+
 def trial_board(args):
     import mss
     from wotlkbuddy.game.win32 import ProcessMemory
@@ -146,7 +167,10 @@ def trial_board(args):
     if getattr(args, 'collision_guided', False) and (floor != 'lower' or not args.ride_through):
         raise ValueError('Collision-guided trial requires --floor lower --ride-through')
     keyboard = WindowsKeyboard()
-    print(f'Face the calibrated {floor} door and stay stationary. '
+    instruction = ('Face the lower elevator entrance; no camera calibration required. '
+                   if getattr(args, 'collision_guided', False)
+                   else f'Face the calibrated {floor} door and stay stationary. ')
+    print(instruction +
           f'{"One boarding attempt enabled; Escape aborts." if args.enable_input else "Dry run; no keys sent."}',
           flush=True)
     time.sleep(args.countdown)
@@ -178,19 +202,12 @@ def trial_board(args):
         # Require exactly one compatible Wow.exe; don't send to another client.
         pid, start = verified_live_position(initial)
         owner = initial.player.guid
+        if getattr(args, 'collision_guided', False):
+            _run_collision_trial(args, keyboard, pid, start, owner, grab, guard, emit)
+            return
         emit('approach', **start.to_dict(), aligned=landing_aligned(start, floor))
         start = _prepare_approach(args, keyboard, pid, start, owner, grab, guard, emit)
         if start is None:
-            return
-        if getattr(args, 'collision_guided', False):
-            from wotlkbuddy.live.transport_collision import traverse
-            if not args.enable_input:
-                emit('collision_dry_run_ready', **start.to_dict())
-                return
-            with ProcessMemory(pid, writable=False) as memory:
-                traverse(keyboard=keyboard, owner=owner, grab=grab, guard=guard,
-                         emit=emit, seconds=args.seconds,
-                         read_position=lambda: observe_world_position(memory, expected_guid=owner))
             return
         tracker = OpeningTracker(floor=floor)
         began = time.monotonic()
