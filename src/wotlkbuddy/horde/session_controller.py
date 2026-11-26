@@ -29,6 +29,7 @@ class QuestSession:
     aggro_recoveries: int = 0
     activity: ActivityGate = field(default_factory=ActivityGate)
     hunt_memory: dict = field(default_factory=dict)
+    local_offer_memory: dict = field(default_factory=dict)
 
     def time_expired(self) -> bool:
         return time.monotonic() - self.start >= self.args.auto_minutes * 60
@@ -39,6 +40,7 @@ class QuestSession:
         child._continuous_training_check = mode == 'objectives'
         child._last_training_level = self.train_level
         child._hunt_memory = self.hunt_memory
+        child._local_offer_memory = self.local_offer_memory
         owner = {'objectives': Activity.OBJECTIVES, 'quests': Activity.OFFERS,
                  'train': Activity.TRAINING}[mode]
         with self.activity.claim(owner):
@@ -144,9 +146,17 @@ class QuestSession:
         except LiveControlError as exc:
             print(f'Mage training unavailable this cycle: {exc}', file=sys.stderr, flush=True)
 
+    def record_local_offers(self,report,cycle):
+        ids=sorted({qid for ids in report.get('local_accepted_quests',{}).values()
+                    for qid in ids if isinstance(qid,int) and qid>0 and qid not in self.accepted_ids})
+        if ids:
+            self.accepted_ids.extend(ids)
+            self.steps.append({'cycle':cycle,'action':'local_pickup','quest_ids':ids})
+
     def handle_objectives(self, report: dict, cycle: int) -> bool:
         """Return whether quest offers should be checked in this cycle."""
         self.aggro_recoveries = 0
+        self.record_local_offers(report,cycle)
         checked = report.get('training_checked_level')
         if isinstance(checked, int):
             self.train_level = checked
