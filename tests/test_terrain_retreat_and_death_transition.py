@@ -41,7 +41,10 @@ def test_three_target_failures_trigger_retreat_to_measured_ground():
     terrain.scan(anchor,failed=False)
     for _ in range(3):
         terrain.scan(current,failed=True)
-    driver=NS(emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True)
+    # A real previously observed enemy must survive terrain recovery unchanged.
+    known_threat=(Vec3(45,10,0),.5)
+    driver=NS(emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True,
+              dangerous_hunt_positions=[known_threat])
     nav=NS(find_path=lambda m,a,b:(a,b))
     routes=NS(route_replans=0,force_spawn_search=False)
     destinations=[]
@@ -50,7 +53,9 @@ def test_three_target_failures_trigger_retreat_to_measured_ground():
         nav=nav,driver=driver,now=lambda:1,log=lambda _:None)
     assert destinations==[anchor.position]
     assert routes.force_spawn_search
-    assert driver.dangerous_hunt_positions==[(current.position,1)]
+    assert driver.dangerous_hunt_positions==[known_threat]
+    assert terrain.failures==0
+    assert terrain.retreats==1
 
 
 def test_retreat_does_not_walk_blindly_without_anchor():
