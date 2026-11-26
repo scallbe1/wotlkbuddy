@@ -153,6 +153,44 @@ def verify_merchant_state(s, *, guid, merchant_guid, npc_name, npc_id, driver, t
         raise LiveControlError(message+'; refusing further merchant input')
 
 
+def wait_merchant_closed(state,*,capture,guard,sleep,now,npc_name,log):
+    """Require two consecutive fresh closed frames before leaving the NPC."""
+    deadline=now()+8
+    closed=0
+    while now()<deadline:
+        state=_capture_fresh(capture,state,guard,sleep=sleep,now=now,
+                            timeout=min(2,max(.5,deadline-now())))
+        if not state.merchant_open:
+            closed+=1
+            if closed>=2:
+                log(f'{npc_name}: merchant window closed and verified')
+                return state
+        else:
+            closed=0
+    raise LiveControlError(f'{npc_name}: merchant window closure not confirmed within 8 seconds')
+
+
+def wait_merchant_scan(state,*,capture,guard,sleep,now,log,npc_name,timeout=8):
+    """An open window is not proof the asynchronously scanned bags are ready."""
+    deadline=now()+timeout
+    waiting=False
+    while state.merchant_open and not state.merchant_scan_complete:
+        guard(state)
+        if not waiting:
+            log(f'{npc_name}: merchant window open; waiting for complete inventory scan')
+            waiting=True
+        if now()>=deadline:
+            break
+        state=_capture_fresh(capture,state,guard,sleep=sleep,now=now,
+                            timeout=min(2,max(.5,deadline-now())))
+    guard(state)
+    if state.merchant_open and state.merchant_scan_complete:
+        if waiting:
+            log(f'{npc_name}: complete merchant inventory scan confirmed')
+        return state
+    raise MerchantUnavailable(f'{npc_name}: complete merchant inventory scan unavailable after waiting; no further sale authorized')
+
+
 def sell_at_verified_merchant(
     *, npc_name: str, npc_id: int, profile: HordeProfile,
     capture: Callable[[], ClientTelemetry], driver,
@@ -230,6 +268,19 @@ def sell_at_verified_merchant(
     if not s.merchant_open:
         raise LiveControlError(f'{npc_name}: merchant window did not open')
 
+    try:
+        s=wait_merchant_scan(s,capture=capture,guard=guard,sleep=sleep,
+            now=now,log=log,npc_name=npc_name)
+    except MerchantUnavailable:
+        # No sale was sent. Close only a freshly observed open window,
+        # then allow the existing alternate-merchant policy.
+        s=capture()
+        guard(s)
+        if s.merchant_open:
+            driver.chat('/click MerchantFrameCloseButton')
+            wait_merchant_closed(s,capture=capture,guard=guard,sleep=sleep,
+                now=now,npc_name=npc_name,log=log)
+        raise
     transaction_started=True
     before_free = first.resources.free_bag_slots
     starting_money = first.resources.money_copper
@@ -251,6 +302,12 @@ def sell_at_verified_merchant(
             # contents before issuing the single bounded UseContainerItem.
             fresh = _capture_fresh(
                 capture, s, guard, sleep=sleep, now=now)
+            if fresh.merchant_open and not fresh.merchant_scan_complete:
+                try:
+                    fresh=wait_merchant_scan(fresh,capture=capture,guard=guard,sleep=sleep,
+                        now=now,log=log,npc_name=npc_name)
+                except MerchantUnavailable as exc:
+                    raise LiveControlError('Merchant scan incomplete during sale verification; no further items sold') from exc
             if (not fresh.merchant_open or
                     eligible_items(fresh) != eligible):
                 raise LiveControlError(
@@ -293,31 +350,9 @@ def sell_at_verified_merchant(
             tuple(sold), s.resources.money_copper - starting_money)
         driver.chat('/click MerchantFrameCloseButton')
         close_requested = True
-        # The addon is sampled asynchronously. A fresh sequence after a
-        # /click can still encode the merchant frame from immediately before
-        # the UI event. Require TWO consecutive closed samples, allowing
-        # bounded time for the client to publish the changed state.
-        deadline = now() + 8
-        closed_samples = 0
-        previous = s
-        while now() < deadline:
-            observed = _capture_fresh(
-                capture, previous, guard, sleep=sleep, now=now,
-                timeout=min(2, max(.5, deadline-now())))
-            if not observed.merchant_open:
-                closed_samples += 1
-                if closed_samples >= 2:
-                    s = observed
-                    log(f'{npc_name}: merchant window closed and verified')
-                    return result
-            else:
-                closed_samples = 0
-            previous = observed
-        raise LiveControlError(
-            f'{npc_name}: merchant close command sent, but two consecutive '
-            'closed telemetry frames were not observed within 8 seconds; '
-            f'{len(sold)} sales and {s.resources.free_bag_slots} free slots '
-            'were already independently confirmed')
+        s=wait_merchant_closed(s,capture=capture,guard=guard,sleep=sleep,
+            now=now,npc_name=npc_name,log=log)
+        return result
     finally:
         # Do not click again when the close action was already sent. A second
         # close command after delayed telemetry is unnecessary and can change
