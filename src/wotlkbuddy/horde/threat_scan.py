@@ -60,6 +60,18 @@ def acquire_corridor_target(state, chosen_guid, chosen_entry, *, awareness, cand
             if state.player.target_guid!=chosen_guid:
                 alternative=reacquired_corridor_candidate(state,candidates)
                 if alternative is None:
+                    # A name mismatch does not prove the entire observed pack
+                    # is impassable. Try other spatially verified candidates.
+                    for _,other_guid,other_entry in candidates[:3]:
+                        if other_guid==chosen_guid:
+                            continue
+                        state=awareness.acquire(state,other_guid,other_entry)
+                        if state.player.in_combat:
+                            return state,other_guid,other_entry
+                        alternative=reacquired_corridor_candidate(state,candidates)
+                        if alternative is not None:
+                            break
+                if alternative is None:
                     remember_pack(driver,pack_positions,monotonic())
                     raise LiveControlError('Unsafe encounter: could not acquire exact discovered hostile GUID')
                 distance,chosen_guid,chosen_entry=alternative
