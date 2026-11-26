@@ -41,3 +41,66 @@ def test_direct_route_waits_for_collision_and_releases_at_upper(monkeypatch):
     assert keys == [('down', route.FORWARD), ('up', route.FORWARD),
                     ('down', route.RIGHT), ('up', route.RIGHT),
                     ('down', route.FORWARD), ('up', route.FORWARD)]
+
+
+def test_collision_trial_bypasses_camera_staging(monkeypatch):
+    import sys
+    from contextlib import nullcontext
+    from wotlkbuddy.live import transport_board, capture, control, world_position
+
+    # Exact live pose that previously oscillated in the camera staging loop.
+    start = pos(1596.0667724609375, 311.69573974609375,
+                -41.42443084716797, 4.7368621826171875)
+    assert not transport_board.landing_aligned(start, 'lower')
+    assert route.route_region(start) == 'lower'
+    snapshot = SimpleNamespace(
+        truncated=False, player=SimpleNamespace(
+            guid='test', dead=False, health=100, in_combat=False))
+    frame = SimpleNamespace(raw=b'', width=1, height=1)
+    screen = SimpleNamespace(monitors=[{}, {}], grab=lambda _: frame)
+    monkeypatch.setitem(sys.modules, 'mss',
+                        SimpleNamespace(mss=lambda: nullcontext(screen)))
+    monkeypatch.setattr(capture, 'decode_bgra_frame', lambda *_: snapshot)
+    monkeypatch.setattr(world_position, 'verified_live_position',
+                        lambda *_: (1, start))
+    keyboard = SimpleNamespace(emergency_stop_requested=lambda: False,
+                               wow_is_foreground=lambda: True)
+    monkeypatch.setattr(control, 'WindowsKeyboard', lambda: keyboard)
+    monkeypatch.setattr(transport_board.time, 'sleep', lambda _: None)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Collision mode must not enter camera staging')
+
+    monkeypatch.setattr(transport_board, '_prepare_approach', forbidden)
+    monkeypatch.setattr(transport_board, 'classify_frame', forbidden)
+    from wotlkbuddy.game import win32
+    monkeypatch.setattr(win32, 'ProcessMemory', lambda *_a, **_k: nullcontext(object()))
+    monkeypatch.setattr(world_position, 'observe_world_position', lambda *_a, **_k: start)
+    calls = []
+    monkeypatch.setattr(route, 'traverse', lambda **kwargs: calls.append(kwargs))
+    transport_board.trial_board(SimpleNamespace(
+        floor='lower', monitor=1, countdown=0, seconds=60,
+        enable_input=True, ride_through=True, collision_guided=True))
+    assert len(calls) == 1
+    assert calls[0]['read_position']() is start
+
+
+def test_collision_dry_run_validates_corridor_without_movement():
+    from wotlkbuddy.live.transport_board import _run_collision_trial
+
+    start = pos(1596.0667724609375, 311.69573974609375,
+                -41.42443084716797, 4.7368621826171875)
+    events = []
+    _run_collision_trial(SimpleNamespace(enable_input=False), None, None,
+                         start, 'test', None, None,
+                         lambda event, **data: events.append((event, data)))
+    assert events[0][0] == 'approach'
+    assert events[0][1]['aligned']
+    assert events[-1][0] == 'collision_dry_run_ready'
+
+    events.clear()
+    wrong = pos(1596, 311, 55.24, 4.73)
+    _run_collision_trial(SimpleNamespace(enable_input=False), None, None,
+                         wrong, 'test', None, None,
+                         lambda event, **data: events.append((event, data)))
+    assert events[-1][0] == 'collision_route_start_invalid'
