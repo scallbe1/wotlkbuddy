@@ -173,13 +173,13 @@ def wait_merchant_closed(state,*,capture,guard,sleep,now,npc_name,log):
 
 
 def wait_merchant_scan(state,*,capture,guard,sleep,now,log,npc_name,timeout=8):
-    """An open window is not proof the asynchronously scanned bags are ready."""
+    """An open window is not proof the verified sale-candidate batch is ready."""
     deadline=now()+timeout
     waiting=False
     while state.merchant_open and not state.merchant_scan_complete:
         guard(state)
         if not waiting:
-            log(f'{npc_name}: merchant window open; waiting for complete inventory scan')
+            log(f'{npc_name}: merchant window open; waiting for complete inventory scan (verified sale candidates)')
             waiting=True
         if now()>=deadline:
             break
@@ -330,7 +330,7 @@ def sell_at_verified_merchant(
                         after.resources.free_bag_slots >
                         fresh.resources.free_bag_slots and
                         after.resources.money_copper >=
-                        fresh.resources.money_copper):
+                        fresh.resources.money_copper + item.vendor_price * item.quantity):
                     break
                 after = _capture_fresh(
                     capture, after, guard, sleep=sleep, now=now, timeout=2)
