@@ -13,6 +13,7 @@ from typing import Callable
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.profile import HordeProfile, OrderStep
 from wotlkbuddy.horde.interaction import navigate_with_status
+from wotlkbuddy.horde.height_recovery import HeightRecovery
 from wotlkbuddy.horde.hunt_routes import unsafe_route_encounter, detour_around_encounters, EncounterRouteUnavailable
 from wotlkbuddy.horde.turnin import turnin_profile_quest
 from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, distance_world
@@ -189,7 +190,7 @@ def return_and_turnin(
             distance=getattr(driver,'set_navigation_distance',None)
             pending=list(legs)
             index=0
-            height_failures=[]
+            height_recovery=HeightRecovery(world.position,destination)
             encounter_replans=0
             rejected=[]
             while pending:
@@ -241,11 +242,9 @@ def return_and_turnin(
                             raise EncounterRouteUnavailable('Delivery encounter replan budget exhausted')
                         label=f'Delivery encounter displacement recovery {encounter_replans}/12'
                     else:
-                        if (len(height_failures)>=MAX_HEIGHT_REPLANS or
-                                any(measured.position.distance_to(pos)<8 for pos in height_failures)):
-                            raise LiveControlError('Repeated delivery height/floor mismatch near the same location or replan budget exhausted: '+reason)
-                        height_failures.append(measured.position)
-                        label=f'Delivery height recovery {len(height_failures)}/{MAX_HEIGHT_REPLANS}'
+                        if not height_recovery.record(measured.position):
+                            raise EncounterRouteUnavailable('Repeated delivery height/floor mismatch without progress: '+reason)
+                        label=f'Delivery height recovery {height_recovery.attempts}; {height_recovery.stagnant}/3 stagnant'
                     log(f'{label}: '
                         f'replanning from actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}) '
                         f'to original NPC {step.npc_name}; {reason}')

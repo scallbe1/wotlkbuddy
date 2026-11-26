@@ -9,7 +9,8 @@ from wotlkbuddy.horde.merchant import (
     estimated_vendor_copper, should_vendor_before_training, free_bag_space)
 from wotlkbuddy.horde.gear import equip_mage_upgrades
 from wotlkbuddy.horde.npc_catalog import nearby_service_npcs
-from wotlkbuddy.horde.npc_visit import visit_npc
+from wotlkbuddy.horde.npc_visit import visit_npc, NpcTargetUnavailable
+from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
 from wotlkbuddy.horde.npc_service_turnin import turnin_ready_quests_at_npc
 from wotlkbuddy.horde.training import train_available_mage_spells
 from wotlkbuddy.combat.mage_hotbar import reconcile_mage_hotbar
@@ -52,6 +53,12 @@ def execute_training_phase(args, *, quest_profile, profiles_root, cap, driver,
         args, cap=cap, quest_profile=quest_profile, log=log)
     if args.only not in ('all', 'train') and not training_due:
         return
+    automatic=args.only=='objectives' and training_due
+    memory=getattr(args,'_training_route_memory',None)
+    key=(budget_state.player.guid,budget_state.player.level)
+    if automatic and memory is not None and memory.get(key,0)>time.monotonic():
+        log('Trainer route temporarily deferred; continuing quest objectives')
+        return
     if training_due:
         log(f'Level {budget_state.player.level}: checking training priority and actual trainer spells')
     # Equip verified upgrades before converting spare loot to copper.
@@ -88,11 +95,27 @@ def execute_training_phase(args, *, quest_profile, profiles_root, cap, driver,
     else:
         training_due=True
     if training_due:
-        visit_and_train(
-            quest_profile=quest_profile, profiles_root=profiles_root,
-            current=current, training_goal=training_goal, cap=cap, driver=driver,
-            pid=pid, nav=nav, db=db, hud=hud, set_native_status=set_native_status,
-            report=report, log=log)
+        try:
+            visit_and_train(
+                quest_profile=quest_profile, profiles_root=profiles_root,
+                current=current, training_goal=training_goal, cap=cap, driver=driver,
+                pid=pid, nav=nav, db=db, hud=hud, set_native_status=set_native_status,
+                report=report, log=log)
+        except (EncounterRouteUnavailable,NpcTargetUnavailable) as exc:
+            if not automatic:
+                raise
+            observed=cap()
+            if (observed.truncated or observed.player.guid!=budget_state.player.guid or
+                    observed.player.dead or observed.player.in_combat or
+                    observed.resources is None or observed.merchant_open or
+                    (observed.dialog is not None and observed.dialog.kind!='none') or
+                    driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+                raise
+            if memory is not None:
+                memory[key]=time.monotonic()+300
+            report['training_deferred_reason']=str(exc)
+            log(f'Trainer temporarily unreachable: {exc}; continuing quest objectives')
+
 
 
 def visit_and_train(*, quest_profile, profiles_root, current, training_goal,
@@ -103,7 +126,7 @@ def visit_and_train(*, quest_profile, profiles_root, current, training_goal,
         origin=current.position, map_id=current.map_id,
         role='train', profiles_root=profiles_root, radius=600)
     if not trainers:
-        raise LiveControlError(
+        raise EncounterRouteUnavailable(
             'No nearby Mage TrainClass vendor found in local Horde '
             'profile XML and corroborated by CreatureSpawns.db')
     trainer = trainers[0]
