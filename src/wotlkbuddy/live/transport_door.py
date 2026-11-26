@@ -116,14 +116,66 @@ def plausible_transition(errors, *, floor='upper'):
                 max(errors['open_error'], errors['closed_error']) <= 45)
 
 
+# 13x13 RGB means from the same lower calibration frames 46/69.
+# Retain the two wall anchors, but suppress sensitivity to individual texels.
+PATCH_OPEN = bytes.fromhex(
+    '090a0e1110200c0b1409090e09090f090a0f07080c08080d090a0e10101d0c0c140a0a0f0a0b100c0d130a0b100a0b0f090a0e0e0f190c0d140a0b0f0b0b100a0a0e0a0b100b0c110a0b0e0e0f1910111d12131f12121d14152313142011111b090a0e171b2722252e222a34222c3127323927313b232c36090a0d182123292f22263a2c2a422d2e47312c442e273d2b080a0c1f2137312a3a242a3c262c3d232b38212833212734090a0e1e1f36302b3e2828442a2b4f252543262645232440')
+PATCH_CLOSED = bytes.fromhex(
+    '19192e11111f16162617182812131e1b1b2e0e0f1a0f101d18182d12132211111d1b1b2e15152316162510111d0f101d16172a1414230e0e181b1b2d1a192b11111e1414240f101c15152712121f11111c1514231b1a2c10101c1213210e0f1a1515270e0f1a1614191515241616250f0f1a0e0e190d0e191415260d0d171f161a1817270f0f191313200b0c150d0d171414240d0e1821181e11101b0f0e1711101c10101b0c0c151313230d0e181d17141615241514220b0a100e0e180b0c14')
+PATCH_LEFT = bytes.fromhex(
+    '09081208071008071109081309091409091509081108070f0807110908120908120808120807100908110c0c180d0c1a0c0c1a0d0c1b0e0d1d0c0c190c0c190c0c1a0c0c1b0c0c1b0e0d1c0c0c180c0c190c0c1a0c0b1a0c0b1a0d0c1b0b0b160b0b160b0b160b0b160b0b170c0b190a09130a09130a0a140b0b160b0b180d0c1a0c0b170c0b170c0b170c0b170c0b18')
+PATCH_RIGHT = bytes.fromhex(
+    '0d0d1d0d0d1d0d0d1c0d0d1c0c0c180909120d0d1d0c0c1b0b0a180a0a160a0a150a09130a0a150a0a150a09150a09140908130808110a09150a0a150b0a170b0a160b0b170c0b160a09140a09140b0a150b0b180b0b170c0b160a0a150a0a140a0a150a0a160b0a150b0a150b0a160a0a150a0a150a0a150a0a150b0a150a09140a09140a09140a09130a0913090913')
+
+
+def patch_signature(rgb, width, height, box):
+    x0, y0, x1, y1, nx, ny = box
+    samples = bytearray()
+    radius = 6
+    side = 2*radius+1
+    for j in range(ny):
+        y = int((y0+(y1-y0)*(j+.5)/ny)*height)
+        for i in range(nx):
+            x = int((x0+(x1-x0)*(i+.5)/nx)*width)
+            if not (radius <= x < width-radius and radius <= y < height-radius):
+                raise ValueError('Patch falls outside the calibrated image')
+            rows = [rgb[3*(yy*width+x-radius):3*(yy*width+x+radius+1)]
+                    for yy in range(y-radius, y+radius+1)]
+            for channel in range(3):
+                samples.append(round(sum(sum(row[channel::3]) for row in rows)/(side*side)))
+    return bytes(samples)
+
+
+def classify_lower_patch_scores(errors):
+    """Patch-calibrated lower view; both wall anchors still required."""
+    if not errors or not all(isfinite(v) and v >= 0 for v in errors.values()):
+        return 'unknown'
+    if max(errors['left_error'], errors['right_error']) > 4:
+        return 'unknown'
+    opened, closed = errors['open_error'], errors['closed_error']
+    if opened <= 6 and closed-opened >= 10:
+        return 'open'
+    if closed <= 6 and opened-closed >= 10:
+        return 'closed'
+    return 'unknown'
+
+
+def classify_lower_patches(rgb, width, height):
+    door, left, right = (patch_signature(rgb, width, height, b) for b in LOWER_BOXES)
+    errors = {'open_error': mae(door, PATCH_OPEN), 'closed_error': mae(door, PATCH_CLOSED),
+              'left_error': mae(left, PATCH_LEFT), 'right_error': mae(right, PATCH_RIGHT)}
+    return classify_lower_patch_scores(errors), errors
+
+
 def classify_frame(rgb, width, height, *, floor='upper'):
     if width <= 0 or height <= 0 or len(rgb) != width*height*3:
         raise ValueError('Invalid RGB frame')
     if (width, height) != (960, 540):
         return 'unknown', {}
-    boxes = LOWER_BOXES if floor == 'lower' else (DOOR_BOX, LEFT_BOX, RIGHT_BOX)
+    if floor == 'lower':
+        return classify_lower_patches(rgb, width, height)
     return classify_signatures(*(signature(rgb, width, height, b)
-                                 for b in boxes), floor=floor)
+                                 for b in (DOOR_BOX, LEFT_BOX, RIGHT_BOX)), floor=floor)
 
 
 @dataclass
