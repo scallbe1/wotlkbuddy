@@ -1366,7 +1366,7 @@ local function tickData()
                                 -- Sell ordinary white consumables too, except food/drink.
                                 -- Python independently protects healing/mana potions and supplies.
                                 and (itemType~='Consumable' or id==3434 or
-                                     (quality==1 and subtype~='Food & Drink' and subtype~='Food and Drink'
+                                     (quality==1 and subtype and subtype~='Food & Drink' and subtype~='Food and Drink'
                                       and subtype~='Bandage'))
                                 and not locked and price > 0 and
                                 -- Preserve Mage-compatible equipment we do not score yet.
