@@ -198,13 +198,15 @@ def trial_board(args):
                 age = (time.monotonic()-captured)*1000
                 ready = board_window(floor, state, phase, age_ms=age,
                                      crossing_ms=budget*1000)
-                emit('wait', door=state, phase_ms=phase.phase_ms if phase else None,
-                     uncertainty_ms=phase.uncertainty_ms if phase else None,
+                emit('wait', door=state, elapsed_ms=round((captured-began)*1000, 2),
+                     errors={k: round(v, 2) for k, v in errors.items()},
+                     phase_ms=round(phase.phase_ms, 2) if phase else None,
+                     uncertainty_ms=round(phase.uncertainty_ms, 2) if phase else None,
                      crossing_seconds=round(budget,3), ready=ready)
                 if not ready:
                     # The farther calibrated approach has a narrow launch window.
                     # Sample more frequently while open without reducing margins.
-                    time.sleep(.035 if state == 'open' and phase is not None else .12)
+                    time.sleep(.035 if state == 'open' and phase is not None else .06)
                     continue
                 if not args.enable_input:
                     emit('dry_run_ready', floor=floor)
