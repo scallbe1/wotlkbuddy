@@ -1301,6 +1301,14 @@ def _register_world_observation_commands(sub):
     visual.add_argument('--monitor', type=int, default=1)
     visual.add_argument('--output', default='elevator-door-frames.zip')
     visual.set_defaults(func=capture_door_visual)
+    from wotlkbuddy.live.transport_door import watch_upper_door
+    door = sub.add_parser('horde-transport-door-watch',
+                          help='Observe calibrated upper elevator door and estimate phase')
+    door.add_argument('--seconds', type=float, default=45)
+    door.add_argument('--interval', type=float, default=.25)
+    door.add_argument('--countdown', type=float, default=5)
+    door.add_argument('--monitor', type=int, default=1)
+    door.set_defaults(func=watch_upper_door)
 
 
 def main(argv: list[str] | None = None) -> int:
