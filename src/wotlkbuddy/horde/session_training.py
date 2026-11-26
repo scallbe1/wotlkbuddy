@@ -31,6 +31,14 @@ def training_priority(args, *, cap, quest_profile, log):
                     (training_goal is None or training_goal.due(budget_state.player.level,
                      budget_state.resources.money_copper,budget_state.resources.free_bag_slots,
                      vendor_copper=resale)))
+    # Standard WotLK Mage spell ranks are learned at even levels. Do not
+    # travel back solely for a fresh odd level after a completed even-level
+    # inspection; retain pending purchases and explicit training requests.
+    if (training_due and training_goal is not None and not training_goal.pending and
+            budget_state.player.level % 2 == 1 and
+            training_goal.level == budget_state.player.level-1):
+        training_due=False
+        log('Trainer already checked at previous even level; deferring automatic visit')
     if training_goal is not None and not training_due and training_goal.pending:
         log('Training priority deferred until cash/loot or level changes; continue questing')
     return budget_state, training_goal, training_due
