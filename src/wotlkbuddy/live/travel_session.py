@@ -25,6 +25,7 @@ class TravelServices:
     checked: Callable
     pulse: Callable
     smooth_forward: Callable
+    ghost_route_burst: Callable
     recover_collision: Callable
     recover_around_wall: Callable
     right_sign: int
@@ -84,6 +85,13 @@ def wire_travel_session(*, first, world0, waypoints, now, notify, expected_map_i
             travel_input=travel_input, arrival_yards=arrival_yards,
             right_sign=right_sign, turn_rate=turn_rate, sleep=sleep)
 
+    def ghost_burst(index):
+        from wotlkbuddy.live.travel_forward import ghost_route_burst
+        return ghost_route_burst(state.world,state.waypoints,index,state.current,
+            guard=guard,fast_observe=fast_observe,expected_map_id=expected_map_id,
+            guid=guid,now=now,travel_input=travel_input,arrival_yards=arrival_yards,
+            right_sign=right_sign,turn_rate=turn_rate,sleep=sleep)
+
     state.current, state.world, state.turns, right_sign, turn_rate = calibrate_turn(
         cache=calibration_cache, keyboard=keyboard, guid=guid,
         current=state.current, world=state.world, turns=state.turns, pulse=pulse,
@@ -123,7 +131,7 @@ def wire_travel_session(*, first, world0, waypoints, now, notify, expected_map_i
                 notify('Wall route search unsuccessful; trying another measured escape direction')
         return False
     return TravelServices(state, destination, breadcrumbs, guard, checked, pulse,
-                          smooth_forward, recover_collision, recover_around_wall,
+                          smooth_forward, ghost_burst, recover_collision, recover_around_wall,
                           right_sign, turn_rate)
 
 
@@ -148,7 +156,8 @@ def run_route(services, *, distance_status, destination_status, on_threat,
     if on_threat is not None:
         state.current, state.world = checked(force_scan=True)
     if continuous_forward and fast_observe is not None:
-        notify('Smooth travel: bounded continuous W with passive position and threat checks')
+        notify('Smooth ghost travel: continuous W across gentle mesh legs; no hostile scans' if ghost_only else
+               'Smooth travel: bounded continuous W with passive position and threat checks')
     index=1
     while index<len(state.waypoints):
         waypoint=state.waypoints[index]
@@ -162,6 +171,40 @@ def run_route(services, *, distance_status, destination_status, on_threat,
             guard()
             distance_status(destination,state.world.position)
             last_hud_position=state.world.position
+        if ghost_only and continuous_forward and fast_observe is not None:
+            before=state.world
+            burst=services.ghost_route_burst(index)
+            if burst is not None:
+                next_index,steering,reason=burst
+                state.moves+=1
+                state.turns+=steering
+                state.current,state.world=checked()
+                # Use the fully verified position, not the last fast sample,
+                # as the start of every recovery or subsequent burst.
+                if _distance_xy(before.position,state.world.position)>.5:
+                    breadcrumbs.append(state.world.position)
+                    del breadcrumbs[:-24]
+                if reason:
+                    notify('Ghost movement interrupted: '+reason)
+                    if recover_collision(reason):
+                        index=1
+                        state.reached=0
+                        continue
+                    raise LiveControlError(reason)
+                if next_index>index:
+                    state.reached+=next_index-index
+                    index=next_index
+                    state.next_waypoint_index=index
+                    if index>=len(state.waypoints):
+                        if (_distance_xy(state.world.position,destination)<=arrival_yards and
+                                abs(state.world.z-destination.z)<=5):
+                            break
+                        # Recheck final arrival after releasing movement.
+                        index=len(state.waypoints)-1
+                        state.reached=max(0,state.reached-1)
+                    continue
+                # Sharp corners or a final close approach use the original
+                # precise movement routine, including measured wall recovery.
         from wotlkbuddy.live.travel_waypoint import execute_waypoint
         rerouted = execute_waypoint(
             state, waypoint, index=index, waypoint_count=len(state.waypoints)-1,
