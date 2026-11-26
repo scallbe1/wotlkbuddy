@@ -11,7 +11,10 @@ def recoverable_hunt_failure(reason):
         'different heights/floors', 'no forward progress',
         'movement diverged from waypoint',
         'measured movement disagrees with client facing',
-        'fresh detour replan', 'fresh detour route required'))
+        'fresh detour replan', 'fresh detour route required',
+        'navmesh route does not reach the quest destination (partial path)',
+        'navmesh returned no usable bounded waypoint path',
+        'no complete verified route to distant quest camp'))
 
 
 def remember_pack(driver, positions, now):
