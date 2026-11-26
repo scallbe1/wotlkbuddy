@@ -140,8 +140,9 @@ def ghost_route_burst(before, waypoints, index, snapshot, *, guard, fast_observe
                 guard()
                 if pos.map_id!=expected_map_id or pos.player_guid.lower()!=guid.lower():
                     raise LiveControlError('Fast ghost observation changed map or identity')
-                if (_distance_xy(before.position,pos.position)>14*(now()-started)+2 or
-                        abs(pos.z-last.z)>3):
+                if _distance_xy(before.position,pos.position)>14*(now()-started)+2:
+                    raise LiveControlError('Implausible world jump during continuous ghost movement')
+                if abs(pos.z-last.z)>3:
                     reason='ghost terrain slide during continuous movement'
                     break
                 if _distance_xy(pos.position,last.position)>.12:
