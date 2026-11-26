@@ -154,10 +154,10 @@ def nearby_service_npcs(
     role: str, profiles_root: str | None = None,
     radius: float = 600,
 ) -> tuple[NpcDestination, ...]:
-    """Rank local service NPCs, preferring selected-profile entries first.
+    """Rank interchangeable merchants by distance across all known catalogs.
 
-    Search remaining installed Horde XML vendor records only if the active
-    profile contains no geographically valid matching service. The spawn DB
+    Trainers/repair retain the profile preference; merchants always combine
+    the available catalogs. The spawn DB
     confirms location; it never invents trainer/vendor identities.
     """
     if not 30 <= radius <= 600:
@@ -183,13 +183,14 @@ def nearby_service_npcs(
             v.distance, v.entry, v.name)))
 
     primary = candidates(profile.vendors, 'selected Horde profile')
-    if primary:
+    if primary and role != 'merchant':
         return primary
+    other = ()
     if profiles_root:
         other = candidates(load_horde_vendor_catalog(
             profiles_root, selected_profile_path=profile.source_path),
             'local Horde XML vendor catalog')
-        if other:
+        if other and role != 'merchant':
             return other
     if role == 'merchant':
         discovered = []
@@ -205,6 +206,10 @@ def nearby_service_npcs(
                     name, entry, location, distance_world(origin, location),
                     'verified public 3.3.5a vendor service catalog + local spawn DB',
                     role))
-        return tuple(sorted(
-            discovered, key=lambda v:(v.distance, v.entry, v.name)))
+        combined = {}
+        for candidate in (*primary, *other, *discovered):
+            key = candidate.entry
+            if key not in combined or candidate.distance < combined[key].distance:
+                combined[key] = candidate
+        return tuple(sorted(combined.values(), key=lambda v:(v.distance, v.entry, v.name)))
     return ()

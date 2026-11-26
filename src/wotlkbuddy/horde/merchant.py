@@ -12,7 +12,7 @@ from typing import Callable
 
 from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.horde.npc_catalog import nearby_service_npcs
-from wotlkbuddy.horde.npc_visit import visit_npc
+from wotlkbuddy.horde.npc_visit import visit_npc, NpcTargetUnavailable
 from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
 from wotlkbuddy.horde.profile import HordeProfile
 from wotlkbuddy.live.codec import ClientTelemetry, MerchantItem
@@ -353,15 +353,16 @@ def free_bag_space(
             'CreatureSpawns.db within 600 yards')
     reason=('Raising training cash' if raise_cash else f'Bags low ({initial.resources.free_bag_slots} free)')
     last_error=None
-    for target in options[:3]:
-        log(f'{reason}; visiting profile merchant {target.name} ({target.entry}) from {target.source}')
+    log(f'{len(options)} verified merchant candidate(s) within 600y')
+    for target in options[:8]:
+        log(f'{reason}; visiting merchant {target.name} ({target.entry}), {target.distance:.1f}y from initial position; {target.source}')
         try:
             visit_npc(npc_name=target.name,npc_id=target.entry,pid=pid,capture=capture,driver=driver,
                 nav=nav,spawns=spawns,radius=600,destination_hint=target.position,log=log)
             return sell_at_verified_merchant(npc_name=target.name,npc_id=target.entry,
                 profile=profile,capture=capture,driver=driver,min_free_slots=min_free_slots,
                 protect_mage_gear=True,log=log)
-        except (MerchantUnavailable, EncounterRouteUnavailable) as exc:
+        except (MerchantUnavailable, EncounterRouteUnavailable, NpcTargetUnavailable) as exc:
             last_error=exc
             s=capture()
             if (s.truncated or s.player.guid!=initial.player.guid or s.player.dead or s.player.in_combat or

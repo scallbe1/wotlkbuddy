@@ -22,6 +22,10 @@ from wotlkbuddy.horde.hunt_routes import (unsafe_route_encounter, detour_around_
                                          EncounterRouteUnavailable)
 
 
+class NpcTargetUnavailable(LiveControlError):
+    """NPC could not be selected after a bounded verified visit."""
+
+
 def visit_npc(
     *, npc_name: str, npc_id: int, pid: int, capture: Callable[[], ClientTelemetry],
     driver, nav, spawns, radius: float = 160,
@@ -245,4 +249,4 @@ def visit_npc(
         if s.player.target_name == npc_name and \
                 creature_entry_from_guid(s.player.target_guid) == npc_id:
             return s
-    raise LiveControlError(f'NPC {npc_name} entry {npc_id} not verified after targeting')
+    raise NpcTargetUnavailable(f'NPC {npc_name} entry {npc_id} not verified after targeting')
