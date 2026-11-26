@@ -167,7 +167,7 @@ def wait_merchant_closed(state,*,capture,guard,sleep,now,npc_name,log):
                 return state
         else:
             closed=0
-    raise LiveControlError(f'{npc_name}: merchant window closure not confirmed within 8 seconds')
+    raise LiveControlError(f'{npc_name}: merchant close command sent, but two consecutive closed telemetry frames were not observed within 8 seconds')
 
 
 def wait_merchant_scan(state,*,capture,guard,sleep,now,log,npc_name,timeout=8):
