@@ -22,7 +22,10 @@ def route_region(pos):
         return 'unknown'
     if (abs(pos.x-1596.15) <= 2.5
             and _heading_error(pos.facing_rad, 4.712389) <= .25):
-        if abs(pos.z+41.424) <= .9 and 300 <= pos.y <= 316:
+        # The doorway is not the transport attachment boundary. The live
+        # client still reported world XYZ at Y=299.766 after passing the door.
+        # Continue toward the shaft centre (291.8) until attachment is observed.
+        if abs(pos.z+41.424) <= .9 and 291.8 <= pos.y <= 316:
             return 'lower'
         if abs(pos.z-55.24) <= .9 and 278 <= pos.y <= 285.5:
             return 'upper'
