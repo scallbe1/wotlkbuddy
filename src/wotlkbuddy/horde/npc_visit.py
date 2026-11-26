@@ -28,12 +28,16 @@ class NpcTargetUnavailable(LiveControlError):
 
 
 def verified_npc_route(raw,start,dest):
-    """A partial route is destination-specific, not a fatal session error."""
+    """Unusable destination geometry is recoverable; invalid live state is not."""
     try:
         return validate_nav_path(raw,start,dest,max_step=18.)
     except (LiveControlError,ValueError) as exc:
         if any(marker in str(exc).lower() for marker in (
-                'partial path','no usable bounded waypoint path')):
+                'partial path','no usable bounded waypoint path',
+                'path distance outside bounded travel limits',
+                'unsupported vertical/off-mesh transition',
+                'route has excessive waypoint count',
+                'route starts away from the verified player position')):
             raise EncounterRouteUnavailable('NPC destination unavailable: '+str(exc)) from exc
         raise
 
