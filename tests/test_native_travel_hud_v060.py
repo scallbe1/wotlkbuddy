@@ -218,3 +218,14 @@ def test_bounded_bag_and_distance_commands():
                     '/wbtcoords 2157 657 35 -5','/wbtbag 0 5 5571 1 0;print(1)'):
         with pytest.raises(ValueError):
             d.chat(invalid)
+
+
+@pytest.mark.parametrize('kind', ['detour','retreat'])
+def test_hunt_tactical_context_preserves_scoped_travel_wrapper(kind):
+    d=DisplayDriver()
+    d.hunt_travel_kind=kind
+    def travel():
+        assert d.calls==[(kind,None)]
+        return 'complete'
+    assert navigate_with_status(d,'enemies',travel)=='complete'
+    assert d.calls==[(kind,None),('clear',None)]
