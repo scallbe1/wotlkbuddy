@@ -38,3 +38,18 @@ def test_named_target_selected_without_tab():
     result=awareness.acquire(frame(1,''),target,1662)
     assert result.player.target_guid==target
     assert commands==['Captain Perrine']
+
+
+def test_name_seeding_accepts_kill_objective_without_sources():
+    driver=NS(awareness=NS(names={}))
+    seed_objective_names(driver,NS(entry=1662),NS(description='Captain Perrine slain: 0/1'),
+        (1662,),collect_items=False,log=lambda _:None)
+    assert driver.awareness.names=={1662:'Captain Perrine'}
+
+
+def test_name_seeding_is_optional_for_legacy_drivers():
+    from unittest.mock import Mock
+    log=Mock()
+    seed_objective_names(Mock(),NS(entry=123),NS(description='Mob: 9/10'),
+        (123,),collect_items=False,log=log)
+    log.assert_not_called()
