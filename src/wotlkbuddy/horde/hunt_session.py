@@ -80,9 +80,9 @@ def wire_hunt_services(*, capture, driver, guid, quest_id, started, max_seconds,
 
     from wotlkbuddy.horde.hunt_navigation import navigate_hunt
 
-    def navigate(s: ClientTelemetry, dest: Vec3, *, camp_transit=False) -> ClientTelemetry:
+    def navigate(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approach_path=None) -> ClientTelemetry:
         result = navigate_hunt(
-            s, dest, camp_transit=camp_transit, pid=pid, guid=guid, quest_id=quest_id,
+            s, dest, camp_transit=camp_transit, approach_path=approach_path, pid=pid, guid=guid, quest_id=quest_id,
             capture=capture, driver=driver, nav=nav, world_position=world_position,
             guard=guard, fresh=fresh, travel=travel, max_seconds=max_seconds,
             now=now, started=started, log=log)
