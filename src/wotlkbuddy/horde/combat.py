@@ -281,7 +281,10 @@ def _run_hunt(*, services, profile, quest_id, pid, capture, driver, nav, spawns,
             s, driver=driver, spec=spec, allowed_sources=allowed_sources,
             unhittable_guids=unhittable_guids, force_spawn_search=routes.force_spawn_search,
             world_position=world_position, fresh=fresh, log=log,
-            creature_entry_from_guid=creature_entry_from_guid)
+            creature_entry_from_guid=creature_entry_from_guid, terrain=routes.terrain)
+        if routes.terrain.retreat(s,routes=routes,world_position=world_position,
+                navigate=navigate,nav=nav,driver=driver,now=now,log=log):
+            continue
 
         if s.player.in_combat:
             s = clear_remaining_aggro(s)

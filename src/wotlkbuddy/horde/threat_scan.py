@@ -234,10 +234,10 @@ def scan_and_clear_hostiles(
             f'{len(candidates)} verified hostile mobs within '
             f'{detection_yards:g}y of travel corridor; possible pack, '
             'stopping before pulling into group')
+    if (awareness is not None or not candidates) and sum(distance <= (24 if awareness is not None else 18) for distance, _ in blocked_nearby) >= 2:
+        remember_pack(driver,pack_positions,monotonic())
+        raise LiveControlError('Possible pack behind cave bend; holding position rather than walking into multiple hostiles')
     if not candidates:
-        if sum(distance <= 18 for distance, _ in blocked_nearby) >= 2:
-            remember_pack(driver,pack_positions,monotonic())
-            raise LiveControlError('Possible pack behind cave bend; holding position rather than walking into multiple hostiles')
         # Restore a neutral target state, so subsequent quest drivers always
         # reacquire their own exact GUID. The scan never attacks a neutral mob.
         if state.player.target_guid:
