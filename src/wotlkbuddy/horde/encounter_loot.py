@@ -6,8 +6,30 @@ from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 
 
+def select_corpse(state, where, cg, entry, name, *, driver, fresh, exact, log):
+    """Observe each target selection before replacing it with another command."""
+    if exact(state,cg,entry) or state.player.in_combat:
+        return state,where
+    for command in ('/targetlastenemy','/targetlasttarget'):
+        driver.chat(command)
+        for _ in range(3):
+            state,where=fresh(state)
+            if exact(state,cg,entry) or state.player.in_combat:
+                return state,where
+        log(f'Corpse selection {command}: target={state.player.target_guid or "<none>"}; '
+            f'dead={getattr(state.combat_target,"dead",None)}')
+    if name and driver.target_objective_name(name):
+        for _ in range(3):
+            state,where=fresh(state)
+            if exact(state,cg,entry) or state.player.in_combat:
+                return state,where
+        log(f'Corpse name selection: target={state.player.target_guid or "<none>"}; '
+            f'dead={getattr(state.combat_target,"dead",None)}')
+    return state,where
+
+
 def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda _:None,
-                   sleep=real_sleep, max_corpses=12, now=monotonic):
+                   sleep=real_sleep, max_corpses=12, now=monotonic, nearby_only=False):
     if getattr(driver,'looting_encounter',False):
         return initial
     driver.looting_encounter=True
@@ -52,7 +74,7 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                     point=corpse_position(state,cg)
                 except (OSError,ValueError,RuntimeError):
                     continue
-                if point is not None:
+                if point is not None and (not nearby_only or (where.position.distance_to(point)<=4 and abs(point.z-where.z)<=4)):
                     candidates.append((where.position.distance_to(point),cg,entry,name,point))
             if not candidates:
                 break
@@ -92,20 +114,13 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                 if report.stopped_reason!='complete':
                     log('Corpse approach incomplete; retaining pending corpse')
                     continue
-            # Prefer current corpse, then previous enemy and last target,
-            # then name. Never interact with a same-name living mob.
-            for command in ('/targetlastenemy','/targetlasttarget'):
-                if exact(state,cg,entry) or state.player.in_combat:
-                    break
-                driver.chat(command)
-                state,where=fresh(state)
-            if not exact(state,cg,entry) and not state.player.in_combat and name:
-                if driver.target_objective_name(name):
-                    state,where=fresh(state)
+            state,where=select_corpse(state,where,cg,entry,name,driver=driver,fresh=fresh,exact=exact,log=log)
             if state.player.in_combat:
                 break
             if not exact(state,cg,entry):
                 log('Exact corpse not selectable at loot range; retaining pending corpse')
+                if nearby_only:
+                    retry_after.pop(cg,None)  # allow the post-rest drain to retry
                 continue
             try:
                 actual=corpse_position(state,cg)
