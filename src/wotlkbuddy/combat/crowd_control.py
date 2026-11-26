@@ -120,7 +120,7 @@ def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries
     denied=PullPlan(False,plan.enemies,'prefer isolated enemy; nearby linked group')
     on_entrance=isinstance(getattr(driver,'entrance_approach_guid',None),str)
     on_corridor=getattr(driver,'assessing_travel_corridor',False) is True
-    required=len(quest_entries)==1 and chosen.entry in quest_entries
+    required=chosen.entry in quest_entries
     if (len(plan.enemies)!=2 or not (required or on_entrance or on_corridor)
             or state.player.in_combat or state.resources is None):
         log(f'Linked pull deferred: {len(plan.enemies)} linked enemies; required entries {quest_entries}; primary {chosen.entry}')
