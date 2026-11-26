@@ -32,13 +32,16 @@ def search_spawn_candidates(*, spawns, world, spec, allowed_sources, expected,
         spawn for spawn in nearby
         if all(spawn.position.distance_to(blocked)>5.0
                for blocked in unhittable_positions)]
+    # Exclude failed local routes before deciding whether a distant camp is needed.
+    nearby=[p for p in nearby if (round(p.x),round(p.y),round(p.z)) not in failed_navigation]
     reference_only = False
     remote_camp = False
     if not nearby and spec.hotspots:
         for source_entry in allowed_sources:
             nearby.extend(distant_objective_spawns(spawns,entry=source_entry,
                 map_id=world.map_id,origin=world.position,hotspots=spec.hotspots))
-        nearby=[p for p in nearby if all(p.position.distance_to(b)>5 for b in unhittable_positions)]
+        nearby=[p for p in nearby if all(p.position.distance_to(b)>5 for b in unhittable_positions)
+                and (round(p.x),round(p.y),round(p.z)) not in failed_navigation]
         if nearby:
             remote_camp=True
             nearest=min(p.position.distance_to(world.position) for p in nearby)
