@@ -157,7 +157,8 @@ def test_exhausted_staging_search_follows_actual_detour(monkeypatch):
         pid=42,clear_remaining_aggro=Mock(),navigate=navigate,log=Mock())
     assert result==(None,True)
     navigate.assert_called_once_with(state,goal,approach_path=path)
-    assert routes.force_spawn_search
+    assert not routes.force_spawn_search
+    assert routes.staging_visited==[goal]
 
 
 def test_aggro_interrupts_alternate_search_before_movement(monkeypatch):
