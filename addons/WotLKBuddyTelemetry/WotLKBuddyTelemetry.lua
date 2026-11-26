@@ -849,10 +849,35 @@ local function tickData()
     end
     local foodCount, foodBag, foodSlot, foodItem = scanConjured(conjuredFood)
     local waterCount, waterBag, waterSlot, waterItem = scanConjured(conjuredWater)
+    -- Known instant healing potions only; observe, never use from Lua.
+    local healingRanks = {[118]=1,[858]=2,[929]=3,[1710]=4,[3928]=5,
+        [13446]=6,[22829]=7,[33447]=8}
+    local potionBag,potionSlot,potionID,potionQty,potionRank = -1,0,0,0,0
+    if GetContainerItemCooldown and GetContainerItemQuestInfo and GetItemInfo then
+        for bag=0,4 do
+            for slot=1,(GetContainerNumSlots(bag) or 0) do
+                local link=GetContainerItemLink(bag,slot)
+                local id=link and tonumber(string.match(link,'item:(%d+)'))
+                local rank=id and healingRanks[id]
+                if rank and rank>potionRank then
+                    local _,qty,locked=GetContainerItemInfo(bag,slot)
+                    local _,_,_,_,required=GetItemInfo(link)
+                    local start,duration,enabled=GetContainerItemCooldown(bag,slot)
+                    if qty and qty>0 and not locked and required and
+                        required<=UnitLevel('player') and enabled==1 and
+                        start and duration and (duration==0 or start+duration<=GetTime()) and
+                        not GetContainerItemQuestInfo(bag,slot) then
+                        potionBag,potionSlot,potionID,potionQty,potionRank=bag,slot,id,qty,rank
+                    end
+                end
+            end
+        end
+    end
     appendLine(table.concat({'X', tostring(known(587)), tostring(known(5504)),
         tostring(foodCount), tostring(waterCount),
         tostring(foodBag), tostring(foodSlot), tostring(foodItem),
-        tostring(waterBag), tostring(waterSlot), tostring(waterItem)}, '\t'))
+        tostring(waterBag), tostring(waterSlot), tostring(waterItem),
+        tostring(potionBag), tostring(potionSlot), tostring(potionID), tostring(potionQty)}, '\t'))
     -- Fast, observable Fireball input. Never guess an action-bar slot:
     -- export a digit key ONLY when its bound button actually holds the
     -- Fireball spell (not a macro or unrelated action). Cast timing is
@@ -1325,7 +1350,9 @@ local function tickData()
                         if not (id and qty and quality and price and itemType
                                 and equipLoc and name) then
                             saleScanComplete = 0
-                        elseif (not isQuest and itemType ~= ITEM_CLASS_QUEST
+                        elseif (not isQuest and itemType ~= ITEM_CLASS_QUEST and itemType~='Quest'
+                                and itemType~='Container' and itemType~='Key' and id~=6948
+                                and (itemType~='Consumable' or id==3434)
                                 and not locked and price > 0 and
                                 -- Preserve Mage-compatible equipment we do not score yet.
                                 not (equipLoc=='INVTYPE_HOLDABLE' or equipLoc=='INVTYPE_FINGER' or
@@ -1334,14 +1361,15 @@ local function tickData()
                                        (weaponSkills[subtype] and equipLoc=='INVTYPE_WEAPONOFFHAND')))) and
                                 (quality == 0 or
                                  (quality <= 2 and equipTypes[equipLoc]) or
-                                 (quality == 1 and itemType=='Miscellaneous' and subtype=='Junk') or
-                                 (quality == 1 and id == 3434))) then
+                                 (quality == 1 and equipLoc=='' and (id==3434 or
+                                    itemType=='Trade Goods' or itemType=='Reagent' or
+                                    itemType=='Recipe' or itemType=='Projectile' or
+                                    (itemType=='Miscellaneous' and (subtype=='Junk' or subtype=='Other')))))) then
                             table.insert(rows, table.concat({
                                 'D', tostring(bag), tostring(slot),
                                 tostring(id), tostring(qty), tostring(quality),
                                 tostring(price), '0', tostring(locked and 1 or 0),
-                                safe((quality==1 and equipLoc=='' and (id==3434 or
-                                    (itemType=='Miscellaneous' and subtype=='Junk'))) and 'VENDOR_JUNK' or equipLoc, 27)}, '\t'))
+                                safe((quality==1 and equipLoc=='') and 'VENDOR_JUNK' or equipLoc, 27)}, '\t'))
                         end
                     end
                 end
