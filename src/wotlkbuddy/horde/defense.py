@@ -57,6 +57,8 @@ def defend_against_aggro(
             sleep(.08)
         raise LiveControlError('Defensive combat telemetry stalled')
 
+    from wotlkbuddy.combat.crowd_control import EncounterControl, control_action, retain_fleeing_target
+    control=EncounterControl()
     state=initial
     guard(state)
     def verified_attacker(snapshot):
@@ -66,8 +68,9 @@ def defend_against_aggro(
                     and creature_entry_from_guid(snapshot.player.target_guid)
                     == t.entry_id)
 
-    target_guid = None
-    target_entry = None
+    target_guid = getattr(driver,'engaged_target_guid',None)
+    target_entry = getattr(driver,'engaged_target_entry',None)
+    fleeing_logged=set()
     no_damage = 0
     critical_logged = False
     melee_target=None
@@ -82,7 +85,11 @@ def defend_against_aggro(
         for _acquire in range(max_acquire + 1):
             if not state.player.in_combat:
                 return state
-            if verified_attacker(state):
+            control.observe(state)
+            if control.protected(state) and control.attackers-{state.player.target_guid}:
+                pass  # Keep crowd-controlled adds untouched while others live.
+            elif (verified_attacker(state) or retain_fleeing_target(state,target_guid,target_entry)
+                  or (control.protected(state) and not (control.attackers-{state.player.target_guid}))):
                 break
             if _acquire == max_acquire:
                 raise LiveControlError(
@@ -100,19 +107,46 @@ def defend_against_aggro(
                 guard(state)
                 if not state.player.in_combat:
                     return state
-                if not verified_attacker(state) or state.player.target_guid != target_guid:
+                if (state.player.target_guid != target_guid or not (verified_attacker(state)
+                        or retain_fleeing_target(state,target_guid,target_entry)
+                        or control.protected(state))):
                     target_guid = None
                     continue
         if state.player.health/max(1,state.player.max_health) < .25 and not critical_logged:
             log('Critical health: continuing verified defensive combat; rest after combat')
             critical_logged = True
         t = state.combat_target
+        if retain_fleeing_target(state,target_guid,target_entry) and t.attacks_player is not True:
+            if target_guid not in fleeing_logged:
+                log(f'Finishing fleeing enemy {target_guid}; retaining exact target at {t.health}/{t.max_health} HP')
+                fleeing_logged.add(target_guid)
         if t.fireball_in_range is not True:
             raise LiveControlError('Verified attacker is outside Fireball range; '
                                    'unsafe combat pursuit is unavailable')
         if state.mage_buffs is None or state.mage_buffs.knows_fireball is not True:
             raise LiveControlError('Learned Fireball not verified during defense')
-        before_hp=t.health
+        control.observe(state)
+        cc=control_action(state) if control.may_control(state) else None
+        if cc is not None and callable(getattr(driver,'cast_action_spell',None)):
+            rule,action=cc
+            control.attempted.add(target_guid)
+            driver.chat('/stopattack')
+            state=fresh(state)
+            ready=control_action(state)
+            if state.player.target_guid==target_guid and ready is not None and ready[0]==rule:
+                log(f'Crowd control: casting {rule.spell} on verified add {target_guid}')
+                driver.cast_action_spell(state,ready[1].spell_id)
+                for _cc in range(10):
+                    state=fresh(state,.25)
+                    if control.confirm(state,target_guid,rule):
+                        log(f'Crowd control confirmed: {rule.aura} on {target_guid}; switching to another attacker')
+                        break
+                    if not state.player.in_combat or state.player.target_guid!=target_guid:
+                        break
+                else:
+                    log(f'Crowd control unconfirmed: {rule.spell}; resuming verified defense')
+                continue
+        before_hp=state.combat_target.health
         from wotlkbuddy.combat.runtime import selected_action
         ability=selected_action(state)
         cast_action=getattr(driver,'cast_action_spell',None)
@@ -186,6 +220,7 @@ def defend_against_aggro(
             return state
         if (state.player.target_guid != target_guid or new is None
                 or new.entry_id != target_entry or new.dead or new.health == 0):
+            control.observe(state)
             log('Attacker defeated or target changed; combat persists, reacquiring')
             target_guid = None
             continue
