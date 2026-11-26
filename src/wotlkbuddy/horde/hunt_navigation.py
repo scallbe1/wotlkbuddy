@@ -8,6 +8,15 @@ from wotlkbuddy.horde.interaction import navigate_with_status
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import validate_nav_path
+from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable, encounter_displaced_route
+
+
+def verify_replan_position(state,world_position,pid,guid,map_id):
+    observed_pid,measured=world_position(state)
+    if (observed_pid!=pid or measured.map_id!=map_id or
+            measured.player_guid.lower()!=guid.lower()):
+        raise LiveControlError('Navigation stopped: map/GUID/PID changed before route replan')
+    return measured
 
 
 def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approach_path=None,
@@ -16,11 +25,13 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approac
     """Follow Detour; retry a height mismatch once from measured live XYZ.
 
     A route that reaches an XY waypoint on the wrong floor is invalid.
-    Never keep walking that route or relax its Z tolerance. A *new*
-    navmesh query from the verified current floor is allowed once, and
-    only if the failed route made meaningful progress toward the camp.
+    Never keep walking that route or relax its Z tolerance. A new
+    navmesh query from the verified current floor requires meaningful
+    progress. Encounter displacement has a separate bounded retry budget.
     """
     height_replans = 0
+    displacement_replans = 0
+    height_limit = 4 if camp_transit else 1
     precise = approach_path is not None
     while True:
         _pid, world = world_position(s)
@@ -47,7 +58,7 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approac
             log(f'Distant camp transit: first of {len(segments)} validated segments; '
                 f'final camp XYZ ({dest.x:.2f},{dest.y:.2f},{dest.z:.2f})')
         log(f'Detour approaching target location via {len(legs)-1} longer legs'
-            + (f' (height replan {height_replans}/1)'
+            + (f' (height replan {height_replans}/{height_limit})'
                if height_replans else ''))
         kb = getattr(driver, 'keyboard', driver)
         def sample():
@@ -74,9 +85,14 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approac
         out = fresh(s)
         if report.stopped_reason == 'complete':
             return out
-        if ('fresh Detour replan' in report.stopped_reason or 'fresh Detour route required' in report.stopped_reason) and height_replans<1 and not out.player.in_combat:
-            height_replans+=1
-            log('Encounter displaced player while looting; recalculating route from actual XYZ')
+        if encounter_displaced_route(report.stopped_reason):
+            if out.player.in_combat:
+                return out
+            verify_replan_position(out,world_position,pid,guid,world.map_id)
+            if displacement_replans>=8:
+                raise EncounterRouteUnavailable('Encounter displacement retry budget exhausted; refresh objective next cycle')
+            displacement_replans+=1
+            log(f'Encounter displaced player; recalculating same route from measured XYZ ({displacement_replans}/8)')
             s=out
             continue
         if 'Aggro/combat detected' in report.stopped_reason and out.player.in_combat:
@@ -84,13 +100,9 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approac
             return out
         if (out.player.in_combat or
                 'height/floor' not in report.stopped_reason or
-                height_replans >= 1):
+                height_replans >= height_limit):
             raise LiveControlError('Navigation stopped: '+report.stopped_reason)
-        observed_pid, measured = world_position(out)
-        if (observed_pid != pid or measured.map_id != world.map_id or
-                measured.player_guid.lower() != guid.lower()):
-            raise LiveControlError(
-                'Navigation stopped: map/GUID/PID changed before height replan')
+        measured = verify_replan_position(out,world_position,pid,guid,world.map_id)
         new_remaining = hypot(measured.x-dest.x, measured.y-dest.y)
         progress_xy = remaining_xy - new_remaining
         if progress_xy < 5:

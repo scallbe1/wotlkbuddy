@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from math import hypot
 
 from wotlkbuddy.game.types import Vec3
-from wotlkbuddy.horde.hunt_routes import alternate_hunt_routes, recoverable_hunt_failure
+from wotlkbuddy.horde.hunt_routes import (
+    alternate_hunt_routes, recoverable_hunt_failure, encounter_displaced_route, EncounterRouteUnavailable)
 from wotlkbuddy.horde.hunt_search import next_unvisited_spawn
 from wotlkbuddy.horde.hunt_terrain import HuntTerrain
 from wotlkbuddy.live.control import LiveControlError
@@ -97,6 +98,9 @@ def handle_spawn_failure(exc, *, routes, key, allowed_sources, capture,
             raise LiveControlError('Aggro unresolved before starting quest phase') from exc
         routes.recently_visited.pop(key,None)
         return
+    if encounter_displaced_route(exc):
+        routes.recently_visited.pop(key,None)
+        raise EncounterRouteUnavailable('Encounter displaced route; refreshing same objective from current position') from exc
     routes.recently_visited[key] = 0 if unsafe_encounter and len(allowed_sources)==1 else 2
     if unsafe_encounter:
         routes.route_replans+=1
@@ -172,6 +176,9 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
     routes.staging_visited.append(staging)
     try:
         s = navigate(s, staging, camp_transit=remote_camp)
+    except EncounterRouteUnavailable:
+        routes.recently_visited.pop(key,None)
+        raise
     except LiveControlError as exc:
         handle_spawn_failure(exc, routes=routes, key=key, allowed_sources=allowed_sources,
                              capture=capture, guard=guard, world_position=world_position,

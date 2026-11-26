@@ -4,7 +4,7 @@ from math import atan2, cos, sin, pi
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.hunt_routes import (
-    EncounterRouteUnavailable, recoverable_hunt_failure, unsafe_route_encounter)
+    EncounterRouteUnavailable, recoverable_hunt_failure, unsafe_route_encounter, encounter_displaced_route)
 from wotlkbuddy.horde.ranged_pull import ranged_approach_clear
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import validate_nav_path, route_reuses_collision
@@ -211,7 +211,7 @@ def move_entrance(terrain,memory,state,where,*,routes,world_position,navigate,na
         _,actual=world_position(current)
         if actual.map_id!=where.map_id:
             raise LiveControlError('Map changed during entrance approach')
-        if unsafe_route_encounter(exc):
+        if unsafe_route_encounter(exc) or encounter_displaced_route(exc):
             memory.pending_path=()
             log('Entrance model: combat interruption, not a physical obstruction; retaining target and route goal')
             return True

@@ -6,6 +6,11 @@ from wotlkbuddy.live.world_travel import validate_nav_path
 from wotlkbuddy.horde.route_diagnostics import DetourDiagnostics, planning_status, xyz
 
 
+def encounter_displaced_route(reason):
+    message=str(reason).lower()
+    return ('fresh detour replan' in message or 'fresh detour route required' in message)
+
+
 def recoverable_hunt_failure(reason):
     return any(marker in str(reason).lower() for marker in (
         'unsafe encounter:', 'possible pack', 'height/floor',
