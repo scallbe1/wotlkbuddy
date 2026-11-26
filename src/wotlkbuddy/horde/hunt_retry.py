@@ -187,6 +187,12 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             clear_remaining_aggro(current)
             return None,True
         log('Intermediate detour interrupted: '+str(exc))
+        _,measured=world_position(current)
+        if measured.position.distance_to(world.position)>2:
+            return None,True
+        update=getattr(driver,'set_navigation_status',None)
+        if callable(update):
+            update('planning')
     # The destination may be behind a pack, but a short retreat can change
     # the approach angle. Never discard measured obstacles to force a route.
     from wotlkbuddy.horde.hunt_terrain import retreat_candidates
@@ -227,6 +233,16 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             if not recoverable_hunt_failure(exc):
                 raise
             log('Retreat candidate blocked: '+str(exc))
+            current=capture()
+            guard(current)
+            if current.player.in_combat:
+                clear_remaining_aggro(current)
+                return None,True
+            if world_position(current)[1].position.distance_to(where.position)>2:
+                return None,True
+            update=getattr(driver,'set_navigation_status',None)
+            if callable(update):
+                update('planning')
         except (OSError,ValueError,RuntimeError,TimeoutError):
             continue
     try:
