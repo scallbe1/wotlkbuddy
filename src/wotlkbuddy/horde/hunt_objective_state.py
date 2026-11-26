@@ -10,9 +10,9 @@ def seed_objective_names(driver, spec, observed, allowed_sources, *, collect_ite
     """Names are selection hints only; the exact live GUID remains mandatory."""
     import re
     awareness=getattr(driver,'awareness',None)
-    if awareness is None:
+    if not isinstance(getattr(awareness,'names',None),dict):
         return
-    for source in spec.sources:
+    for source in getattr(spec,'sources',()):
         if source.kind=='mob' and source.entry in allowed_sources and source.name:
             awareness.names.setdefault(source.entry,source.name)
     if collect_items or len(allowed_sources)!=1:
