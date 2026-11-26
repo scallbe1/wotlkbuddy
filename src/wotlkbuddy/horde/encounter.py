@@ -67,6 +67,15 @@ def assess_encounter(player, resources, position, chosen, enemies, quest_entries
     return PullPlan(False,pack,'linked group exceeds conservative Mage combat budget')
 
 
+def assess_linked_pull(state, plan, chosen, driver, awareness, quest_entries, log):
+    from wotlkbuddy.combat.crowd_control import prepare_linked_pull
+    state,plan=prepare_linked_pull(state,plan,chosen,driver=driver,
+        awareness=awareness,quest_entries=quest_entries,log=log)
+    if plan is not None:
+        log(f'Linked encounter: {"PULL" if plan.allowed else "AVOID"}: {plan.reason}')
+    return state,plan
+
+
 def survey_pull(*,initial,capture,driver,player_position,target_position,quest_entries=(),
                 log=lambda _:None,sleep=real_sleep):
     """Survey red targets around the current firing position; restore exact GUID."""
@@ -104,7 +113,7 @@ def survey_pull(*,initial,capture,driver,player_position,target_position,quest_e
             plan=PullPlan(False,plan.enemies,'unclassified creature near potential pull: '+
                           ', '.join(str(m.entry) for m in uncertain))
         elif len(plan.enemies)>1:
-            plan=PullPlan(False,plan.enemies,'prefer isolated enemy; nearby linked group')
+            return assess_linked_pull(state,plan,chosen,driver,awareness,quest_entries,log)
         log(f'Object encounter: {len(enemies)} red, {len(unknown)} unknown, '
             f'{len(plan.enemies)} linked; {"PULL" if plan.allowed else "AVOID"}: {plan.reason}')
         return state,plan
