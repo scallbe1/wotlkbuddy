@@ -68,9 +68,21 @@ def assess_encounter(player, resources, position, chosen, enemies, quest_entries
 
 
 def assess_linked_pull(state, plan, chosen, driver, awareness, quest_entries, log):
-    from wotlkbuddy.combat.crowd_control import prepare_linked_pull
+    from wotlkbuddy.combat.crowd_control import prepare_linked_pull, exact_hostile
+    # Prefer crowd control, but do not discard an independently approved
+    # weaker pack solely because the escort cannot be sheeped.
+    baseline=plan
     state,plan=prepare_linked_pull(state,plan,chosen,driver=driver,
         awareness=awareness,quest_entries=quest_entries,log=log)
+    if (plan is not None and not plan.allowed and baseline.allowed
+            and not state.player.in_combat and not state.player.dead
+            and exact_hostile(state,chosen)
+            and not getattr(state,'current_cast_remaining_ms',0)
+            and all(e.classification=='normal' for e in baseline.enemies)
+            and state.player.health>=.95*state.player.max_health
+            and state.resources.mana>=.90*state.resources.max_mana):
+        plan=baseline
+        log('Linked pull: using approved weaker-enemy combat budget without crowd control')
     if plan is not None:
         log(f'Linked encounter: {"PULL" if plan.allowed else "AVOID"}: {plan.reason}')
     return state,plan

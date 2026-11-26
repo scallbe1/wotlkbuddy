@@ -161,3 +161,24 @@ def test_collection_objective_can_use_opening_control():
         quest_entries=(1535,1536,1537,1538,1539,1540),log=lambda _:None)
     assert allowed.allowed and result.player.target_guid==primary.guid
     assert actions==[escort.name,'/stopattack',118,primary.name]
+
+
+def test_approved_weaker_undead_pair_can_be_fought_without_polymorph():
+    from wotlkbuddy.horde.encounter import assess_linked_pull
+    primary,escort=travel_pair()
+    opening=state(primary,creature='Undead')
+    opening.player.level=9
+    opening.player.health=opening.player.max_health=162
+    opening.resources=NS(class_token='MAGE',mana=453,max_mana=453)
+    selected=state(escort,creature='Undead')
+    restored=state(primary,creature='Undead')
+    restored.player.level=9
+    restored.player.health=restored.player.max_health=162
+    restored.resources=opening.resources
+    frames=iter([selected,restored])
+    driver=NS(assessing_travel_corridor=True,target_objective_name=lambda _:True,
+              chat=lambda _:None)
+    plan=PullPlan(True,(primary,escort),'two weaker enemies including escorts; high resources')
+    result,allowed=assess_linked_pull(opening,plan,primary,driver,
+        NS(_fresh=lambda _:next(frames)),(),lambda _:None)
+    assert result is restored and allowed is plan

@@ -139,3 +139,39 @@ def test_navigation_preflight_error_can_recover_at_session_boundary():
         'Combat or death present; navigation is not a combat routine'))
     assert not recoverable_aggro_error(LiveControlError(
         'World map/GUID inconsistent with live addon before navigation'))
+
+
+def test_exhausted_staging_search_follows_actual_detour(monkeypatch):
+    from wotlkbuddy.horde import hunt_retry
+    state=NS(player=NS(in_combat=False))
+    world=NS(map_id=0,position=Vec3(0,0,0))
+    goal=Vec3(60,0,0)
+    path=[world.position,Vec3(20,20,0),goal]
+    monkeypatch.setattr(hunt_retry,'alternate_hunt_routes',Mock(return_value=[]))
+    monkeypatch.setattr(hunt_retry,'detour_around_encounters',Mock(return_value=path))
+    navigate=Mock(return_value=state)
+    routes=HuntRouteState()
+    result=hunt_retry.find_hunt_alternative(state,routes=routes,world=world,
+        staging=goal,nearby=[],hazards=[Vec3(20,0,0)],driver=Mock(),nav=Mock(),
+        capture=lambda:state,guard=Mock(),world_position=lambda _:(42,world),
+        pid=42,clear_remaining_aggro=Mock(),navigate=navigate,log=Mock())
+    assert result==(None,True)
+    navigate.assert_called_once_with(state,goal,approach_path=path)
+    assert routes.force_spawn_search
+
+
+def test_aggro_interrupts_alternate_search_before_movement(monkeypatch):
+    from wotlkbuddy.horde import hunt_retry
+    fighting=NS(player=NS(in_combat=True))
+    world=NS(map_id=0,position=Vec3(0,0,0))
+    def search(*args,guard,**kwargs):
+        guard()
+    monkeypatch.setattr(hunt_retry,'alternate_hunt_routes',search)
+    defend,navigate=Mock(),Mock()
+    result=hunt_retry.find_hunt_alternative(fighting,routes=HuntRouteState(),
+        world=world,staging=Vec3(60,0,0),nearby=[],hazards=[],driver=Mock(),nav=Mock(),
+        capture=lambda:fighting,guard=Mock(),world_position=lambda _:(42,world),
+        pid=42,clear_remaining_aggro=defend,navigate=navigate,log=Mock())
+    assert result==(None,True)
+    defend.assert_called_once_with(fighting)
+    navigate.assert_not_called()
