@@ -182,6 +182,45 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             clear_remaining_aggro(current)
             return None,True
         log('Intermediate detour interrupted: '+str(exc))
+    # The destination may be behind a pack, but a short retreat can change
+    # the approach angle. Never discard measured obstacles to force a route.
+    from wotlkbuddy.horde.hunt_terrain import retreat_candidates
+    from wotlkbuddy.horde.hunt_routes import path_avoids_pack
+    from wotlkbuddy.live.world_travel import validate_nav_path
+    current=capture()
+    guard(current)
+    if current.player.in_combat:
+        clear_remaining_aggro(current)
+        return None,True
+    _,where=world_position(current)
+    for map_id,point in retreat_candidates(routes.terrain.anchors,current,where,driver,nav,log):
+        try:
+            supervise()
+            if map_id!=where.map_id or not 18<=where.position.distance_to(point)<=65:
+                continue
+            path=validate_nav_path(nav.find_path(map_id,where.position,point),
+                where.position,point,max_distance=90,max_step=9)
+            supervise()
+            if not path_avoids_pack(path,hazards,radius=15):
+                continue
+            log(f'Changing approach: retreating {where.position.distance_to(point):.1f}y along a verified route')
+            out=navigate(capture(),point,approach_path=path)
+            if out.player.in_combat:
+                clear_remaining_aggro(out)
+            routes.force_spawn_search=True
+            return None,True
+        except RouteCombatInterrupted:
+            current=capture()
+            guard(current)
+            if current.player.in_combat:
+                clear_remaining_aggro(current)
+            return None,True
+        except LiveControlError as exc:
+            if not recoverable_hunt_failure(exc):
+                raise
+            log('Retreat candidate blocked: '+str(exc))
+        except (OSError,ValueError,RuntimeError,TimeoutError):
+            continue
     # An exhaustive search from the same position will not improve by
     # blacklisting one remote spawn at a time. Refresh live patrols instead.
     raise EncounterRouteUnavailable('No verified alternate corridor; reobserve patrols before retry')
