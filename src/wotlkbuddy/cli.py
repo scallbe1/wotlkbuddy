@@ -1288,6 +1288,8 @@ def _register_world_observation_commands(sub):
     transport.add_argument('--countdown', type=float, default=5)
     transport.add_argument('--monitor', type=int, default=0)
     transport.add_argument('--pid', type=int)
+    transport.add_argument('--platforms', action='store_true',
+                           help='Include raw transport GameObject candidate pose and state')
     transport.set_defaults(func=record_transport_trace)
 
 
