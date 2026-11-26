@@ -13,6 +13,7 @@ def encounter_displaced_route(reason):
 
 def recoverable_hunt_failure(reason):
     return any(marker in str(reason).lower() for marker in (
+        'combat or death present; navigation is not a combat routine',
         'unsafe encounter:', 'possible pack', 'height/floor',
         'different heights/floors', 'no forward progress',
         'movement diverged from waypoint',
