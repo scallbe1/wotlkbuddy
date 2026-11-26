@@ -55,6 +55,51 @@ def board_window(floor, state, phase, *, age_ms, crossing_ms):
     return nominal_open_window(floor, advanced, crossing_ms=crossing_ms, margin_ms=350)
 
 
+def _execute_boarding(*, keyboard, memory, owner, floor, budget, pos, grab, guard):
+    """Run one bounded movement attempt; always release the forward key."""
+    from wotlkbuddy.live.control import LiveControlError
+    from wotlkbuddy.live.world_position import observe_world_position
+
+    deadline = time.monotonic()+budget
+    last_snap = time.monotonic()
+    boarded = False
+    result = 'boarding_timeout'
+    keyboard.key_down(0x11)
+    try:
+        while time.monotonic() < deadline:
+            if keyboard.emergency_stop_requested() or not keyboard.wow_is_foreground():
+                raise LiveControlError('Boarding aborted: focus or Escape')
+            if time.monotonic()-last_snap >= .20:
+                _, current, _, _ = grab()
+                guard(current, owner)
+                last_snap = time.monotonic()
+            pos = observe_world_position(memory, expected_guid=owner)
+            if deck_position(pos, floor):
+                boarded = True
+                if at_center(pos, floor):
+                    result = 'boarded_center'
+                    break
+                if (floor == 'lower' and pos.x > 1.4) or (floor == 'upper' and pos.x < -1.4):
+                    result = 'center_overshot'
+                    break
+            elif boarded:
+                result = 'lost_deck_frame'
+                break
+            else:
+                z, _, _, facing = LANDINGS[floor]
+                if (pos.map_id != 0 or abs(pos.x-CENTER_X) > 1.3
+                        or abs(pos.z-z) > 1.1
+                        or heading_error(pos.facing_rad, facing) > .18
+                        or not (290 <= pos.y <= 310 if floor == 'lower'
+                                else 274 <= pos.y <= 293)):
+                    result = 'unexpected_approach_position'
+                    break
+            time.sleep(.035)
+    finally:
+        keyboard.key_up(0x11)
+    return result, pos, boarded
+
+
 def trial_board(args):
     import mss
     from wotlkbuddy.game.win32 import ProcessMemory
@@ -137,43 +182,9 @@ def trial_board(args):
                                     age_ms=(time.monotonic()-captured)*1000,
                                     crossing_ms=budget*1000):
                     continue
-                deadline = time.monotonic()+budget
-                last_snap = time.monotonic()
-                boarded = False
-                result = 'boarding_timeout'
-                keyboard.key_down(0x11)
-                try:
-                    while time.monotonic() < deadline:
-                        if keyboard.emergency_stop_requested() or not keyboard.wow_is_foreground():
-                            raise LiveControlError('Boarding aborted: focus or Escape')
-                        if time.monotonic()-last_snap >= .20:
-                            _, current, _, _ = grab()
-                            guard(current, owner)
-                            last_snap = time.monotonic()
-                        pos = observe_world_position(memory, expected_guid=owner)
-                        if deck_position(pos, floor):
-                            boarded = True
-                            if at_center(pos, floor):
-                                result = 'boarded_center'
-                                break
-                            if (floor == 'lower' and pos.x > 1.4) or (floor == 'upper' and pos.x < -1.4):
-                                result = 'center_overshot'
-                                break
-                        elif boarded:
-                            result = 'lost_deck_frame'
-                            break
-                        else:
-                            z, _, _, facing = LANDINGS[floor]
-                            if (pos.map_id != 0 or abs(pos.x-CENTER_X) > 1.3
-                                    or abs(pos.z-z) > 1.1
-                                    or heading_error(pos.facing_rad, facing) > .18
-                                    or not (290 <= pos.y <= 310 if floor == 'lower'
-                                            else 274 <= pos.y <= 293)):
-                                result = 'unexpected_approach_position'
-                                break
-                        time.sleep(.035)
-                finally:
-                    keyboard.key_up(0x11)
+                result, pos, boarded = _execute_boarding(
+                    keyboard=keyboard, memory=memory, owner=owner, floor=floor,
+                    budget=budget, pos=pos, grab=grab, guard=guard)
                 emit(result, **pos.to_dict(), transport_relative=boarded)
                 print('Movement released. Manually ride and exit the elevator; no additional input.',
                       flush=True)
