@@ -58,6 +58,9 @@ def record_transport_trace(args):
             raise RuntimeError('Transport trace stopped: character/map changed, combat or death')
         elapsed=round(time.monotonic()-started,3)
         row=position_trace_row(world, previous, elapsed)
+        if getattr(args, 'platforms', False):
+            from wotlkbuddy.live.transport_platform import verified_platform_candidates
+            row['platform_candidates'] = verified_platform_candidates(snap, pid=pid, map_id=map_id)
         print(json.dumps(row),flush=True)
         previous=world
         count+=1
