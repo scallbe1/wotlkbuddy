@@ -26,6 +26,17 @@ class NpcTargetUnavailable(LiveControlError):
     """NPC could not be selected after a bounded verified visit."""
 
 
+def verified_npc_route(raw,start,dest):
+    """A partial route is destination-specific, not a fatal session error."""
+    try:
+        return validate_nav_path(raw,start,dest,max_step=18.)
+    except (LiveControlError,ValueError) as exc:
+        if any(marker in str(exc).lower() for marker in (
+                'partial path','no usable bounded waypoint path')):
+            raise EncounterRouteUnavailable('NPC destination unavailable: '+str(exc)) from exc
+        raise
+
+
 def visit_npc(
     *, npc_name: str, npc_id: int, pid: int, capture: Callable[[], ClientTelemetry],
     driver, nav, spawns, radius: float = 160,
@@ -80,9 +91,9 @@ def visit_npc(
     if not nav.ping():
         raise LiveControlError('Navmesh helper not responding')
     if hypot(world.x-dest.x, world.y-dest.y) > 3:
-        path = validate_nav_path(
+        path = verified_npc_route(
             nav.find_path(world.map_id, world.position, dest),
-            world.position, dest, max_step=18.0)
+            world.position, dest)
         log(f'Visiting {npc_name} ({npc_id}) via {len(path)-1} Detour legs')
         def sample():
             state = capture()
@@ -124,7 +135,7 @@ def visit_npc(
                 raw=nav.find_path(world.map_id,where.position,dest)
                 if not raw or abs(raw[0].z-where.z)>2.5:
                     raise LiveControlError('NPC replan does not start on measured floor')
-                return validate_nav_path(raw,where.position,dest,max_step=18.)
+                return verified_npc_route(raw,where.position,dest)
             while True:
                 remaining=deadline-now()
                 if remaining<15:
@@ -207,7 +218,7 @@ def visit_npc(
                                         # Fresh stationary threat scan still runs before moving.
                                         raw=nav.find_path(world.map_id,measured.position,dest)
                                         if raw and abs(raw[0].z-measured.z)<=2.5:
-                                            raw=validate_nav_path(raw,measured.position,dest,max_step=18.)
+                                            raw=verified_npc_route(raw,measured.position,dest)
                                             break
                                         raw=None
                                     else:
@@ -226,7 +237,7 @@ def visit_npc(
                 raw=nav.find_path(world.map_id,measured.position,dest)
                 if not raw or abs(raw[0].z-measured.z)>2.5:
                     raise LiveControlError('NPC replan does not start on measured floor')
-                route=validate_nav_path(raw,measured.position,dest,max_step=18.)
+                route=verified_npc_route(raw,measured.position,dest)
         navigate_with_status(driver,'npc',execute_visit,target=npc_name)
 
     after = capture()
