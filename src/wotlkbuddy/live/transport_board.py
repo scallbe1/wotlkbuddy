@@ -13,7 +13,9 @@ from wotlkbuddy.live.transport_door import OpeningTracker, classify_frame, plaus
 from wotlkbuddy.live.transport_visual import reduce_rgb
 
 CENTER_X, CENTER_Y = 1596.15, 291.80
-LANDINGS = {'lower': (-41.42, 303.0, 309.5, 4.712389),
+# Lower calibration pose measured in live boarding test:
+# (1595.6241, 310.6530, -41.4236), heading 4.7911 rad.
+LANDINGS = {'lower': (-41.42, 303.0, 311.0, 4.712389),
             'upper': (55.24, 274.1, 282.0, 1.570796)}
 
 
@@ -26,6 +28,16 @@ def landing_aligned(pos, floor):
     return (pos.map_id == 0 and abs(pos.x-CENTER_X) <= 0.75
             and lo <= pos.y <= hi and abs(pos.z-z) <= .6
             and heading_error(pos.facing_rad, facing) <= .12)
+
+
+def approach_corridor(pos, floor):
+    """Validate the world-frame portion of the forward boarding motion."""
+    z, lo, hi, facing = LANDINGS[floor]
+    y_min, y_max = ((290, hi+.5) if floor == 'lower' else (274, 293))
+    return (pos.map_id == 0 and abs(pos.x-CENTER_X) <= 1.3
+            and abs(pos.z-z) <= 1.1
+            and heading_error(pos.facing_rad, facing) <= .18
+            and y_min <= pos.y <= y_max)
 
 
 def deck_position(pos, floor):
@@ -86,12 +98,7 @@ def _execute_boarding(*, keyboard, memory, owner, floor, budget, pos, grab, guar
                 result = 'lost_deck_frame'
                 break
             else:
-                z, _, _, facing = LANDINGS[floor]
-                if (pos.map_id != 0 or abs(pos.x-CENTER_X) > 1.3
-                        or abs(pos.z-z) > 1.1
-                        or heading_error(pos.facing_rad, facing) > .18
-                        or not (290 <= pos.y <= 310 if floor == 'lower'
-                                else 274 <= pos.y <= 293)):
+                if not approach_corridor(pos, floor):
                     result = 'unexpected_approach_position'
                     break
             time.sleep(.035)
@@ -171,7 +178,9 @@ def trial_board(args):
                      uncertainty_ms=phase.uncertainty_ms if phase else None,
                      crossing_seconds=round(budget,3), ready=ready)
                 if not ready:
-                    time.sleep(.12)
+                    # The farther calibrated approach has a narrow launch window.
+                    # Sample more frequently while open without reducing margins.
+                    time.sleep(.035 if state == 'open' and phase is not None else .12)
                     continue
                 if not args.enable_input:
                     emit('dry_run_ready', floor=floor)
