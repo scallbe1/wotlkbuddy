@@ -1720,8 +1720,12 @@ end
 
 SLASH_WOTLKBUDDYTRAVEL1 = '/wbttravel'
 SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
-    if message == 'clear' then
-        hudTravelKind, hudTravelName = '', ''
+    if message == 'activityclear' then
+        hudActivity = ''
+    elseif message == 'assess' or message == 'range' then
+        hudActivity = message
+    elseif message == 'clear' then
+        hudTravelKind, hudTravelName, hudActivity = '', '', ''
         destinationText:SetText('')
     elseif message == 'enemies' or message == 'corpse' or
             message == 'firing' or message == 'deathrun' or
