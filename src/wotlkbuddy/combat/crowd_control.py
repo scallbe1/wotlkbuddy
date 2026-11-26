@@ -81,16 +81,19 @@ def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries
     denied=PullPlan(False,plan.enemies,'prefer isolated enemy; nearby linked group')
     if (len(plan.enemies)!=2 or len(quest_entries)!=1 or chosen.entry not in quest_entries
             or state.player.in_combat or state.resources is None):
+        log(f'Linked pull deferred: {len(plan.enemies)} linked enemies; required entries {quest_entries}; primary {chosen.entry}')
         return state,denied
     rules=CONTROL_RULES.get(state.resources.class_token.upper(),())
     ready_names={a.name for a in state.action_spells}
     if not rules or not any(r.spell in ready_names for r in rules):
+        log(f'Linked pull deferred: no supported bound control spell; observed actions {sorted(ready_names)}')
         return state,denied
     if (state.player.health<.95*state.player.max_health or
             state.resources.mana<.85*state.resources.max_mana or
             any(e.level is None or not 0<e.level<=state.player.level+2 or
                 e.classification in ('elite','rareelite','worldboss','rare')
                 for e in plan.enemies) or chosen.classification!='normal'):
+        log(f'Linked pull deferred: HP {state.player.health}/{state.player.max_health}, mana {state.resources.mana}/{state.resources.max_mana}; enemies {[(e.entry,e.level,e.classification) for e in plan.enemies]}')
         return state,denied
     escort=next(e for e in plan.enemies if e.guid!=chosen.guid)
     fresh=awareness._fresh
