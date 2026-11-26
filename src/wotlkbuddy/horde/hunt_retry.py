@@ -163,9 +163,40 @@ def search_remote_hunt_alternative(*,routes,world,nearby,hazards,nav,supervise,
     raise EncounterRouteUnavailable('No verified alternate corridor; reobserve patrols before retry')
 
 
+def meaningful_hunt_staging(origin,staging,visited):
+    """An alternate search must produce a new, meaningful firing location."""
+    return (hypot(origin.x-staging.x,origin.y-staging.y)>=8 and
+            all(staging.distance_to(point)>=5 for point in visited))
+
+
+def follow_local_hunt_bypass(*,routes,world,staging,path,driver,navigate,
+                             capture,guard,world_position,clear_remaining_aggro,log,
+                             spawn_key=None):
+    current=capture()
+    guard(current)
+    if current.player.in_combat:
+        raise RouteCombatInterrupted('Aggro/combat detected during route retry')
+    routes.staging_visited.append(staging)
+    if spawn_key is not None:
+        routes.recently_visited[spawn_key]=routes.recently_visited.get(spawn_key,0)+1
+    log('Verified alternate corridor; following the actual detour path')
+    out=tactical_navigate(driver,navigate,current,staging,path,'detour')
+    guard(out)
+    if out.player.in_combat:
+        clear_remaining_aggro(out)
+    else:
+        _,measured=world_position(out)
+        if measured.position.distance_to(world.position)<2:
+            log('Alternate corridor produced no movement; excluding this staging point')
+    # Reobserve actual enemies even if the route returned early. The staging
+    # point is consumed, so no-op arrivals cannot repeat on the next scan.
+    routes.force_spawn_search=False
+    return None,True
+
+
 def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
                           nav, capture, guard, world_position, pid,
-                          clear_remaining_aggro, navigate, log):
+                          clear_remaining_aggro, navigate, log, spawn_key=None):
     """Search once from measured ground, then try a real corridor detour."""
     def supervise():
         current=capture()
@@ -179,20 +210,23 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
     try:
         supervise()
         log('Checking local bypass before searching distant spawn staging positions')
-        path=detour_around_encounters(nav,world.map_id,world.position,staging,hazards,
-            guard=supervise,log=log,max_distance=800.,avoid_radius=15.,candidate_limit=12)
-        supervise()
-        if path:
-            current=capture()
-            guard(current)
-            if current.player.in_combat:
-                raise RouteCombatInterrupted('Aggro/combat detected during route retry')
-            log('Verified alternate corridor; following the actual detour path')
-            out=tactical_navigate(driver,navigate,current,staging,path,'detour')
-            if out.player.in_combat:
-                clear_remaining_aggro(out)
-            routes.force_spawn_search=True
-            return None,True
+        if meaningful_hunt_staging(world.position,staging,routes.staging_visited):
+            path=detour_around_encounters(nav,world.map_id,world.position,staging,hazards,
+                guard=supervise,log=log,max_distance=800.,avoid_radius=15.,candidate_limit=12)
+            supervise()
+            if path:
+                return follow_local_hunt_bypass(routes=routes,world=world,staging=staging,
+                    path=path,driver=driver,navigate=navigate,capture=capture,guard=guard,
+                    world_position=world_position,clear_remaining_aggro=clear_remaining_aggro,
+                    log=log,spawn_key=spawn_key)
+        else:
+            log('Local staging point too close or already tried; searching a different firing position')
+            try:
+                return search_remote_hunt_alternative(routes=routes,world=world,nearby=nearby,
+                    hazards=hazards,nav=nav,supervise=supervise,capture=capture,guard=guard,
+                    clear_remaining_aggro=clear_remaining_aggro)
+            except EncounterRouteUnavailable:
+                pass
     except RouteCombatInterrupted:
         current=capture()
         guard(current)
@@ -249,7 +283,7 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             out=tactical_navigate(driver,navigate,capture(),point,path,'retreat')
             if out.player.in_combat:
                 clear_remaining_aggro(out)
-            routes.force_spawn_search=True
+            routes.force_spawn_search=False
             return None,True
         except RouteCombatInterrupted:
             current=capture()
@@ -296,7 +330,7 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
     if d < 0.1:
         routes.recently_visited[key]=2
         return
-    stand_off=min(32.,max(5.,d-3.)) if getattr(driver,'awareness',None) else 10.
+    stand_off=min(32.,max(0.,d-12.)) if getattr(driver,'awareness',None) else min(10.,max(0.,d-12.))
     staging = (goal.position if reference_only and remote_camp else
                Vec3(goal.x+dx/d*stand_off,goal.y+dy/d*stand_off,goal.z))
     hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if now()-t<90]
@@ -309,7 +343,7 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
             s,routes=routes,world=world,staging=staging,
             nearby=nearby,hazards=hazards,driver=driver,nav=nav,capture=capture,guard=guard,
             world_position=world_position,pid=pid,clear_remaining_aggro=clear_remaining_aggro,
-            navigate=navigate,log=log))
+            navigate=navigate,log=log,spawn_key=key))
         if handled:
             return
         goal,staging=alternative
@@ -322,6 +356,10 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
         log('Combat began during alternate route selection; defending before navigation')
         clear_remaining_aggro(s)
         routes.recently_visited.pop(key,None)
+        return
+    if not meaningful_hunt_staging(world.position,staging,()):
+        routes.recently_visited[key]=2
+        log('Already at this spawn search area; selecting another candidate')
         return
     routes.recently_visited[key]=routes.recently_visited.get(key,0)+1
     routes.staging_visited.append(staging)
