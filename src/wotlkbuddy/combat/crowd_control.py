@@ -4,6 +4,7 @@ The damage rotation never selects a control spell. The caller authorizes a
 specific pair from a live census; control must be observed on its exact GUID.
 """
 from dataclasses import dataclass
+from types import SimpleNamespace
 from time import monotonic
 
 from wotlkbuddy.live.control import LiveControlError
@@ -40,7 +41,7 @@ def exact_hostile(state, enemy):
                 t.health>0 and t.reaction is not None and 1<=t.reaction<=3)
 
 
-def control_action(state, enemy, rule):
+def control_action(state, enemy, rule, driver=None):
     if (not exact_hostile(state,enemy) or
             getattr(state.combat_target,'creature_type','') not in rule.creature_types or
             state.combat_target.classification!='normal' or
@@ -49,8 +50,21 @@ def control_action(state, enemy, rule):
             getattr(state,'current_cast_remaining_ms',0) or
             rule.aura in state.target_auras):
         return None
-    return next((a for a in state.action_spells if a.name==rule.spell and
-                 a.usable and a.in_range is True and a.cooldown_ms==0),None)
+    bound=[a for a in state.action_spells if a.name==rule.spell]
+    if bound:
+        return next((a for a in bound if a.usable and a.in_range is True and a.cooldown_ms==0),None)
+    # Only a positively resolved spellbook ID can authorize a named fallback.
+    # This is not a generic chat-casting fallback for unknown damage spells.
+    spell_id=getattr(driver,'verified_polymorph_id',None)
+    measure=getattr(driver,'control_range',None)
+    if rule.spell!='Polymorph' or type(spell_id) is not int or spell_id<=0 or not callable(measure):
+        return None
+    try:
+        if not 0<measure(state)<=25 or state.resources.mana<60:
+            return None
+    except (OSError,RuntimeError,ValueError):
+        return None
+    return SimpleNamespace(spell_id=spell_id,named_fallback=True)
 
 
 def select_exact(state, enemy, *, driver, fresh, max_tabs=4):
@@ -86,7 +100,7 @@ def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries
         return state,denied
     rules=CONTROL_RULES.get(state.resources.class_token.upper(),())
     ready_names={a.name for a in state.action_spells}
-    if not rules or not any(r.spell in ready_names for r in rules):
+    if not rules or not (any(r.spell in ready_names for r in rules) or type(getattr(driver,'verified_polymorph_id',None)) is int):
         log(f'Linked pull deferred: no supported bound control spell; observed actions {sorted(ready_names)}')
         return state,denied
     if (state.player.health<.95*state.player.max_health or
@@ -102,7 +116,7 @@ def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries
     if state.player.in_combat:
         return state,None
     for rule in rules:
-        action=control_action(state,escort,rule)
+        action=control_action(state,escort,rule,driver)
         if action is None:
             continue
         return cast_control(state,chosen,escort,rule,plan,denied,
@@ -121,14 +135,18 @@ def cast_control(state, primary, escort, rule, plan, denied, *, driver, fresh, l
         return state,None
     driver.chat('/stopattack')
     state=fresh(state)
-    action=control_action(state,escort,rule)
+    action=control_action(state,escort,rule,driver)
     if state.player.in_combat or action is None:
         return state,None if state.player.in_combat else denied
     cast=getattr(driver,'cast_action_spell',None)
     if not callable(cast):
         return state,denied
     log(f'Linked pull: casting {rule.spell} on escort {escort.entry} {escort.guid}')
-    cast(state,action.spell_id)
+    if getattr(action,'named_fallback',False):
+        log('Polymorph: verified learned spell fallback (hotbar placement unconfirmed)')
+        driver.chat('/cast Polymorph')
+    else:
+        cast(state,action.spell_id)
     for _ in range(32):
         state=fresh(state)
         if state.player.target_guid!=escort.guid:
