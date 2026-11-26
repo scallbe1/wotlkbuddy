@@ -47,8 +47,11 @@ def test_progress_owns_only_its_requested_activity(mode, owner):
     assert session.activity.current is Activity.IDLE
 
 
-def test_recovery_claim_begins_after_failed_objective_releases():
-    session = QuestSession(Namespace(), Mock(), Mock(), 0)
+def test_recovery_claim_begins_after_failed_objective_releases(monkeypatch):
+    from time import monotonic
+    from types import SimpleNamespace as NS
+    monkeypatch.setattr('wotlkbuddy.horde.session_controller.capture_monitor',lambda _:NS(truncated=False,player=NS(guid='player')))
+    session = QuestSession(Namespace(auto_minutes=180,monitor=0), Mock(), Mock(), monotonic())
     def progress(*args, **kwargs):
         assert session.activity.current is Activity.OBJECTIVES
         raise LiveControlError('interrupted')
