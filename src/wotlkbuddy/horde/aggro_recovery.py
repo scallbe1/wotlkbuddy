@@ -8,6 +8,8 @@ def recoverable_aggro_error(exc):
     return any(marker in text for marker in (
         'Aggro persists but no exact living attacker could be verified',
         'Aggro unresolved before starting quest phase',
+        'Combat began during off-axis navigation; refusing alternate routing',
+        'Defensive encounter did not clear combat',
         'Verified attacker is outside Fireball range',
         'Insufficient mana for defensive Fireball',
         'Supplies interrupted by verified combat',
