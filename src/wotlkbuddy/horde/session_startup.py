@@ -19,6 +19,31 @@ class PhaseStartup:
     needs_recovery: bool
 
 
+def prepare_travel_resources(*,cap,driver,log):
+    """Revisit deferred learned buffs after drinking, before leaving."""
+    from wotlkbuddy.horde.sustain import maintain_mage_supplies
+    from wotlkbuddy.horde.recovery_rest import maintain_travel_buffs
+    state=maintain_mage_supplies(capture=cap,driver=driver,log=log)
+    for attempt in range(2):
+        if state.player.in_combat:
+            return driver.on_aggro(state)
+        state=maintain_travel_buffs(state=state,capture=cap,driver=driver,log=log)
+        if state.player.in_combat:
+            return driver.on_aggro(state)
+        if state.resources.mana/max(1,state.resources.max_mana)<.90:
+            log('Restoring mana after buff maintenance before travel')
+            state=maintain_mage_supplies(capture=cap,driver=driver,log=log,
+                health_goal=.90,mana_goal=.95,restock=False)
+        buffs=state.mage_buffs
+        missing=buffs and ((buffs.knows_intellect and not buffs.intellect_active)
+                           or (buffs.knows_frost_armor and not buffs.armor_active))
+        if not missing or state.resources.mana/max(1,state.resources.max_mana)<.45:
+            break
+        if attempt==0:
+            log('Rechecking deferred learned buffs after mana recovery')
+    return state
+
+
 def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[str], None]) -> PhaseStartup:
     """Initialize the driver and verify readiness, preserving startup order."""
     first = cap()
@@ -71,7 +96,6 @@ def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[st
         require_verified_combat_key(first)
         log('Combat ready: verified damage action-bar key; learned Polymorph fallback available only if verified')
     pid, world = verified_live_position(first, pid=pid)
-    from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
     from wotlkbuddy.horde.encounter import survey_pull
     from wotlkbuddy.live.world_position import fast_travel_observation
@@ -90,12 +114,5 @@ def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[st
     needs_recovery = (first.player.health/max(1,first.player.max_health)<.70 or
                       first.resources.mana/max(1,first.resources.max_mana)<.45)
     if not needs_recovery or args.only not in ('all','quests','train','vendor','objectives','collect','objects','turnin'):
-        first=maintain_mage_supplies(capture=cap, driver=driver, log=log)
-        from wotlkbuddy.horde.recovery_rest import maintain_travel_buffs
-        first=maintain_travel_buffs(state=first,capture=cap,driver=driver,log=log)
-        if first.player.in_combat:
-            first=driver.on_aggro(first)
-        elif first.resources.mana/max(1,first.resources.max_mana)<.90:
-            log('Restoring mana after buff maintenance before travel')
-            first=maintain_mage_supplies(capture=cap,driver=driver,log=log,health_goal=.90,mana_goal=.95)
+        first=prepare_travel_resources(cap=cap,driver=driver,log=log)
     return PhaseStartup(first, driver, pid, world, needs_recovery)
