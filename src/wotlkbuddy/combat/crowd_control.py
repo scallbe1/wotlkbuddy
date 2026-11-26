@@ -218,3 +218,70 @@ def fleeing_target(state,guid,entry):
                 t.entry_id==entry and t.attackable and not t.dead and
                 t.reaction is not None and 1<=t.reaction<=3 and
                 0<t.health<=.25*max(1,t.max_health))
+
+
+def reactive_control(state, *, driver, fresh, log):
+    """Control a verified additional attacker, preserving the original damage target."""
+    awareness=getattr(driver,'awareness',None)
+    locate=getattr(driver,'combat_position',None)
+    t=state.combat_target
+    if (not state.player.in_combat or not t or t.dead or
+            t.attacks_player is not True or t.health<=.25*max(1,t.max_health) or
+            not callable(locate) or awareness is None or
+            isinstance(getattr(driver,'linked_fight',None),LinkedFight)):
+        return state
+    rules=CONTROL_RULES.get(state.resources.class_token.upper(),())
+    if not rules or not (any(a.name==r.spell for a in state.action_spells for r in rules)
+                         or type(getattr(driver,'verified_polymorph_id',None)) is int):
+        return state
+    now=monotonic()
+    last=getattr(driver,'last_reactive_control_scan',None)
+    if isinstance(last,(int,float)) and now-last<5:
+        return state
+    driver.last_reactive_control_scan=now
+    state,enemies,_=awareness.survey(state,locate(state),probe=False)
+    primary=next((e for e in enemies if e.guid==state.player.target_guid),None)
+    if primary is None or not exact_hostile(state,primary):
+        return state
+    # A nearby inferred unit is merely a candidate, not an authorized attacker.
+    origin=locate(state).position
+    candidates=sorted((e for e in enemies if e.guid!=primary.guid and
+                        e.position.distance_to(origin)<=25),
+                       key=lambda e:e.position.distance_to(origin))
+    for escort in candidates[:2]:
+        state=select_exact(state,escort,driver=driver,fresh=fresh,max_tabs=2)
+        if not state.player.in_combat:
+            return state
+        if exact_hostile(state,escort) and state.combat_target.attacks_player is True:
+            for rule in rules:
+                action=control_action(state,escort,rule,driver)
+                if action is not None:
+                    return reactive_cast(state,primary,escort,rule,driver=driver,fresh=fresh,log=log)
+    return select_exact(state,primary,driver=driver,fresh=fresh,max_tabs=3)
+
+
+def reactive_cast(state,primary,escort,rule,*,driver,fresh,log):
+    face=getattr(driver,'face_combat_target',None)
+    if callable(face):
+        state=face(state)
+    if not exact_hostile(state,escort) or not state.player.in_combat:
+        return select_exact(state,primary,driver=driver,fresh=fresh)
+    driver.chat('/stopattack')
+    state=fresh(state)
+    action=control_action(state,escort,rule,driver)
+    if action is not None and state.player.in_combat and state.combat_target.attacks_player is True:
+        log(f'Reactive crowd control: {rule.spell} on additional attacker {escort.guid}')
+        if getattr(action,'named_fallback',False):
+            driver.chat('/cast Polymorph')
+        else:
+            driver.cast_action_spell(state,action.spell_id)
+        for _ in range(20):
+            state=fresh(state,.12)
+            if state.player.target_guid!=escort.guid:
+                break
+            if rule.aura in state.target_auras:
+                driver.linked_fight=LinkedFight(primary,escort,rule,monotonic()+rule.duration+2,
+                    prior_kills=frozenset(getattr(state,'recent_kills',())))
+                log('Reactive crowd control confirmed; finishing original attacker')
+                break
+    return select_exact(state,primary,driver=driver,fresh=fresh,max_tabs=3)
