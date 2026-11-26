@@ -381,3 +381,17 @@ def fast_travel_observation(snapshot: ClientTelemetry, *, pid: int,
         hazard=any(not passive_creature(m, race_token=race_token) and abs(m.position.z-latest.z)<=8 and
                    m.position.distance_to(latest.position)<=radius+2 for m in mobs)
         return latest,hazard
+
+
+def fast_ghost_position(snapshot: ClientTelemetry, *, pid: int) -> tuple[WorldPosition, bool]:
+    """Read one GUID-matched position with no creature census or sleep.
+
+    Only usable between full verified ghost telemetry observations.
+    No input or memory writes occur.
+    """
+    from wotlkbuddy.game.win32 import ProcessMemory
+    if (snapshot.truncated or not snapshot.player.guid or not snapshot.player.dead or
+            snapshot.death_state is None or not snapshot.death_state.ghost):
+        raise WorldPositionError('Verified ghost telemetry required for fast position')
+    with ProcessMemory(pid,writable=False) as memory:
+        return observe_world_position(memory,expected_guid=snapshot.player.guid),False

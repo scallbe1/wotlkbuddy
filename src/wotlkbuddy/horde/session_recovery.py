@@ -11,7 +11,7 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.live.capture import capture_monitor
     from wotlkbuddy.live.control import LiveControlError
-    from wotlkbuddy.live.world_position import verified_live_position, verified_nearby_creatures
+    from wotlkbuddy.live.world_position import verified_live_position, verified_nearby_creatures, fast_ghost_position
     from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
     from wotlkbuddy.horde.defense import defend_against_aggro
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
@@ -115,4 +115,5 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
             known_corpse=getattr(args, 'corpse_world', None),
             read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav),
             read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore,
-            scout_surroundings=scout.passive_survey, prepare_retreat=prepare_retreat, log=log)
+            scout_surroundings=scout.passive_survey, prepare_retreat=prepare_retreat,
+            fast_observe=lambda state,radius: fast_ghost_position(state,pid=pid), log=log)

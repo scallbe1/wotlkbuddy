@@ -17,9 +17,20 @@ from wotlkbuddy.horde.resurrection_site import (
     watch_reclaim_window)
 
 
+def _ghost_terrain_failure(reason):
+    partial_replan = ('Backtracked but fresh Detour route unavailable:' in reason and
+        any(marker in reason for marker in ('partial path', 'no usable bounded waypoint path',
+            'route starts away from the verified player position')))
+    terrain_failure = partial_replan or any(marker in reason for marker in (
+        'height/floor', 'No forward progress', 'Measured movement disagrees with client facing',
+        'Movement diverged from waypoint', 'Unexpected player displacement during turn',
+        'ghost terrain slide', 'ghost movement diverged', 'no forward progress during continuous ghost'))
+    return terrain_failure, partial_replan
+
+
 def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                    read_hazards=None, read_spawn_hints=None, restore=None,
-                   scout_surroundings=None, prepare_retreat=None,
+                   scout_surroundings=None, prepare_retreat=None, fast_observe=None,
                    sleep=real_sleep, now=monotonic, log=lambda _: None):
     first, origin = sample()
     guid = first.player.guid
@@ -124,6 +135,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                     stop_requested=driver.emergency_stop_requested,
                     expected_quest_id=None, expected_map_id=corpse_map,
                     max_seconds=min(600,remaining_time), progress=log, ghost_only=True,
+                    continuous_forward=fast_observe is not None, fast_observe=fast_observe,
                     can_traverse=lambda a,b:nav.segment_clear(corpse_map,a,b),
                     replan_path=lambda a,b:nav.find_path(corpse_map,a,b),
                     destination_status=getattr(driver,'set_navigation_destination',None),
@@ -132,14 +144,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                     breadcrumbs.extend(path)
                     return True
                 reason = travel.stopped_reason
-                terrain_failure = any(marker in reason for marker in (
-                    'height/floor', 'No forward progress',
-                    'Measured movement disagrees with client facing',
-                    'Movement diverged from waypoint'))
-                partial_replan = ('Backtracked but fresh Detour route unavailable:' in reason and
-                    any(marker in reason for marker in ('partial path','no usable bounded waypoint path',
-                        'route starts away from the verified player position')))
-                terrain_failure = terrain_failure or partial_replan
+                terrain_failure, partial_replan = _ghost_terrain_failure(reason)
                 if not terrain_failure:
                     raise LiveControlError(label+' navigation stopped: '+reason)
                 measured = ghost_position().position
