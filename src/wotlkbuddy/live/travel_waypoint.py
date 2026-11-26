@@ -23,6 +23,22 @@ def _angle(value):
     return (value + pi) % (2*pi) - pi
 
 
+def corner_arrival_yards(path,index,default,*,ghost_only=False,log=lambda _:None):
+    """Keep measured arrival tight at short, sharply angled mesh corners."""
+    if ghost_only or default<=.8 or not 0<index<len(path)-1:
+        return default
+    a,b,c=path[index-1:index+2]
+    incoming=_distance_xy(a,b)
+    outgoing=_distance_xy(b,c)
+    if min(incoming,outgoing)<.05 or min(incoming,outgoing)>8:
+        return default
+    bend=abs(_angle(atan2(c.y-b.y,c.x-b.x)-atan2(b.y-a.y,b.x-a.x)))
+    if bend<pi/6:
+        return default
+    log(f'Precise corner {index}: {bend*180/pi:.0f} degree turn; arrival radius 0.8y')
+    return .8
+
+
 def execute_waypoint(state, waypoint, *, index, waypoint_count, arrival_yards,
                      guard, turn_rate, right_sign, pulse, sample, checked, cautious,
                      on_threat, continuous_forward, ghost_only, fast_observe,
@@ -71,7 +87,7 @@ def execute_waypoint(state, waypoint, *, index, waypoint_count, arrival_yards,
             # assume the player will move exactly that far.
             forward_duration = min(
                 0.25 if cautious else ((0.60 if on_threat is not None else 1.20) if continuous_forward else 0.45),
-                max(0.10 if ghost_only else 0.18,
+                max(0.10 if ghost_only else (0.08 if arrival_yards<1.0 else 0.18),
                      0.75*(dxy-arrival_yards)/(11.0 if ghost_only else 8.0)))
             burst=None
             if (continuous_forward and not cautious and not ghost_only and
