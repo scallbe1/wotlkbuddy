@@ -2,8 +2,8 @@
 from time import sleep as real_sleep
 from wotlkbuddy.live.control import LiveControlError
 
-MAGE_ACTIONS=('Fireball','Frostbolt','Fire Blast','Arcane Intellect',
-              'Frost Armor','Polymorph','Conjure Food','Conjure Water','Frost Nova')
+MAGE_ACTIONS=('Fireball','Polymorph','Frostbolt','Fire Blast','Arcane Intellect',
+              'Frost Armor','Conjure Food','Conjure Water','Frost Nova')
 
 
 def cleanup_plan(rows,bound):
@@ -37,8 +37,7 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
                 driver.emergency_stop_requested() or not driver.wow_is_foreground()):
             raise LiveControlError('Mage hotbar maintenance interrupted')
     def full(s):
-        return (s.actionbar_page==1 and len(s.visible_hotbar)==10 and
-                {r[0] for r in s.visible_hotbar}==set(range(1,11)))
+        return s.actionbar_page==1 and {r.button for r in s.raw_action_slots if r.view=='base'}==set(range(1,11))
     def fresh(before,pred,attempts=12):
         for _ in range(attempts):
             sleep(.18)
@@ -94,6 +93,8 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
         state=observed
         probe=state.spellbook_probe
         if not probe or probe.name!=name:
+            if name=='Polymorph':
+                log(f'Hotbar: Polymorph not confirmed learned: {state.spellbook_diagnostic}')
             continue
         if existing is not None:
             if existing[2]==probe.spell_id or existing not in state.visible_hotbar:
