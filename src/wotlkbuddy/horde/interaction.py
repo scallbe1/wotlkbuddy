@@ -58,6 +58,10 @@ def navigate_with_status(
     Always clear on arrival/failure while input focus remains available.
     """
     update = getattr(driver, 'set_navigation_status', None)
+    if kind=='enemies':
+        tactical_kind=getattr(driver,'hunt_travel_kind',None)
+        if tactical_kind in ('detour','retreat'):
+            kind=tactical_kind
     if callable(update):
         update(kind, target)
     try:
