@@ -14,6 +14,7 @@ from wotlkbuddy.horde.height_recovery import HeightRecovery
 from wotlkbuddy.horde.worlddata import distance_world
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
+from wotlkbuddy.live.transport_route import TransportRequired
 from wotlkbuddy.live.world_position import verified_live_position
 from wotlkbuddy.live.world_travel import validate_nav_path, follow_world_path
 from wotlkbuddy.horde.combat import creature_entry_from_guid
@@ -31,6 +32,8 @@ def verified_npc_route(raw,start,dest):
     """Unusable destination geometry is recoverable; invalid live state is not."""
     try:
         return validate_nav_path(raw,start,dest,max_step=18.)
+    except TransportRequired as exc:
+        raise EncounterRouteUnavailable(str(exc)) from exc
     except (LiveControlError,ValueError) as exc:
         if any(marker in str(exc).lower() for marker in (
                 'partial path','no usable bounded waypoint path',
