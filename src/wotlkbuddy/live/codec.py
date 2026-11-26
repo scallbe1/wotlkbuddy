@@ -181,6 +181,7 @@ class CombatTarget:
     reaction: int | None = None  # 1..3 hostile, 4 neutral, 5..8 friendly
     level: int | None = None
     classification: str = ''
+    creature_type: str = ''
 
 
 @dataclass(frozen=True)
@@ -418,6 +419,36 @@ def _parse_mage_supplies(parts, supplies):
                             *counts)
 
 
+def _parse_combat_target(parts, target):
+    if len(parts) not in (7, 8, 9, 11, 12) or target is not None:
+        raise TelemetryError('Invalid or duplicate combat target')
+    try:
+        entry, hp, maximum = map(int, parts[1:4])
+        if parts[4] not in ('0','1') or parts[5] not in ('0','1') or \
+                parts[6] not in ('-1','0','1') or \
+                (len(parts) >= 8 and parts[7] not in ('-1','0','1')) or \
+                (len(parts) >= 9 and parts[8] not in tuple(str(i) for i in range(9))) or \
+                not 0 <= entry < 2**24 or \
+                not 0 <= hp <= maximum or maximum < 0:
+            raise ValueError('Invalid target record')
+        target = CombatTarget(entry, hp, maximum, parts[4] == '1',
+                              parts[5] == '1',
+                              None if parts[6] == '-1' else parts[6] == '1',
+                              None if len(parts) == 7 or parts[7] == '-1'
+                              else parts[7] == '1',
+                              int(parts[8]) or None if len(parts) >= 9 else None,
+                              int(parts[9]) if len(parts)>=11 else None,
+                              parts[10] if len(parts)>=11 else '',
+                              parts[11] if len(parts)==12 else '')
+        if target.level is not None and not -1 <= target.level <= 255:
+            raise ValueError('Invalid target level')
+        if len(target.creature_type)>32 or any(ord(c)<32 for c in target.creature_type):
+            raise ValueError('Invalid creature type')
+        return target
+    except ValueError as exc:
+        raise TelemetryError('Malformed combat target') from exc
+
+
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     content = data.decode('utf-8', errors='replace')
     player = None
@@ -599,29 +630,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 raise TelemetryError('Invalid resource values')
             resources = PlayerResources(*values, *(parts[8:] if len(parts) == 10 else ()))
         elif parts[0] == 'T':
-            if len(parts) not in (7, 8, 9, 11) or target is not None:
-                raise TelemetryError('Invalid or duplicate combat target')
-            try:
-                entry, hp, maximum = map(int, parts[1:4])
-                if parts[4] not in ('0','1') or parts[5] not in ('0','1') or \
-                        parts[6] not in ('-1','0','1') or \
-                        (len(parts) >= 8 and parts[7] not in ('-1','0','1')) or \
-                        (len(parts) >= 9 and parts[8] not in tuple(str(i) for i in range(9))) or \
-                        not 0 <= entry < 2**24 or \
-                        not 0 <= hp <= maximum or maximum < 0:
-                    raise ValueError('Invalid target record')
-                target = CombatTarget(entry, hp, maximum, parts[4] == '1',
-                                      parts[5] == '1',
-                                      None if parts[6] == '-1' else parts[6] == '1',
-                                      None if len(parts) == 7 or parts[7] == '-1'
-                                      else parts[7] == '1',
-                                      int(parts[8]) or None if len(parts) >= 9 else None,
-                                      int(parts[9]) if len(parts)==11 else None,
-                                      parts[10] if len(parts)==11 else '')
-                if target.level is not None and not -1 <= target.level <= 255:
-                    raise ValueError('Invalid target level')
-            except ValueError as exc:
-                raise TelemetryError('Malformed combat target') from exc
+            target = _parse_combat_target(parts,target)
         elif parts[0] == 'B':
             if len(parts) != 6 or buffs is not None or any(v not in ('-1','0','1')
                                                           for v in parts[1:]):
