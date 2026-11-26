@@ -1,4 +1,6 @@
 from types import SimpleNamespace as NS
+import pytest
+from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde import npc_catalog, merchant
@@ -20,7 +22,8 @@ def test_merchants_combine_catalogs_and_rank_by_distance(monkeypatch):
     assert [v.entry for v in options]==[2118,2135,3547]
 
 
-def test_unselectable_merchant_falls_back_to_another(monkeypatch):
+@pytest.mark.parametrize('failure',[NpcTargetUnavailable('NPC not verified after targeting'),EncounterRouteUnavailable('NPC destination unavailable: partial path')])
+def test_unselectable_merchant_falls_back_to_another(monkeypatch,failure):
     state=NS(truncated=False,player=NS(guid='player',dead=False,in_combat=False),
              resources=NS(free_bag_slots=1),merchant_open=False,dialog=None)
     driver=NS(emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True)
@@ -33,7 +36,7 @@ def test_unselectable_merchant_falls_back_to_another(monkeypatch):
     def visit(**kw):
         visits.append(kw['npc_id'])
         if kw['npc_id']==3547:
-            raise NpcTargetUnavailable('NPC Hamlin Atkins entry 3547 not verified after targeting')
+            raise failure
     monkeypatch.setattr(merchant,'visit_npc',visit)
     monkeypatch.setattr(merchant,'sell_at_verified_merchant',lambda **kw:kw['npc_id'])
     assert merchant.free_bag_space(profile=None,profiles_root='profiles',pid=1,
