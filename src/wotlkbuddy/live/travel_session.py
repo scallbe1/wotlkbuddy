@@ -206,12 +206,13 @@ def run_route(services, *, distance_status, destination_status, on_threat,
                     continue
                 # Sharp corners or a final close approach use the original
                 # precise movement routine, including measured wall recovery.
-        from wotlkbuddy.live.travel_waypoint import execute_waypoint
+        from wotlkbuddy.live.travel_waypoint import execute_waypoint, corner_arrival_yards
+        leg_arrival=corner_arrival_yards(state.waypoints,index,arrival_yards,ghost_only=ghost_only,log=notify)
         rerouted = execute_waypoint(
             state, waypoint, index=index, waypoint_count=len(state.waypoints)-1,
-            arrival_yards=arrival_yards, guard=guard, turn_rate=turn_rate,
+            arrival_yards=leg_arrival, guard=guard, turn_rate=turn_rate,
             right_sign=right_sign, pulse=pulse, sample=sample, checked=checked,
-            cautious=state.cautious, on_threat=on_threat,
+            cautious=state.cautious or leg_arrival<arrival_yards, on_threat=on_threat,
             continuous_forward=continuous_forward, ghost_only=ghost_only,
             fast_observe=fast_observe, smooth_forward=smooth_forward,
             recover_collision=recover_collision, replan_path=replan_path,
