@@ -76,7 +76,8 @@ def safe_sale_candidates(
     """Never sell an XML quest item, quest-flagged item or unsupported rarity.
 
     Grey junk, ordinary white stock and unused low-rarity equipment are eligible.
-    Food, potions, useful consumables, bag containers and rare/epic items stay.
+    Vendor-priced white food and drink are eligible; healing/mana potions,
+    bag containers and rare/epic items stay.
     Slumber Sand (3434) is explicitly eligible as unused vendor stock unless
     protected by the profile or quest flags.
     """
@@ -93,12 +94,9 @@ def safe_sale_candidates(
             if (a.inventory_slot==16 and state.weapon_swap_safe is not True) or current is None or (a.score,a.item_level)>(current.score,current.item_level):
                 retain.add(a.item_id)
     from wotlkbuddy.combat.consumables import HEALING_POTIONS
-    # Keep exact conjured supplies even if a client classifies them differently.
-    essentials={6948,2455,3385,3827,6149,13443,13444,22832,33448,
-        5349,1113,1114,1487,8075,8076,22895,22019,
-        5350,2288,2136,3772,8077,8078,8079,30703,22018}
+    essentials={6948,2455,3385,3827,6149,13443,13444,22832,33448}
     for item in state.merchant_items:
-        if item.item_id in HEALING_POTIONS or item.item_id in essentials:
+        if item.vendor_price<=0 or item.item_id in HEALING_POTIONS or item.item_id in essentials:
             continue
         if item.item_id in protected_item_ids or item.item_id in retain or item.quest_flag != 0 or item.locked:
             continue

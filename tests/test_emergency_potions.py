@@ -52,11 +52,19 @@ def test_vendor_protects_potions_and_hearthstone_even_if_reported():
     assert [i.item_id for i in safe_sale_candidates(state,protected_item_ids=frozenset({2589}))]==[3434]
 
 
-def test_broad_white_vendor_stock_preserves_conjured_food_water_and_quest_items():
+def test_broad_white_vendor_stock_sells_priced_food_water_but_protects_quest_items():
     ids=(5350,5349,6948,118,2455,2589,3434,2875,999)
     items=tuple(MerchantItem(0,i,item,1,1,1,0,False,'VENDOR_JUNK')
                 for i,item in enumerate(ids,1))
     state=NS(truncated=False,merchant_open=True,merchant_scan_complete=True,
              resources=NS(),inventory_sale_scan=False,merchant_items=items)
     assert [i.item_id for i in safe_sale_candidates(state,
-        protected_item_ids=frozenset({2875}))]==[2589,3434,999]
+        protected_item_ids=frozenset({2875}))]==[5350,5349,2589,3434,999]
+
+
+def test_zero_value_conjured_supplies_not_sent_to_vendor():
+    items=(MerchantItem(0,1,5350,10,1,0,0,False,'VENDOR_JUNK'),
+           MerchantItem(0,2,5349,10,1,0,0,False,'VENDOR_JUNK'))
+    state=NS(truncated=False,merchant_open=True,merchant_scan_complete=True,
+             resources=NS(),inventory_sale_scan=False,merchant_items=items)
+    assert not safe_sale_candidates(state,protected_item_ids=frozenset())
