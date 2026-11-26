@@ -1363,11 +1363,10 @@ local function tickData()
                             saleScanComplete = 0
                         elseif (not isQuest and itemType ~= ITEM_CLASS_QUEST and itemType~='Quest'
                                 and itemType~='Container' and itemType~='Key' and id~=6948
-                                -- Sell ordinary white consumables too, except food/drink.
-                                -- Python independently protects healing/mana potions and supplies.
+                                -- Ordinary white food/drink may be sold too.
+                                -- Python independently protects healing/mana potions.
                                 and (itemType~='Consumable' or id==3434 or
-                                     (quality==1 and subtype and subtype~='Food & Drink' and subtype~='Food and Drink'
-                                      and subtype~='Bandage'))
+                                     (quality==1 and subtype and subtype~='Bandage'))
                                 and not locked and price > 0 and
                                 -- Preserve Mage-compatible equipment we do not score yet.
                                 not (equipLoc=='INVTYPE_HOLDABLE' or equipLoc=='INVTYPE_FINGER' or
