@@ -44,6 +44,7 @@ def test_local_bypass_precedes_remote_staging(monkeypatch):
     assert driver.hunt_travel_kind is None
 
 
+
 def test_scan_status_clears_after_assessment():
     driver=NS(_tactical_activity='assess',set_activity_status=Mock())
     assert scan_with_tactical_status(driver,lambda:123)==123
