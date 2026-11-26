@@ -86,7 +86,7 @@ def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,ex
                     guard()
                     if point is None or point.distance_to(desired)>4:
                         continue
-                    if origin.distance_to(point)<5 or any(point.distance_to(p)<5 for p in excluded_staging):
+                    if hypot(origin.x-point.x,origin.y-point.y)<8 or any(point.distance_to(p)<5 for p in excluded_staging):
                         continue
                     if any(abs(point.z-h.z)<=6 and point.distance_to(h)<18 for h in hazards):
                         continue
