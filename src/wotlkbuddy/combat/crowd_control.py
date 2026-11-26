@@ -79,7 +79,8 @@ def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries
     """Only attempt control on a required pair with healthy resources."""
     from wotlkbuddy.horde.encounter import PullPlan
     denied=PullPlan(False,plan.enemies,'prefer isolated enemy; nearby linked group')
-    if (len(plan.enemies)!=2 or len(quest_entries)!=1 or chosen.entry not in quest_entries
+    on_entrance=isinstance(getattr(driver,'entrance_approach_guid',None),str)
+    if (len(plan.enemies)!=2 or len(quest_entries)!=1 or (chosen.entry not in quest_entries and not on_entrance)
             or state.player.in_combat or state.resources is None):
         log(f'Linked pull deferred: {len(plan.enemies)} linked enemies; required entries {quest_entries}; primary {chosen.entry}')
         return state,denied

@@ -3,7 +3,9 @@ from dataclasses import dataclass, field
 from math import atan2, cos, sin, pi
 
 from wotlkbuddy.game.types import Vec3
-from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable, recoverable_hunt_failure
+from wotlkbuddy.horde.hunt_routes import (
+    EncounterRouteUnavailable, recoverable_hunt_failure, unsafe_route_encounter)
+from wotlkbuddy.horde.ranged_pull import ranged_approach_clear
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import validate_nav_path, route_reuses_collision
 
@@ -89,23 +91,23 @@ def next_stage(path,target):
     chosen=None
     for a,b in zip(path,path[1:]):
         distance+=a.distance_to(b)
-        if b.distance_to(target)<9:
+        if b.distance_to(target)<2.5:
             break
-        if distance>16:
+        if distance>10:
             break
-        if path[0].distance_to(b)>=4:
+        if path[0].distance_to(b)>=1.8:
             chosen=b
     return chosen
 
 
 def ready_position(nav,where,memory):
     pos=where.position
-    if not 8<=pos.distance_to(memory.target)<=19 or abs(pos.z-memory.target.z)>2:
+    if not 2.5<=pos.distance_to(memory.target)<=15 or abs(pos.z-memory.target.z)>2:
         return False
     if any(pos.distance_to(p)<4 for p in memory.offered):
         return False
     try:
-        return bool(nav.segment_clear(where.map_id,pos,memory.target))
+        return ranged_approach_clear(nav,where.map_id,pos,memory.target)
     except (OSError,ValueError,RuntimeError,TimeoutError):
         return False
 
@@ -194,7 +196,11 @@ def move_entrance(terrain,memory,state,where,*,routes,world_position,navigate,na
         if measured.map_id!=where.map_id or measured.position.distance_to(origin)>1.5:
             memory.pending_path=()
             return True
-        result=navigate(current,point,approach_path=path[:path.index(point)+1])
+        driver.entrance_approach_guid=memory.guid
+        try:
+            result=navigate(current,point,approach_path=path[:path.index(point)+1])
+        finally:
+            driver.entrance_approach_guid=None
     except LiveControlError as exc:
         if not recoverable_hunt_failure(exc):
             raise
@@ -205,6 +211,10 @@ def move_entrance(terrain,memory,state,where,*,routes,world_position,navigate,na
         _,actual=world_position(current)
         if actual.map_id!=where.map_id:
             raise LiveControlError('Map changed during entrance approach')
+        if unsafe_route_encounter(exc):
+            memory.pending_path=()
+            log('Entrance model: combat interruption, not a physical obstruction; retaining target and route goal')
+            return True
         memory.reject(actual.position,point,origin)
         memory.pending_path=()
         log('Entrance model: recorded blocked corridor; will seek a different connected route: '+str(exc))

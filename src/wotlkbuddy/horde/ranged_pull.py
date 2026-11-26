@@ -93,7 +93,7 @@ def face_target_in_place(state, *, capture, driver, player_position,
             where = after
             continue
         pulse('turn-right' if delta*sign > 0 else 'turn-left',
-              min(.22, max(.05, abs(delta)/rate*.8)))
+              min(.85, max(.05, abs(delta)/rate*.94)))
         state, after = observe()
         if after is None:
             return state

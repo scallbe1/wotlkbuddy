@@ -181,6 +181,15 @@ def observe_impact(s, *, target_guid, expected, previous_health, fresh,
     return s, new, False
 
 
+def reface_before_cast(state,driver,guard,guid,entry):
+    face=getattr(driver,'face_combat_target',None)
+    if callable(face):
+        state=face(state)
+        guard(state)
+    t=state.combat_target
+    return state if state.player.target_guid==guid and t and t.entry_id==entry else None
+
+
 def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
                   previous_credit: tuple[int, int] | None, *, driver, guard,
                   fresh, qlog, clear_remaining_aggro, approach_unhittable_target,
@@ -196,10 +205,6 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
         raise LiveControlError('Fireball range not confirmed; move closer before attacking')
     target_guid = s.player.target_guid
     log(f'Engaging verified creature entry {expected}, GUID {target_guid}')
-    face = getattr(driver, 'face_combat_target', None)
-    if callable(face):
-        s = face(s)
-        guard(s)
     credit_advanced = partial(quest_credit_advanced, previous_credit=previous_credit,
                               objective_index=objective_index, qlog=qlog)
     recover = partial(recover_encounter, collect_items=collect_items,
@@ -234,7 +239,13 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
             if s.player.in_combat:
                 return recover(s)
             raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
-        previous_health = t.health
+        faced=reface_before_cast(s,driver,guard,target_guid,expected)
+        if faced is None:
+            return recover(fresh(s)) if s.player.in_combat else confirm_lost_target(fresh(s),collect_items=collect_items,target_guid=target_guid,expected=expected,driver=driver,fresh=fresh,credit_advanced=credit_advanced,record_kill=record_kill,log=log)
+        s=faced
+        if s.combat_target.dead:
+            continue
+        previous_health = s.combat_target.health
         action, casted = cast_selected_action(s, driver=driver, log=log)
         if not casted:
             if s.player.in_combat:
