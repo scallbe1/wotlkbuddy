@@ -18,7 +18,11 @@ def recoverable_lower(pos):
 def retreat_lower(*, keyboard, read_position, grab, guard, owner, emit, deadline):
     """Back away from the shaft, waiting at a closed door if necessary."""
     from wotlkbuddy.live.control import LiveControlError
+    from wotlkbuddy.live.transport_collision import route_region
     pos = read_position()
+    if route_region(pos) in ('deck', 'upper'):
+        emit('retreat_already_attached_or_arrived', **pos.to_dict())
+        return pos
     if not recoverable_lower(pos):
         emit('retreat_unavailable', **pos.to_dict())
         return None
@@ -37,6 +41,9 @@ def retreat_lower(*, keyboard, read_position, grab, guard, owner, emit, deadline
                 guard(snap, owner)
                 last_check = time.monotonic()
             pos = read_position()
+            if route_region(pos) in ('deck', 'upper'):
+                emit('attached_during_retreat', **pos.to_dict())
+                return pos
             if not recoverable_lower(pos):
                 emit('retreat_unexpected_position', **pos.to_dict())
                 return None
