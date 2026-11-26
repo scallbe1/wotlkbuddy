@@ -122,7 +122,6 @@ def attach_hunt_memory(driver,guid,memory):
     record=memory.setdefault(guid,{
         'hunt_terrain':HuntTerrain(), 'defeated_corpses':{},
         'finished_corpses':set(), 'seen_kill_events':set(),
-        'corpse_retry_after':{}, 'dangerous_hunt_positions':[],
-        'blocked_combat_guids':set()})
+        'corpse_retry_after':{}, 'dangerous_hunt_positions':[]})
     for name,value in record.items():
         setattr(driver,name,value)
