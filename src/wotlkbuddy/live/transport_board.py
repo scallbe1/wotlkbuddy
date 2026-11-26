@@ -143,6 +143,8 @@ def trial_board(args):
     floor = args.floor
     if getattr(args, 'ride_through', False) and floor != 'lower':
         raise ValueError('Ride-through trial currently supports lower-to-upper only')
+    if getattr(args, 'collision_guided', False) and (floor != 'lower' or not args.ride_through):
+        raise ValueError('Collision-guided trial requires --floor lower --ride-through')
     keyboard = WindowsKeyboard()
     print(f'Face the calibrated {floor} door and stay stationary. '
           f'{"One boarding attempt enabled; Escape aborts." if args.enable_input else "Dry run; no keys sent."}',
@@ -179,6 +181,16 @@ def trial_board(args):
         emit('approach', **start.to_dict(), aligned=landing_aligned(start, floor))
         start = _prepare_approach(args, keyboard, pid, start, owner, grab, guard, emit)
         if start is None:
+            return
+        if getattr(args, 'collision_guided', False):
+            from wotlkbuddy.live.transport_collision import traverse
+            if not args.enable_input:
+                emit('collision_dry_run_ready', **start.to_dict())
+                return
+            with ProcessMemory(pid, writable=False) as memory:
+                traverse(keyboard=keyboard, owner=owner, grab=grab, guard=guard,
+                         emit=emit, seconds=args.seconds,
+                         read_position=lambda: observe_world_position(memory, expected_guid=owner))
             return
         tracker = OpeningTracker(floor=floor)
         began = time.monotonic()
