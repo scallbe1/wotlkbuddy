@@ -72,7 +72,7 @@ class QuestSession:
             if recoverable_aggro_error(exc):
                 raise exc
         with self.activity.claim(Activity.RECOVERY):
-            recovery = self.recover(self.args, original_error=exc)
+            recovery = self.recover_with_redeath(exc,cycle)
         if recovery.get('status') == 'combat_cleared':
             self.aggro_recoveries += 1
             action = 'aggro_recovery'
@@ -81,6 +81,31 @@ class QuestSession:
             self.aggro_recoveries = 0
             action = 'death_recovery'
         self.steps.append({'cycle': cycle, 'action': action, 'recovery': recovery})
+
+    def recover_with_redeath(self, exc, cycle):
+        """A second verified death is a new recovery, not a fatal nested exception."""
+        from wotlkbuddy.live.control import WindowsKeyboard
+        while True:
+            if self.time_expired() or self.recoveries>=3:
+                raise exc
+            try:
+                return self.recover(self.args,original_error=exc)
+            except LiveControlError as error:
+                if not any(marker in str(error) for marker in (
+                        'character died again','Post-resurrection recovery did not restore',
+                        'Defense lost player identity')):
+                    raise
+                keyboard=WindowsKeyboard()
+                if keyboard.emergency_stop_requested() or not keyboard.wow_is_foreground():
+                    raise
+                state=capture_monitor(self.args.monitor)
+                if state.truncated or not state.player.dead or not state.player.guid:
+                    raise
+                self.recoveries+=1
+                self.steps.append({'cycle':cycle,'action':'redeath','reason':str(error)})
+                print('Verified repeat death; restarting corpse recovery with fresh live coordinates',
+                      file=sys.stderr,flush=True)
+                exc=error
 
     def guarded_phase(self, mode: str, cycle: int) -> dict | None:
         try:
