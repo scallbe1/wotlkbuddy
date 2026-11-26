@@ -199,6 +199,44 @@ def classify_lower_patch_scores(errors):
     return 'unknown'
 
 
+def lower_ascent_view(pos):
+    """Recognize the staged pose recorded in the failed full ascent."""
+    return (pos.map_id == 0 and abs(pos.x-1595.6359863) <= .15
+            and abs(pos.y-310.5578613) <= .15
+            and abs(pos.z+41.4237938) <= .6
+            and abs(pos.facing_rad-4.8004770) <= .015)
+
+
+def _lower_ascent_anchors(errors):
+    return bool(errors and all(isfinite(v) and v >= 0 for v in errors.values())
+                and abs(errors['left_error']-2.14) <= .35
+                and abs(errors['right_error']-1.48) <= .35)
+
+
+def classify_lower_ascent_scores(errors):
+    """Pose-specific recurring signature; retain the normal closed/open detector.
+
+    The shifted lower doorway has a different score ordering. The alternate
+    signature is inferred from seven recurring five-second intervals, not
+    from an independently labeled image. Phase tracking still requires two
+    consistent edges before movement is authorized.
+    """
+    state = classify_lower_patch_scores(errors)
+    if state != 'unknown' or not _lower_ascent_anchors(errors):
+        return state
+    if (24.8 <= errors['open_error'] <= 26
+            and 15.1 <= errors['closed_error'] <= 16.3):
+        return 'open'
+    return 'unknown'
+
+
+def plausible_lower_ascent_transition(errors):
+    return (plausible_transition(errors, floor='lower')
+            or (_lower_ascent_anchors(errors)
+                and 16.7 <= errors['open_error'] <= 25.6
+                and 7 <= errors['closed_error'] <= 15.8))
+
+
 def classify_lower_patches(rgb, width, height):
     door, left, right = (patch_signature(rgb, width, height, b) for b in LOWER_BOXES)
     errors = {'open_error': mae(door, PATCH_OPEN), 'closed_error': mae(door, PATCH_CLOSED),
