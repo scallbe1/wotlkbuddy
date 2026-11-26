@@ -181,6 +181,15 @@ def observe_impact(s, *, target_guid, expected, previous_health, fresh,
     return s, new, False
 
 
+def reface_before_cast(state,driver,guard,guid,entry):
+    face=getattr(driver,'face_combat_target',None)
+    if callable(face):
+        state=face(state)
+        guard(state)
+    t=state.combat_target
+    return state if state.player.target_guid==guid and t and t.entry_id==entry and not t.dead else None
+
+
 def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
                   previous_credit: tuple[int, int] | None, *, driver, guard,
                   fresh, qlog, clear_remaining_aggro, approach_unhittable_target,
@@ -234,7 +243,10 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
             if s.player.in_combat:
                 return recover(s)
             raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
-        previous_health = t.health
+        s=reface_before_cast(s,driver,guard,target_guid,expected)
+        if s is None:
+            raise UnhittableMobError(target_guid,'Target changed during facing correction')
+        previous_health = s.combat_target.health
         action, casted = cast_selected_action(s, driver=driver, log=log)
         if not casted:
             if s.player.in_combat:
