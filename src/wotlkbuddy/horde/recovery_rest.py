@@ -127,7 +127,8 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
     def defend(state):
         return defend_against_aggro(initial=state,capture=capture,
                                      driver=driver,log=log,sleep=sleep)
-    if getattr(driver,'reclaim_escape_path',()):
+    prepared=getattr(driver,'reclaim_escape_path',())
+    if isinstance(prepared,(list,tuple)) and prepared:
         state,where=sample()
         capture()
         take_prepared_reclaim_exit(state,where,driver=driver,nav=nav,
