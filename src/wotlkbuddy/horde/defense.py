@@ -14,6 +14,14 @@ from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 
 
+def verified_attacker(snapshot):
+    t = snapshot.combat_target
+    return bool(t and t.entry_id > 0 and t.attackable and not t.dead
+                and t.health > 0 and t.attacks_player is True
+                and creature_entry_from_guid(snapshot.player.target_guid)
+                == t.entry_id)
+
+
 def defend_against_aggro(
     *, initial: ClientTelemetry, capture: Callable[[], ClientTelemetry],
     driver, log: Callable[[str], None] = lambda _: None,
@@ -59,12 +67,6 @@ def defend_against_aggro(
 
     state=initial
     guard(state)
-    def verified_attacker(snapshot):
-        t = snapshot.combat_target
-        return bool(t and t.entry_id > 0 and t.attackable and not t.dead
-                    and t.health > 0 and t.attacks_player is True
-                    and creature_entry_from_guid(snapshot.player.target_guid)
-                    == t.entry_id)
 
     target_guid = None
     target_entry = None
