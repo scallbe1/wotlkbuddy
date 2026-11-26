@@ -25,11 +25,11 @@ class TravelServices:
     checked: Callable
     pulse: Callable
     smooth_forward: Callable
-    ghost_route_burst: Callable
     recover_collision: Callable
     recover_around_wall: Callable
     right_sign: int
     turn_rate: float
+    ghost_route_burst: Callable | None = None
 
 
 def wire_travel_session(*, first, world0, waypoints, now, notify, expected_map_id,
@@ -131,8 +131,8 @@ def wire_travel_session(*, first, world0, waypoints, now, notify, expected_map_i
                 notify('Wall route search unsuccessful; trying another measured escape direction')
         return False
     return TravelServices(state, destination, breadcrumbs, guard, checked, pulse,
-                          smooth_forward, ghost_burst, recover_collision, recover_around_wall,
-                          right_sign, turn_rate)
+                          smooth_forward, recover_collision, recover_around_wall,
+                          right_sign, turn_rate, ghost_route_burst=ghost_burst)
 
 
 def run_route(services, *, distance_status, destination_status, on_threat,
@@ -171,7 +171,8 @@ def run_route(services, *, distance_status, destination_status, on_threat,
             guard()
             distance_status(destination,state.world.position)
             last_hud_position=state.world.position
-        if ghost_only and continuous_forward and fast_observe is not None:
+        if (ghost_only and continuous_forward and fast_observe is not None
+                and services.ghost_route_burst is not None):
             before=state.world
             burst=services.ghost_route_burst(index)
             if burst is not None:
