@@ -66,9 +66,8 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approac
             guard(snap)
             _, pos = world_position(snap)
             return snap, pos
-        hud_kind=getattr(driver,'hunt_travel_kind',None)
         report = navigate_with_status(
-            driver, hud_kind if hud_kind in ('detour','retreat') else 'enemies', lambda: travel(legs, sample=sample, keyboard=kb,
+            driver, 'enemies', lambda: travel(legs, sample=sample, keyboard=kb,
                         stop_requested=driver.emergency_stop_requested,
                         expected_quest_id=quest_id,
                         expected_map_id=world.map_id,
