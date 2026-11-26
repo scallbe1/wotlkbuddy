@@ -86,7 +86,8 @@ def wire_hunt_services(*, capture, driver, guid, quest_id, started, max_seconds,
             capture=capture, driver=driver, nav=nav, world_position=world_position,
             guard=guard, fresh=fresh, travel=travel, max_seconds=max_seconds,
             now=now, started=started, log=log)
-        if not result.player.in_combat and not result.player.dead and routes.terrain.failures==0:
+        if (getattr(driver,'awareness',None) is not None and not result.player.in_combat
+                and not result.player.dead and routes.terrain.failures==0):
             routes.terrain.remember(world_position(result)[1])
         return result
 
