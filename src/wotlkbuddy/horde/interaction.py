@@ -161,7 +161,7 @@ class KeyboardQuestInput:
             '/wbttravel corpse', '/wbttravel firing', '/wbttravel deathrun',
             '/run RepopMe()', '/run RetrieveCorpse()',
             '/cast Arcane Intellect', '/cast [target=player] Arcane Intellect',
-            '/cast Frost Armor', '/cast Fireball', '/cast Frostbolt', '/startattack', '/stopattack',
+            '/cast Frost Armor', '/cast Fireball', '/cast Frostbolt', '/startattack', '/stopattack', '/cast Polymorph',
             '/cast Conjure Food', '/cast Conjure Water',
         ) or re.fullmatch(r'/run LootSlot\(([1-9]|1[0-6])\)', command) is not None
         allowed_npc_travel = (
