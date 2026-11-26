@@ -10,7 +10,7 @@ def test_isolated_patrol_just_out_of_range_can_be_approached_on_route():
     state=NS(player=NS(target_guid='mob',in_combat=False),
         combat_target=NS(entry_id=1526,dead=False,attackable=True,
                          reaction=2,fireball_in_range=False))
-    args=dict(origin=Vec3(0,0,0),ahead=[Vec3(6,0,0)],
+    args=dict(origin=Vec3(0,0,0),ahead=[Vec3(6,0,0),Vec3(30,0,0)],
               target_position=lambda _:Vec3(36,0,0),
               candidates=[(36,'mob',1526)],blocked_nearby=[])
     # A patrol 36 yards ahead is just outside the spell range.
@@ -18,6 +18,7 @@ def test_isolated_patrol_just_out_of_range_can_be_approached_on_route():
     assert not can_close_range(state,**dict(args,candidates=args['candidates']+[(20,'other',1525)]))
     assert not can_close_range(state,**dict(args,blocked_nearby=[(20,'other')]))
     assert not can_close_range(state,**dict(args,ahead=[Vec3(-6,0,0)]))
+    assert not can_close_range(state,**dict(args,ahead=[Vec3(6,0,0)]))
 
 
 def test_local_bypass_precedes_remote_staging(monkeypatch):
