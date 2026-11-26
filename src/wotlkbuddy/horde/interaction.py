@@ -65,6 +65,9 @@ def navigate_with_status(
     finally:
         if (callable(update) and driver.wow_is_foreground() and
                 not driver.emergency_stop_requested()):
+            activity=getattr(driver,'set_activity_status',None)
+            if callable(activity):
+                activity('clear')
             update('clear')
 
 
