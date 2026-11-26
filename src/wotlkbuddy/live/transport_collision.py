@@ -43,7 +43,8 @@ def next_key(pos, region, correcting=False):
     return FORWARD
 
 
-def traverse(*, keyboard, read_position, grab, guard, owner, emit, seconds):
+def traverse(*, keyboard, read_position, grab, guard, owner, emit, seconds,
+             resume_attached=False):
     """Hold movement toward the exit across door cycles; always release input.
 
     Only allow lower -> deck -> upper transitions. If a door does not block
@@ -53,13 +54,14 @@ def traverse(*, keyboard, read_position, grab, guard, owner, emit, seconds):
 
     deadline = time.monotonic()+seconds
     held = None
-    region = 'lower'
     last_check = last_report = float('-inf')
     pos = read_position()
-    if route_region(pos) != 'lower':
+    region = route_region(pos)
+    if region not in (('deck', 'upper') if resume_attached else ('lower',)):
         emit('collision_route_start_invalid', **pos.to_dict())
         return
-    emit('collision_traversal_started', **pos.to_dict())
+    emit('resuming_attached_exit' if resume_attached else 'collision_traversal_started',
+         **pos.to_dict())
     try:
         while time.monotonic() < deadline:
             if keyboard.emergency_stop_requested() or not keyboard.wow_is_foreground():
