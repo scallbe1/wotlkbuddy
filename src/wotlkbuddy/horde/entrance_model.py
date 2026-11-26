@@ -181,7 +181,15 @@ def move_entrance(terrain,memory,state,where,*,routes,world_position,navigate,na
     log(f'Entrance model {memory.steps}/18: {memory.last_remaining:.1f}y remaining along mesh; '
         f'next XYZ ({point.x:.2f},{point.y:.2f},{point.z:.2f}), climb {point.z-origin.z:+.1f}y')
     try:
-        result=navigate(state,point)
+        current=awareness.capture()
+        awareness._guard(current,state.player.guid)
+        if current.player.in_combat:
+            return True
+        _,measured=world_position(current)
+        if measured.map_id!=where.map_id or measured.position.distance_to(origin)>1.5:
+            memory.pending_path=()
+            return True
+        result=navigate(current,point,approach_path=path[:path.index(point)+1])
     except LiveControlError as exc:
         if not recoverable_hunt_failure(exc):
             raise
