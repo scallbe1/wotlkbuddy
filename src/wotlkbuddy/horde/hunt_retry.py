@@ -72,6 +72,8 @@ def handle_spawn_failure(exc, *, routes, key, allowed_sources, capture,
     height_failure = ('height/floor' in str(exc) or
                       'different heights/floors' in str(exc))
     unsafe_encounter=('unsafe encounter:' in str(exc).lower() or 'possible pack' in str(exc).lower())
+    incomplete_route=any(marker in str(exc).lower() for marker in (
+        'partial path', 'no usable bounded waypoint path', 'no complete verified route to distant quest camp'))
     if not recoverable_hunt_failure(exc):
         raise exc
     s = capture()
@@ -90,6 +92,9 @@ def handle_spawn_failure(exc, *, routes, key, allowed_sources, capture,
         log(f'Unsafe pack near spawn {key}; planning another quest route from live position')
         return
     routes.failed_navigation[key] = exc
+    if incomplete_route:
+        log(f'Incomplete Detour route to spawn {key}; selecting another verified quest location')
+        return
     if height_failure:
         log(f'Excluding wrong-floor spawn {key}; selecting another verified candidate')
         return
