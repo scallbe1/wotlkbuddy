@@ -7,6 +7,7 @@ from math import hypot
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.hunt_routes import alternate_hunt_routes, recoverable_hunt_failure
 from wotlkbuddy.horde.hunt_search import next_unvisited_spawn
+from wotlkbuddy.horde.hunt_terrain import HuntTerrain
 from wotlkbuddy.live.control import LiveControlError
 
 
@@ -20,6 +21,7 @@ class HuntRouteState:
     force_spawn_search: bool = False
     staging_visited: list[Vec3] = field(default_factory=list)
     required_waits: int = 0
+    terrain: HuntTerrain = field(default_factory=HuntTerrain)
 
 
 def select_spawn_goal(s, *, routes, nearby, spec, allowed_sources, expected,
