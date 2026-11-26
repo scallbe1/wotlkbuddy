@@ -194,7 +194,9 @@ def _recovering_ride(args, keyboard, pid, start, owner, grab, guard, emit):
     from wotlkbuddy.live.transport_staging import stage_lower, staged
     from wotlkbuddy.live.transport_exit import ride_and_exit
 
-    valid = recoverable_lower(start)
+    from wotlkbuddy.live.transport_collision import route_region, traverse
+
+    valid = recoverable_lower(start) or route_region(start) in ('deck', 'upper')
     emit('approach', **start.to_dict(), aligned=landing_aligned(start, 'lower'),
          recoverable=valid, mode='recovering_ride')
     if not valid:
@@ -217,6 +219,13 @@ def _recovering_ride(args, keyboard, pid, start, owner, grab, guard, emit):
                                 deadline=deadline)
             if pos is None:
                 return
+            if route_region(pos) in ('deck', 'upper'):
+                # No trustworthy phase when attachment occurred during retreat.
+                # Continue with the coordinate-guided exit, never another boarding.
+                traverse(keyboard=keyboard, read_position=read_position, grab=grab,
+                         guard=guard, owner=owner, emit=emit,
+                         seconds=max(0, deadline-time.monotonic()), resume_attached=True)
+                return
             pos = stage_lower(keyboard=keyboard, read_position=read_position,
                               grab=grab, guard=guard, owner=owner, emit=emit, pos=pos)
             if not staged(pos) or not landing_aligned(pos, 'lower'):
@@ -235,6 +244,11 @@ def _recovering_ride(args, keyboard, pid, start, owner, grab, guard, emit):
             if result == 'boarded_center':
                 ride_and_exit(keyboard=keyboard, memory=memory, owner=owner, phase=phase,
                               captured=captured, pos=pos, grab=grab, guard=guard, emit=emit)
+                return
+            if route_region(pos) in ('deck', 'upper'):
+                traverse(keyboard=keyboard, read_position=read_position, grab=grab,
+                         guard=guard, owner=owner, emit=emit,
+                         seconds=max(0, deadline-time.monotonic()), resume_attached=True)
                 return
             if boarded or not recoverable_lower(pos):
                 emit('boarding_recovery_unavailable', **pos.to_dict())

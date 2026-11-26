@@ -114,3 +114,28 @@ def test_lower_threshold_is_not_boarding_completion():
     assert route.route_region(pos(1597.5, 296, -41.42, 4.73686)) == 'lower'
     assert route.route_region(pos(1597.5, 291.7, -41.42, 4.73686)) == 'unknown'
     assert route.route_region(pos(1597.5, 299.766, -44, 4.73686)) == 'unknown'
+
+
+def test_resume_attached_moves_to_verified_upper_without_reboarding(monkeypatch):
+    deck = pos(-2.8163225650787354, 1.3988124132156372,
+               -.5768394470214844, .03319597244262695)
+    centred = pos(-2.8, .5, -.464, .033)
+    upper = pos(1596.7, 280.7, 55.24, 4.74)
+    samples = iter([deck, deck, centred, upper])
+    events, keys = [], []
+    clock = [0.]
+    monkeypatch.setattr(route, 'time', SimpleNamespace(
+        monotonic=lambda: clock[0],
+        sleep=lambda dt: clock.__setitem__(0, clock[0]+dt)))
+    keyboard = SimpleNamespace(
+        emergency_stop_requested=lambda: False, wow_is_foreground=lambda: True,
+        key_down=lambda k: keys.append(('down', k)),
+        key_up=lambda k: keys.append(('up', k)))
+    route.traverse(keyboard=keyboard, read_position=lambda: next(samples),
+                   grab=lambda: (None, None, None, None), guard=lambda *_: None,
+                   owner='test', emit=lambda event, **_: events.append(event),
+                   seconds=60, resume_attached=True)
+    assert events[0] == 'resuming_attached_exit'
+    assert events[-1] == 'exited_upper'
+    assert keys == [('down', route.RIGHT), ('up', route.RIGHT),
+                    ('down', route.FORWARD), ('up', route.FORWARD)]
