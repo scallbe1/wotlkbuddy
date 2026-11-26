@@ -23,7 +23,11 @@ def test_direct_route_waits_for_collision_and_releases_at_upper(monkeypatch):
     edge = pos(7.55, 2.205, -.464, .087)
     centred = pos(7.55, .5, -.464, .087)
     upper = pos(1596.7, 280.7, 55.24, 4.79)
-    samples = iter([lower, lower, lower, deck, edge, centred, centred, upper])
+    doorway = pos(1597.500244140625, 299.7661437988281,
+                  -40.89003372192383, 4.7368621826171875)
+    assert route.route_region(doorway) == 'lower'
+    assert route.next_key(doorway, 'lower') == route.FORWARD
+    samples = iter([lower, lower, lower, doorway, deck, edge, centred, centred, upper])
     events, keys = [], []
     clock = [0.]
     monkeypatch.setattr(route, 'time', SimpleNamespace(
@@ -104,3 +108,9 @@ def test_collision_dry_run_validates_corridor_without_movement():
                          wrong, 'test', None, None,
                          lambda event, **data: events.append((event, data)))
     assert events[-1][0] == 'collision_route_start_invalid'
+
+
+def test_lower_threshold_is_not_boarding_completion():
+    assert route.route_region(pos(1597.5, 296, -41.42, 4.73686)) == 'lower'
+    assert route.route_region(pos(1597.5, 291.7, -41.42, 4.73686)) == 'unknown'
+    assert route.route_region(pos(1597.5, 299.766, -44, 4.73686)) == 'unknown'
