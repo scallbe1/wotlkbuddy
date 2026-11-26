@@ -1279,7 +1279,8 @@ local function tickData()
     end
     -- Compact, optional bag capacity snapshot. Never guess bag size from
     -- GetItemInfo's stack limit, and never treat specialty bags as upgrades.
-    if GetItemFamily and GetCursorInfo and not GetCursorInfo() and
+    if not (MerchantFrame and MerchantFrame:IsShown()) and
+            GetItemFamily and GetCursorInfo and not GetCursorInfo() and
             GetContainerItemLink and GetInventoryItemLink and GetItemInfo then
         local bagRows,candidates={},{}
         local complete=true
@@ -1327,6 +1328,7 @@ local function tickData()
     -- this 3.3.5 client. Never call UseContainerItem inside the addon.
     -- The Python controller verifies full frames twice, then right-clicks
     -- only one selected, verified slot and checks sale results.
+    -- BEGIN MERCHANT CANDIDATE BATCH
     do
         local merchantVisible = MerchantFrame and MerchantFrame:IsShown()
         local rows = {}
@@ -1360,7 +1362,10 @@ local function tickData()
                         -- Uncached item metadata must not authorize a sale.
                         if not (id and qty and quality and price and itemType
                                 and equipLoc and name) then
-                            saleScanComplete = 0
+                            -- During a live sale, omit only this unresolved slot.
+                            -- Outside the merchant, require a full inventory scan
+                            -- for resale estimates and training decisions.
+                            if not merchantVisible then saleScanComplete = 0 end
                         elseif (not isQuest and itemType ~= ITEM_CLASS_QUEST and itemType~='Quest'
                                 and itemType~='Container' and itemType~='Key' and id~=6948
                                 -- Ordinary white food/drink may be sold too.
@@ -1386,12 +1391,24 @@ local function tickData()
                 end
             end
         end
-        if #rows > 64 then saleScanComplete = 0 end
+        -- A live merchant frame can publish a deterministic bounded batch.
+        -- Every emitted row has complete metadata and has passed the original
+        -- exclusions; omitted rows confer no permission to sell. M=1 means
+        -- the announced candidate batch is complete, not that all bags are
+        -- resolved. Off-merchant cash estimates still require the full scan.
+        local batch = {}
         local needed = 12
-        for _, row in ipairs(rows) do needed = needed + string.len(row) + 1 end
-        if payloadBytes + needed > CAPACITY - 20 then
-            saleScanComplete = 0
+        for _, row in ipairs(rows) do
+            local cost = string.len(row) + 1
+            if #batch >= 64 or payloadBytes + needed + cost > CAPACITY - 20 then
+                if not merchantVisible or #batch == 0 then saleScanComplete = 0 end
+                break
+            end
+            table.insert(batch, row)
+            needed = needed + cost
         end
+        if payloadBytes + needed > CAPACITY - 20 then saleScanComplete = 0 end
+        rows = batch
         if saleScanComplete == 1 then
             appendLine(table.concat({'M','1',tostring(#rows),merchantVisible and '1' or '0'}, '\t'))
             for _, row in ipairs(rows) do appendLine(row) end
@@ -1401,6 +1418,7 @@ local function tickData()
             end
         end
     end
+    -- END MERCHANT CANDIDATE BATCH
     -- Class trainer services are read only. Expose *available* services, not
     -- unavailable ranks, and require a complete frame before any purchase.
     if ClassTrainerFrame and ClassTrainerFrame:IsShown() and
