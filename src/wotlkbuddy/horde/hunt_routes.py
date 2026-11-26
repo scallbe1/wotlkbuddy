@@ -129,7 +129,7 @@ class EncounterRouteUnavailable(LiveControlError):
 
 def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
                              max_distance=800.,avoid_radius=20.,
-                             rejected=(),guard=lambda:None,log=lambda _:None):
+                             rejected=(),guard=lambda:None,log=lambda _:None,candidate_limit=63):
     """Find a complete Detour path around recent hostile positions.
 
     A shortest-path retry is insufficient: explicitly search alternative
@@ -182,6 +182,8 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
         heading=atan2(destination.y-h.y,destination.x-h.x)
         for radius in (28.,40.,55.):
             for offset in (pi/2,-pi/2,pi/3,-pi/3,2*pi/3,-2*pi/3,pi):
+                if diagnostics.attempts>=candidate_limit:
+                    break
                 guard()
                 angle=heading+offset
                 desired=Vec3(h.x+radius*cos(angle),h.y+radius*sin(angle),h.z)
@@ -210,9 +212,9 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
                 except (OSError,ValueError,RuntimeError,TimeoutError) as exc:
                     diagnostics.reject(f'candidate query error: {type(exc).__name__}')
                     continue
-            if ranked:
+            if ranked or diagnostics.attempts>=candidate_limit:
                 break
-        if ranked:
+        if ranked or diagnostics.attempts>=candidate_limit:
             break
     diagnostics.summary(len(ranked))
     if ranked:

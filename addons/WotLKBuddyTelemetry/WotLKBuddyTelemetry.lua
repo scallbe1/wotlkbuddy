@@ -1642,6 +1642,7 @@ local hudQuestName = ''
 local hudPhase = 'idle'
 local hudTravelKind = ''
 local hudTravelName = ''
+local hudActivity = ''
 local hudLastAction = ''
 local hudLastActive = 0
 local phaseLabels = {
@@ -1655,7 +1656,7 @@ local phaseLabels = {
 }
 local function setQuestGoal(id)
     if hudQuestId ~= id then
-        hudTravelKind, hudTravelName = '', ''
+        hudTravelKind, hudTravelName, hudActivity = '', '', ''
     end
     hudQuestId = id
     hudQuestName = ''
@@ -1684,7 +1685,7 @@ SLASH_WOTLKBUDDYPHASE1 = '/wbtphase'
 SlashCmdList['WOTLKBUDDYPHASE'] = function(message)
     if phaseLabels[message or ''] then
         if hudPhase ~= message then
-            hudTravelKind, hudTravelName = '', ''
+            hudTravelKind, hudTravelName, hudActivity = '', '', ''
             destinationText:SetText('')
         end
         hudPhase = message
@@ -1707,6 +1708,12 @@ local function travelActionLabel(kind, target, questName)
         return 'Navigating to quest corpse'
     elseif kind == 'firing' then
         return 'Navigating to firing position'
+    elseif kind == 'planning' then
+        return 'Planning a route around nearby enemies'
+    elseif kind == 'retreat' then
+        return 'Retreating to change approach'
+    elseif kind == 'detour' then
+        return 'Moving around enemy group'
     end
     return nil
 end
@@ -1717,7 +1724,8 @@ SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
         hudTravelKind, hudTravelName = '', ''
         destinationText:SetText('')
     elseif message == 'enemies' or message == 'corpse' or
-            message == 'firing' or message == 'deathrun' then
+            message == 'firing' or message == 'deathrun' or
+            message == 'planning' or message == 'retreat' or message == 'detour' then
         hudTravelKind, hudTravelName = message, ''
     else
         -- Accept only a bounded NPC name, not an arbitrary Lua expression
@@ -1725,6 +1733,21 @@ SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
         local npc = string.match(message or '', "^npc ([A-Za-z][A-Za-z '%-]*)$")
         if not npc or string.len(npc) > 64 then return end
         hudTravelKind, hudTravelName = 'npc', npc
+    end
+    statusFrame:Show()
+end
+local tacticalLabels = {
+    assess='Assessing nearby enemies and linked pull',
+    range='Target out of range; adjusting approach'
+}
+SLASH_WOTLKBUDDYACTIVITY1 = '/wbtaction'
+SlashCmdList['WOTLKBUDDYACTIVITY'] = function(message)
+    if message == 'clear' then
+        hudActivity = ''
+    elseif tacticalLabels[message] then
+        hudActivity = message
+    else
+        return
     end
     statusFrame:Show()
 end
@@ -1758,6 +1781,8 @@ statusFrame:SetScript('OnUpdate', function(_, elapsed)
         action = 'Channeling ' .. tostring(spell)
     elseif UnitAffectingCombat('player') then
         action = 'Combat'
+    elseif tacticalLabels[hudActivity] then
+        action = tacticalLabels[hudActivity]
     elseif travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) then
         -- Keep the actual destination visible during paused Detour movement,
         -- steering corrections, and proactive hostile scans. GetUnitSpeed

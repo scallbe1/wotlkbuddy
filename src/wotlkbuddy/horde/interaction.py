@@ -58,6 +58,10 @@ def navigate_with_status(
     Always clear on arrival/failure while input focus remains available.
     """
     update = getattr(driver, 'set_navigation_status', None)
+    if kind=='enemies':
+        tactical_kind=getattr(driver,'hunt_travel_kind',None)
+        if tactical_kind in ('detour','retreat'):
+            kind=tactical_kind
     if callable(update):
         update(kind, target)
     try:
@@ -65,6 +69,9 @@ def navigate_with_status(
     finally:
         if (callable(update) and driver.wow_is_foreground() and
                 not driver.emergency_stop_requested()):
+            activity=getattr(driver,'set_activity_status',None)
+            if callable(activity):
+                activity('clear')
             update('clear')
 
 
@@ -159,6 +166,8 @@ class KeyboardQuestInput:
             '/wbtphase vendor',
             '/wbttravel clear', '/wbttravel enemies',
             '/wbttravel corpse', '/wbttravel firing', '/wbttravel deathrun',
+            '/wbttravel planning', '/wbttravel retreat', '/wbttravel detour',
+            '/wbtaction clear', '/wbtaction assess', '/wbtaction range',
             '/run RepopMe()', '/run RetrieveCorpse()',
             '/cast Arcane Intellect', '/cast [target=player] Arcane Intellect',
             '/cast Frost Armor', '/cast Fireball', '/cast Frostbolt', '/startattack', '/stopattack', '/cast Polymorph',
@@ -229,7 +238,7 @@ class KeyboardQuestInput:
         """
         if not getattr(self, 'native_hud_enabled', True):
             return
-        if kind in ('clear', 'enemies', 'corpse', 'firing', 'deathrun'):
+        if kind in ('clear', 'enemies', 'corpse', 'firing', 'deathrun', 'planning', 'retreat', 'detour'):
             if target is not None:
                 raise ValueError('Fixed navigation status takes no target')
             self.chat('/wbttravel ' + kind)
@@ -240,6 +249,17 @@ class KeyboardQuestInput:
             self.chat('/wbttravel npc ' + target)
         else:
             raise ValueError('Unrecognized navigation HUD context')
+
+    def set_activity_status(self, kind: str) -> None:
+        if kind not in ('clear','assess','range'):
+            raise ValueError('Invalid tactical HUD activity')
+        if not getattr(self,'native_hud_enabled',True):
+            return
+        if getattr(self,'_tactical_activity','clear')==kind:
+            return
+        if self.wow_is_foreground() and not self.emergency_stop_requested():
+            self.chat('/wbtaction '+kind)
+            self._tactical_activity=kind
 
     def set_navigation_destination(self, point) -> None:
         if getattr(self,'native_hud_enabled',True):

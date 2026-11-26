@@ -96,7 +96,7 @@ def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[st
         require_verified_combat_key(first)
         log('Combat ready: verified damage action-bar key; learned Polymorph fallback available only if verified')
     pid, world = verified_live_position(first, pid=pid)
-    from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
+    from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles, scan_with_tactical_status
     from wotlkbuddy.horde.encounter import survey_pull
     from wotlkbuddy.live.world_position import fast_travel_observation
     driver.fast_travel_observe=lambda state,radius: fast_travel_observation(state,pid=pid,radius=radius)
@@ -105,12 +105,12 @@ def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[st
         player_position=lambda s: verified_live_position(s,pid=pid)[1],
         target_position=lambda s: verified_target_position(s,pid=pid),
         quest_entries=entries,log=log)
-    driver.scan_hostiles = lambda snapshot, where, ahead: scan_and_clear_hostiles(
+    driver.scan_hostiles = lambda snapshot, where, ahead: scan_with_tactical_status(driver,lambda:scan_and_clear_hostiles(
         initial=snapshot, player_position=where, path_ahead=ahead,
         capture=cap, driver=driver,
         target_position=lambda s: verified_target_position(s, pid=pid),
         log=log, detection_yards=args.scan_yards,corridor_yards=18.,
-        direct_path_clear=getattr(driver, 'direct_path_clear', None))
+        direct_path_clear=getattr(driver, 'direct_path_clear', None)))
     needs_recovery = (first.player.health/max(1,first.player.max_health)<.70 or
                       first.resources.mana/max(1,first.resources.max_mana)<.45)
     if not needs_recovery or args.only not in ('all','quests','train','vendor','objectives','collect','objects','turnin'):

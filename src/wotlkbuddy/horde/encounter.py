@@ -83,6 +83,11 @@ def assess_linked_pull(state, plan, chosen, driver, awareness, quest_entries, lo
             and state.resources.mana>=.90*state.resources.max_mana):
         plan=baseline
         log('Linked pull: using approved weaker-enemy combat budget without crowd control')
+    if plan is not None and not plan.allowed:
+        log(f'Linked encounter budget: {baseline.reason}; enemies '
+            f'{[(e.entry,e.level,e.classification,e.health) for e in baseline.enemies]}; '
+            f'player L{state.player.level}, HP {state.player.health}/{state.player.max_health}, '
+            f'mana {state.resources.mana}/{state.resources.max_mana}')
     if plan is not None:
         log(f'Linked encounter: {"PULL" if plan.allowed else "AVOID"}: {plan.reason}')
     return state,plan

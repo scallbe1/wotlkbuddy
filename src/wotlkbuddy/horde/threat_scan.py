@@ -99,6 +99,73 @@ def assess_corridor_pull(driver,assess,state):
         driver.assessing_travel_corridor=prior
 
 
+def tactical_status(driver,kind):
+    update=getattr(driver,'set_activity_status',None)
+    if callable(update):
+        update(kind)
+
+
+def scan_with_tactical_status(driver,scan):
+    tactical_status(driver,'clear')
+    try:
+        return scan()
+    finally:
+        if getattr(driver,'_tactical_activity',None)!='range':
+            tactical_status(driver,'clear')
+
+
+def can_close_range(state,*,origin,ahead,target_position,candidates,blocked_nearby):
+    """Only approach an isolated distant enemy along the existing route.
+
+    The travel follower still checks geometry, combat and fresh threats.
+    Never bypass a linked group or charge directly toward a selected GUID.
+    """
+    if len(candidates)!=1 or blocked_nearby or not ahead or state.player.in_combat:
+        return False
+    target=state.combat_target
+    if (not target or target.dead or not target.attackable or
+            state.player.target_guid!=candidates[0][1] or target.entry_id!=candidates[0][2] or
+            target.reaction not in (1,2,3) or target.fireball_in_range is not False):
+        return False
+    try:
+        actual=target_position(state)
+    except (OSError,RuntimeError,ValueError):
+        return False
+    distance=origin.distance_to(actual)
+    return (30<distance<=42 and abs(actual.z-origin.z)<=4 and
+            ahead[0].distance_to(actual)<distance-1 and
+            distance_to_corridor(actual,origin,ahead)<=12)
+
+
+def credited(before, after):
+    from wotlkbuddy.horde.combat import objective_progress
+    old = {(q.quest_id, obj.index): objective_progress(obj.description)
+           for q in before for obj in q.objectives
+           if obj.kind == 'monster' and not obj.done}
+    for q in after:
+        for obj in q.objectives:
+            key = (q.quest_id, obj.index)
+            if key not in old or old[key] is None:
+                continue
+            nxt = objective_progress(obj.description)
+            if nxt is not None and nxt[1] == old[key][1] and (
+                    nxt[0] > old[key][0] or obj.done):
+                return True
+    return False
+
+
+def corridor_geometry_clear(check,origin,actual,guid,log):
+    if check is None:
+        return True
+    try:
+        if check(origin,actual):
+            return True
+        log(f'Scanned hostile {guid} is behind blocked cave geometry after reacquisition; deferring preemptive pull')
+    except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError) as exc:
+        log(f'Cannot verify direct approach for {guid} after reacquisition: {exc}; deferring pull')
+    return False
+
+
 def scan_and_clear_hostiles(
     *, initial: ClientTelemetry, player_position: WorldPosition,
     path_ahead: Sequence[Vec3],
@@ -323,7 +390,13 @@ def scan_and_clear_hostiles(
     state,chosen_guid,chosen_entry=acquire_corridor_target(state,chosen_guid,chosen_entry,awareness=awareness,candidates=candidates,driver=driver,fresh=fresh,max_targets=max_targets,pack_positions=pack_positions,log=log)
     if state.player.in_combat:
         return defend(state)
+    tactical_status(driver,'assess')
     target=state.combat_target
+    if state.player.target_guid==chosen_guid and can_close_range(state,origin=player_position.position,
+            ahead=path_ahead,target_position=target_position,candidates=candidates,blocked_nearby=blocked_nearby):
+        tactical_status(driver,'range')
+        log(f'Isolated hostile {chosen_guid} moved out of Fireball range; continuing checked route to close distance')
+        return finish(state)
     if (not target or target.entry_id!=chosen_entry or target.dead or
             not target.attackable or target.reaction is None or
             not 1<=target.reaction<=3 or target.fireball_in_range is not True):
@@ -345,23 +418,11 @@ def scan_and_clear_hostiles(
             driver.chat('/cleartarget')
             state=fresh(state)
         return finish(state)
-    if direct_path_clear is not None:
-        try:
-            if not direct_path_clear(player_position.position, actual):
-                log(f'Scanned hostile {chosen_guid} is behind blocked cave '
-                    'geometry after reacquisition; deferring preemptive pull')
-                if state.player.target_guid:
-                    driver.chat('/cleartarget')
-                    state=fresh(state)
-                return finish(state)
-        except (OSError, RuntimeError, ValueError, TimeoutError,
-                LiveControlError) as exc:
-            log(f'Cannot verify direct approach for {chosen_guid} after '
-                f'reacquisition: {exc}; deferring pull')
-            if state.player.target_guid:
-                driver.chat('/cleartarget')
-                state=fresh(state)
-            return finish(state)
+    if not corridor_geometry_clear(direct_path_clear,player_position.position,actual,chosen_guid,log):
+        if state.player.target_guid:
+            driver.chat('/cleartarget')
+            state=fresh(state)
+        return finish(state)
     if state.mage_buffs is None or state.mage_buffs.knows_fireball is not True:
         raise LiveControlError('Cannot preemptively fight without learned Fireball')
     log(f'Preemptive hostile {chosen_entry}, GUID {chosen_guid}, '
@@ -389,6 +450,12 @@ def scan_and_clear_hostiles(
             remember_pack(driver,([m.position for m in plan.enemies] if plan and plan.enemies else pack_positions),monotonic())
             raise LiveControlError('Unsafe encounter: '+(plan.reason if plan and not plan.allowed else 'corridor pack not fully accounted for in assessment'))
         target=state.combat_target
+        if (plan and len(plan.enemies)==1 and state.player.target_guid==chosen_guid and
+                can_close_range(state,origin=player_position.position,ahead=path_ahead,
+                    target_position=target_position,candidates=candidates,blocked_nearby=blocked_nearby)):
+            tactical_status(driver,'range')
+            log('Approved isolated target moved out of range; advancing along checked route')
+            return finish(state)
         if (state.player.target_guid!=chosen_guid or not target or target.dead or
                 target.fireball_in_range is not True):
             raise LiveControlError('Unsafe encounter: target moved during assessment')
@@ -419,26 +486,6 @@ def scan_and_clear_hostiles(
     cast_delay=(min(2.5,max(.10,cast_ms/1000.+.02))
                 if cast_ms is not None else 2.1)
     state=fresh(mid,cast_delay)
-    # A killing projectile may remove the exact GUID before its target HP is
-    # sampled. Accept live progress as evidence of an attack's effect, never
-    # as proof that some unrelated selected target was killed.
-    from wotlkbuddy.horde.combat import objective_progress
-
-    def credited(before, after):
-        old = {(q.quest_id, obj.index): objective_progress(obj.description)
-               for q in before for obj in q.objectives
-               if obj.kind == 'monster' and not obj.done}
-        for q in after:
-            for obj in q.objectives:
-                key = (q.quest_id, obj.index)
-                if key not in old or old[key] is None:
-                    continue
-                nxt = objective_progress(obj.description)
-                if nxt is not None and nxt[1] == old[key][1] and (
-                        nxt[0] > old[key][0] or obj.done):
-                    return True
-        return False
-
     lost_target = False
     for _ in range(4):
         if state.player.in_combat:

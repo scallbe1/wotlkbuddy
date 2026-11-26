@@ -132,6 +132,15 @@ def handle_spawn_failure(exc, *, routes, key, allowed_sources, capture,
     return
 
 
+def tactical_navigate(driver,navigate,state,destination,path,kind):
+    prior=getattr(driver,'hunt_travel_kind',None)
+    driver.hunt_travel_kind=kind
+    try:
+        return navigate(state,destination,approach_path=path)
+    finally:
+        driver.hunt_travel_kind=prior
+
+
 def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
                           nav, capture, guard, world_position, pid,
                           clear_remaining_aggro, navigate, log):
@@ -146,15 +155,10 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             raise RouteCombatInterrupted('Aggro/combat detected during route retry')
     log(f'Alternate hunt planning: {len(nearby)} spawn candidates, {len(hazards)} remembered threats')
     try:
-        candidates=[p for p in nearby if routes.recently_visited.get((round(p.x),round(p.y),round(p.z)),0)<2][:6]
-        alternatives=alternate_hunt_routes(nav,world.map_id,world.position,candidates,hazards,
-            routes.recently_visited,excluded_staging=routes.staging_visited,guard=supervise)
         supervise()
-        if alternatives:
-            return alternatives[0],False
-        log('No direct staging approach; searching an intermediate detour around the local obstruction')
+        log('Checking local bypass before searching distant spawn staging positions')
         path=detour_around_encounters(nav,world.map_id,world.position,staging,hazards,
-            guard=supervise,log=log,max_distance=800.,avoid_radius=15.)
+            guard=supervise,log=log,max_distance=800.,avoid_radius=15.,candidate_limit=12)
         supervise()
         if path:
             current=capture()
@@ -162,7 +166,7 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             if current.player.in_combat:
                 raise RouteCombatInterrupted('Aggro/combat detected during route retry')
             log('Verified alternate corridor; following the actual detour path')
-            out=navigate(current,staging,approach_path=path)
+            out=tactical_navigate(driver,navigate,current,staging,path,'detour')
             if out.player.in_combat:
                 clear_remaining_aggro(out)
             routes.force_spawn_search=True
@@ -183,6 +187,12 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             clear_remaining_aggro(current)
             return None,True
         log('Intermediate detour interrupted: '+str(exc))
+        _,measured=world_position(current)
+        if measured.position.distance_to(world.position)>2:
+            return None,True
+        update=getattr(driver,'set_navigation_status',None)
+        if callable(update):
+            update('planning')
     # The destination may be behind a pack, but a short retreat can change
     # the approach angle. Never discard measured obstacles to force a route.
     from wotlkbuddy.horde.hunt_terrain import retreat_candidates
@@ -205,7 +215,10 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             if not path_avoids_pack(path,hazards,radius=15):
                 continue
             log(f'Changing approach: retreating {where.position.distance_to(point):.1f}y along a verified route')
-            out=navigate(capture(),point,approach_path=path)
+            if any(point.distance_to(p)<5 for p in routes.staging_visited):
+                continue
+            routes.staging_visited.append(point)
+            out=tactical_navigate(driver,navigate,capture(),point,path,'retreat')
             if out.player.in_combat:
                 clear_remaining_aggro(out)
             routes.force_spawn_search=True
@@ -220,8 +233,31 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             if not recoverable_hunt_failure(exc):
                 raise
             log('Retreat candidate blocked: '+str(exc))
+            current=capture()
+            guard(current)
+            if current.player.in_combat:
+                clear_remaining_aggro(current)
+                return None,True
+            if world_position(current)[1].position.distance_to(where.position)>2:
+                return None,True
+            update=getattr(driver,'set_navigation_status',None)
+            if callable(update):
+                update('planning')
         except (OSError,ValueError,RuntimeError,TimeoutError):
             continue
+    try:
+        candidates=[p for p in nearby if routes.recently_visited.get((round(p.x),round(p.y),round(p.z)),0)<2][:6]
+        alternatives=alternate_hunt_routes(nav,world.map_id,world.position,candidates,hazards,
+            routes.recently_visited,excluded_staging=routes.staging_visited,guard=supervise)
+        supervise()
+        if alternatives:
+            return alternatives[0],False
+    except RouteCombatInterrupted:
+        current=capture()
+        guard(current)
+        if current.player.in_combat:
+            clear_remaining_aggro(current)
+        return None,True
     # An exhaustive search from the same position will not improve by
     # blacklisting one remote spawn at a time. Refresh live patrols instead.
     raise EncounterRouteUnavailable('No verified alternate corridor; reobserve patrols before retry')
@@ -250,10 +286,12 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
                Vec3(goal.x+dx/d*stand_off,goal.y+dy/d*stand_off,goal.z))
     hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if now()-t<90]
     if hazards or routes.route_replans:
-        alternative,handled=find_hunt_alternative(s,routes=routes,world=world,staging=staging,
+        from wotlkbuddy.horde.interaction import navigate_with_status
+        alternative,handled=navigate_with_status(driver,'planning',lambda:find_hunt_alternative(
+            s,routes=routes,world=world,staging=staging,
             nearby=nearby,hazards=hazards,driver=driver,nav=nav,capture=capture,guard=guard,
             world_position=world_position,pid=pid,clear_remaining_aggro=clear_remaining_aggro,
-            navigate=navigate,log=log)
+            navigate=navigate,log=log))
         if handled:
             return
         goal,staging=alternative
