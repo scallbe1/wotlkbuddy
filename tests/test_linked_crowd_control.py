@@ -142,3 +142,22 @@ def test_corridor_context_is_restored_after_assessment_error():
     with pytest.raises(RuntimeError,match='assessment interrupted'):
         assess_corridor_pull(driver,fail,object())
     assert driver.assessing_travel_corridor is False
+
+
+def test_collection_objective_can_use_opening_control():
+    from wotlkbuddy.combat.crowd_control import prepare_linked_pull
+    primary,escort=travel_pair()
+    opening=state(primary)
+    opening.player.health=opening.player.max_health=162
+    opening.resources=NS(class_token='MAGE',mana=453,max_mana=453)
+    frames=iter([state(escort),state(escort),state(escort,aura=('Polymorph',),combat=True),
+                 state(primary,combat=True)])
+    actions=[]
+    driver=NS(chat=actions.append,cast_action_spell=lambda s,i:actions.append(i),
+              target_objective_name=lambda name:actions.append(name) or True)
+    plan=PullPlan(False,(primary,escort),'linked')
+    result,allowed=prepare_linked_pull(opening,plan,primary,driver=driver,
+        awareness=NS(_fresh=lambda _:next(frames)),
+        quest_entries=(1535,1536,1537,1538,1539,1540),log=lambda _:None)
+    assert allowed.allowed and result.player.target_guid==primary.guid
+    assert actions==[escort.name,'/stopattack',118,primary.name]
