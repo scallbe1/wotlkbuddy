@@ -24,7 +24,11 @@ def remember_pack(driver, positions, now):
     for pos in positions:
         if not any(pos.distance_to(p)<3 for p,_ in previous):
             previous.append((pos,now))
-    driver.dangerous_hunt_positions=previous[-64:]
+    existing=getattr(driver,'dangerous_hunt_positions',None)
+    if isinstance(existing,list):
+        existing[:]=previous[-64:]
+    else:
+        driver.dangerous_hunt_positions=previous[-64:]
 
 
 def path_avoids_pack(path, hazards, radius=15):
