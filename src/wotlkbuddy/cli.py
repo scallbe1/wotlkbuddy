@@ -1440,6 +1440,15 @@ def main(argv: list[str] | None = None) -> int:
     wp.add_argument('--monitor', type=int, default=0)
     wp.add_argument('--pid', type=int, help='Wow.exe PID; only needed with multiple clients')
     wp.set_defaults(func=_horde_world_position)
+    from wotlkbuddy.live.transport_trace import record_transport_trace
+    transport = sub.add_parser('horde-transport-watch',
+                               help='Record manually ridden elevator XYZ, without input')
+    transport.add_argument('--seconds', type=float, default=120)
+    transport.add_argument('--interval', type=float, default=.25)
+    transport.add_argument('--countdown', type=float, default=5)
+    transport.add_argument('--monitor', type=int, default=0)
+    transport.add_argument('--pid', type=int)
+    transport.set_defaults(func=record_transport_trace)
     procs = sub.add_parser("processes", help="List local Wow.exe processes (Windows)")
     procs.set_defaults(func=_list_wow)
     profile = sub.add_parser("profile", help="Read and inspect a profile")
