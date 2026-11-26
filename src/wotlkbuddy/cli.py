@@ -1319,6 +1319,8 @@ def _register_world_observation_commands(sub):
     board.add_argument('--monitor', type=int, default=1)
     board.add_argument('--enable-input', action='store_true',
                        help='Permit one bounded forward boarding attempt; manual exit')
+    board.add_argument('--ride-through', action='store_true',
+                       help='After successful lower boarding, attempt one predicted upper exit')
     board.set_defaults(func=trial_board)
 
 
