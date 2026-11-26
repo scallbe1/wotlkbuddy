@@ -151,6 +151,98 @@ def _run_collision_trial(args, keyboard, pid, start, owner, grab, guard, emit):
                  read_position=lambda: observe_world_position(memory, expected_guid=owner))
 
 
+def _hybrid_board_window(*, read_position, start, grab, guard, owner, emit, deadline):
+    """Reacquire the live door phase after every return to the landing."""
+    tracker = OpeningTracker(floor='lower')
+    began = time.monotonic()
+    while time.monotonic() < deadline:
+        frame, snap, captured, capture_error = grab()
+        guard(snap, owner)
+        pos = read_position()
+        if not landing_aligned(pos, 'lower') or pos.position.distance_to(start.position) > .35:
+            emit('approach_changed', **pos.to_dict())
+            return None
+        rgb, size = reduce_rgb(frame.rgb, frame.width, frame.height)
+        state, errors = classify_frame(rgb, *size, floor='lower')
+        phase = tracker.update(state, captured*1000, capture_error,
+                               transition=plausible_transition(errors, floor='lower'))
+        budget = crossing_seconds(pos, 'lower')
+        ready = board_window('lower', state, phase,
+                             age_ms=(time.monotonic()-captured)*1000,
+                             crossing_ms=budget*1000)
+        emit('wait', door=state, elapsed_ms=round((captured-began)*1000, 2),
+             errors={k: round(v, 2) for k, v in errors.items()},
+             phase_ms=round(phase.phase_ms, 2) if phase else None,
+             uncertainty_ms=round(phase.uncertainty_ms, 2) if phase else None,
+             crossing_seconds=round(budget, 3), ready=ready)
+        if ready:
+            guard(snap, owner)
+            if board_window('lower', state, phase,
+                            age_ms=(time.monotonic()-captured)*1000,
+                            crossing_ms=budget*1000):
+                return pos, phase, captured, budget
+        time.sleep(.035 if state == 'open' else .06)
+    emit('no_verified_board_window')
+    return None
+
+
+def _recovering_ride(args, keyboard, pid, start, owner, grab, guard, emit):
+    """Use verified boarding, retreat/retry on a miss, and steer the upper exit."""
+    from wotlkbuddy.game.win32 import ProcessMemory
+    from wotlkbuddy.live.world_position import observe_world_position
+    from wotlkbuddy.live.transport_recovery import recoverable_lower, retreat_lower
+    from wotlkbuddy.live.transport_staging import stage_lower, staged
+    from wotlkbuddy.live.transport_exit import ride_and_exit
+
+    valid = recoverable_lower(start)
+    emit('approach', **start.to_dict(), aligned=landing_aligned(start, 'lower'),
+         recoverable=valid, mode='recovering_ride')
+    if not valid:
+        emit('reposition_required', floor='lower', landing=LANDINGS['lower'], center_x=CENTER_X)
+        return
+    if not args.enable_input:
+        emit('recovering_ride_dry_run', **start.to_dict())
+        return
+    deadline = time.monotonic()+args.seconds
+    with ProcessMemory(pid, writable=False) as memory:
+        def read_position():
+            return observe_world_position(memory, expected_guid=owner)
+
+        for attempt in range(1, 3):
+            if time.monotonic() >= deadline:
+                break
+            emit('boarding_attempt', attempt=attempt)
+            pos = retreat_lower(keyboard=keyboard, read_position=read_position,
+                                grab=grab, guard=guard, owner=owner, emit=emit,
+                                deadline=deadline)
+            if pos is None:
+                return
+            pos = stage_lower(keyboard=keyboard, read_position=read_position,
+                              grab=grab, guard=guard, owner=owner, emit=emit, pos=pos)
+            if not staged(pos) or not landing_aligned(pos, 'lower'):
+                emit('staging_incomplete', **pos.to_dict())
+                return
+            window = _hybrid_board_window(
+                read_position=read_position, start=pos, grab=grab, guard=guard,
+                owner=owner, emit=emit, deadline=deadline)
+            if window is None:
+                return
+            pos, phase, captured, budget = window
+            result, pos, boarded = _execute_boarding(
+                keyboard=keyboard, memory=memory, owner=owner, floor='lower',
+                budget=budget, pos=pos, grab=grab, guard=guard)
+            emit(result, **pos.to_dict(), transport_relative=boarded)
+            if result == 'boarded_center':
+                ride_and_exit(keyboard=keyboard, memory=memory, owner=owner, phase=phase,
+                              captured=captured, pos=pos, grab=grab, guard=guard, emit=emit)
+                return
+            if boarded or not recoverable_lower(pos):
+                emit('boarding_recovery_unavailable', **pos.to_dict())
+                return
+            emit('boarding_missed_retry', **pos.to_dict())
+    emit('boarding_attempts_exhausted')
+
+
 def trial_board(args):
     import mss
     from wotlkbuddy.game.win32 import ProcessMemory
@@ -204,6 +296,9 @@ def trial_board(args):
         owner = initial.player.guid
         if getattr(args, 'collision_guided', False):
             _run_collision_trial(args, keyboard, pid, start, owner, grab, guard, emit)
+            return
+        if floor == 'lower' and getattr(args, 'ride_through', False):
+            _recovering_ride(args, keyboard, pid, start, owner, grab, guard, emit)
             return
         emit('approach', **start.to_dict(), aligned=landing_aligned(start, floor))
         start = _prepare_approach(args, keyboard, pid, start, owner, grab, guard, emit)
