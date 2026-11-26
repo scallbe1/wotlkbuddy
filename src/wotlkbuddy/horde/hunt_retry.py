@@ -209,6 +209,8 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
     retreat_options=(retreat_candidates(routes.terrain.anchors,current,where,driver,nav,log)
                      if hazards and routes.tactical_retreats<2 else ())
     for map_id,point in retreat_options:
+        if routes.tactical_retreats>=2:
+            break
         try:
             supervise()
             if map_id!=where.map_id or not 18<=where.position.distance_to(point)<=65:
