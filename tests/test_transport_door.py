@@ -71,3 +71,28 @@ def test_short_animation_ambiguity_brackets_next_opening():
     assert tracker.update('unknown', 18000, transition=True) is None
     assert not tracker.locked
     assert tracker.edge_ms is None
+
+
+def test_v2_midpoint_animation_keeps_first_edge():
+    # Recorded v2 scores at 11.0235 s; do not treat ambiguity as open.
+    midpoint = scores(25.68, 24.93, 6.26, 9.32)
+    assert classify_scores(midpoint) == 'unknown'
+    assert plausible_transition(midpoint)
+    assert not plausible_transition(scores(25.68, 24.93, 15, 9.32))
+    assert not plausible_transition(scores(27, 27, 6.26, 9.32))
+
+    tracker = OpeningTracker()
+    for t in range(10773, 28000, 250):
+        state = ('open' if 11273 <= t < 15523 or t >= 27773
+                 else 'closed')
+        if t == 11023:
+            assert tracker.update('unknown', t, 23.5,
+                                  transition=plausible_transition(midpoint)) is None
+        else:
+            phase = tracker.update(state, t, 23.5)
+            if t < 27773:
+                assert phase is None
+            else:
+                assert phase is not None
+                assert phase.phase_ms == 10625
+                assert phase.uncertainty_ms == 372
