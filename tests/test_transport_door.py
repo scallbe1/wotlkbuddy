@@ -96,3 +96,33 @@ def test_v2_midpoint_animation_keeps_first_edge():
                 assert phase is not None
                 assert phase.phase_ms == 10625
                 assert phase.uncertainty_ms == 372
+
+
+def test_lower_templates_and_recorded_scores():
+    from wotlkbuddy.live.transport_door import (
+        LOWER_OPEN, LOWER_CLOSED, LOWER_LEFT, LOWER_RIGHT,
+    )
+    assert classify_signatures(LOWER_OPEN, LOWER_LEFT, LOWER_RIGHT,
+                               floor='lower')[0] == 'open'
+    assert classify_signatures(LOWER_CLOSED, LOWER_LEFT, LOWER_RIGHT,
+                               floor='lower')[0] == 'closed'
+    # Actual lower archive: frames 44, 47, 63, 68, 70 and moving frame 37.
+    for row, expected in [
+        ((1.17, 21.79, 0, .02), 'open'),
+        ((21.60, .61, 0, 0), 'closed'),
+        ((27.79, 13.94, 20.4, 0), 'unknown'),
+        ((.26, 21.73, 0, 0), 'open'),
+        ((15.21, 25.95, 20.4, 0), 'unknown'),
+        ((21.66, 9.70, 5.11, 4.9), 'unknown'),
+    ]:
+        assert classify_scores(scores(*row), floor='lower') == expected
+
+
+def test_lower_phase_uses_lower_opening_offset():
+    tracker = OpeningTracker(floor='lower')
+    for t in range(0, 17000, 250):
+        state = 'open' if 250 <= t < 4750 else 'closed'
+        assert tracker.update(state, t) is None
+    phase = tracker.update('open', 17000)
+    assert phase is not None
+    assert phase.phase_ms == 2125
