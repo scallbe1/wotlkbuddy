@@ -2,7 +2,7 @@
 
 This is NOT connected to continuous questing. Use the normal foreground
 keyboard driver, no game memory writes. Board once and stop at the deck
-centre. The rider must manually exit after the trial.
+centre. Manual exit by default; an explicit ride-through option tests ascent.
 """
 from math import atan2, cos, sin, isfinite
 import json
@@ -118,6 +118,8 @@ def trial_board(args):
             or not 20 <= args.seconds <= 120):
         raise ValueError('Board trial: monitor >=1, countdown 0..20, seconds 20..120')
     floor = args.floor
+    if getattr(args, 'ride_through', False) and floor != 'lower':
+        raise ValueError('Ride-through trial currently supports lower-to-upper only')
     keyboard = WindowsKeyboard()
     print(f'Face the calibrated {floor} door and stay stationary. '
           f'{"One boarding attempt enabled; Escape aborts." if args.enable_input else "Dry run; no keys sent."}',
@@ -195,7 +197,13 @@ def trial_board(args):
                     keyboard=keyboard, memory=memory, owner=owner, floor=floor,
                     budget=budget, pos=pos, grab=grab, guard=guard)
                 emit(result, **pos.to_dict(), transport_relative=boarded)
-                print('Movement released. Manually ride and exit the elevator; no additional input.',
-                      flush=True)
+                if result == 'boarded_center' and getattr(args, 'ride_through', False):
+                    from wotlkbuddy.live.transport_exit import ride_and_exit
+                    ride_and_exit(keyboard=keyboard, memory=memory, owner=owner,
+                                  phase=phase, captured=captured, pos=pos,
+                                  grab=grab, guard=guard, emit=emit)
+                else:
+                    print('Movement released. Manually ride and exit the elevator; no additional input.',
+                          flush=True)
                 return
     emit('no_verified_board_window')
