@@ -1272,6 +1272,25 @@ def _live_record(args: argparse.Namespace) -> None:
     if rows == 0:
         raise RuntimeError('No valid telemetry was recorded; check WoW visibility')
 
+def _register_world_observation_commands(sub):
+    """Register read-only world and transport observation commands."""
+    wp = sub.add_parser('horde-world-position',
+                        help='Read-only live player world XYZ with addon GUID cross-check')
+    wp.add_argument('--countdown', type=float, default=5)
+    wp.add_argument('--monitor', type=int, default=0)
+    wp.add_argument('--pid', type=int, help='Wow.exe PID; only needed with multiple clients')
+    wp.set_defaults(func=_horde_world_position)
+    from wotlkbuddy.live.transport_trace import record_transport_trace
+    transport = sub.add_parser('horde-transport-watch',
+                               help='Record manually ridden elevator XYZ, without input')
+    transport.add_argument('--seconds', type=float, default=120)
+    transport.add_argument('--interval', type=float, default=.25)
+    transport.add_argument('--countdown', type=float, default=5)
+    transport.add_argument('--monitor', type=int, default=0)
+    transport.add_argument('--pid', type=int)
+    transport.set_defaults(func=record_transport_trace)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wotlkbuddy")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1434,21 +1453,7 @@ def main(argv: list[str] | None = None) -> int:
     nd.add_argument('--monitor', type=int, default=0)
     nd.add_argument('--pid', type=int, help='Wow.exe PID if multiple clients are running')
     nd.set_defaults(func=_horde_nav_deliver)
-    wp = sub.add_parser('horde-world-position',
-                        help='Read-only live player world XYZ with addon GUID cross-check')
-    wp.add_argument('--countdown', type=float, default=5)
-    wp.add_argument('--monitor', type=int, default=0)
-    wp.add_argument('--pid', type=int, help='Wow.exe PID; only needed with multiple clients')
-    wp.set_defaults(func=_horde_world_position)
-    from wotlkbuddy.live.transport_trace import record_transport_trace
-    transport = sub.add_parser('horde-transport-watch',
-                               help='Record manually ridden elevator XYZ, without input')
-    transport.add_argument('--seconds', type=float, default=120)
-    transport.add_argument('--interval', type=float, default=.25)
-    transport.add_argument('--countdown', type=float, default=5)
-    transport.add_argument('--monitor', type=int, default=0)
-    transport.add_argument('--pid', type=int)
-    transport.set_defaults(func=record_transport_trace)
+    _register_world_observation_commands(sub)
     procs = sub.add_parser("processes", help="List local Wow.exe processes (Windows)")
     procs.set_defaults(func=_list_wow)
     profile = sub.add_parser("profile", help="Read and inspect a profile")
