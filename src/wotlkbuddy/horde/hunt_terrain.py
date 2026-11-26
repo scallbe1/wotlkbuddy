@@ -5,7 +5,7 @@ from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.world_position import passive_creature, observed_race_token
 
 from wotlkbuddy.horde.hunt_routes import (
-    EncounterRouteUnavailable, remember_pack, recoverable_hunt_failure)
+    EncounterRouteUnavailable, recoverable_hunt_failure)
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import validate_nav_path
 
@@ -27,6 +27,7 @@ class HuntTerrain:
             self.failures+=1
         else:
             self.failures=0
+            self.retreats=0
             self.remember(where)
 
     def retreat(self, state, *, routes, world_position, navigate, nav, driver, now, log):
@@ -39,13 +40,15 @@ class HuntTerrain:
             return False
         _,where=world_position(state)
         origin=where.position
-        remember_pack(driver,[origin],now())
+        # Terrain mismatch is not an observed enemy. Do not poison the hostile map.
         routes.route_replans+=1
         self.retreats+=1
         log(f'Terrain warning: {self.failures} consecutive target/floor failures; retreating from complicated ground')
         if self.retreats>3:
-            self.retreats=0
-            raise EncounterRouteUnavailable('Repeated terrain retreats exhausted; waiting for a new safe approach')
+            self.failures=0
+            log('Terrain retreat budget exhausted; selecting a different spawn instead of walking in circles')
+            routes.force_spawn_search=True
+            return False
         # Prefer ground visited before the targeting failures, not a guessed
         # coordinate behind the player. The full reverse route must validate.
         for map_id,point in retreat_candidates(self.anchors,state,where,driver,nav,log):
@@ -71,7 +74,6 @@ class HuntTerrain:
                     raise EncounterRouteUnavailable('Terrain retreat route blocked: '+str(exc)) from exc
                 raise
             self.failures=0
-            self.retreats=0
             routes.force_spawn_search=True
             return True
         raise EncounterRouteUnavailable('Targeting repeatedly failed in complex terrain; no verified retreat route')
