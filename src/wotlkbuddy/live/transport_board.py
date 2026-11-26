@@ -178,7 +178,9 @@ def trial_board(args):
                      uncertainty_ms=phase.uncertainty_ms if phase else None,
                      crossing_seconds=round(budget,3), ready=ready)
                 if not ready:
-                    time.sleep(.12)
+                    # The farther calibrated approach has a narrow launch window.
+                    # Sample more frequently while open without reducing margins.
+                    time.sleep(.035 if state == 'open' and phase is not None else .12)
                     continue
                 if not args.enable_input:
                     emit('dry_run_ready', floor=floor)
