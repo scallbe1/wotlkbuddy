@@ -23,7 +23,7 @@ class Approach:
     length: float
 
 
-def mesh_approaches(nav, world, target, *, hazards, visited, guard):
+def mesh_approaches(nav, world, target, *, hazards, visited, guard, require_firing=True):
     """Sample actual route bends; never invent a straight line through walls."""
     origin=world.position
     guard()
@@ -40,12 +40,15 @@ def mesh_approaches(nav, world, target, *, hazards, visited, guard):
         guard()
         length+=a.distance_to(point)
         distance=point.distance_to(target)
-        if not 18<=distance<=33 or abs(point.z-target.z)>4:
+        if require_firing:
+            if not 18<=distance<=33 or abs(point.z-target.z)>4:
+                continue
+        elif not 20<=distance<=50 or length<8:
             continue
         if origin.distance_to(point)<4 or any(point.distance_to(p)<4 for p in visited):
             continue
         try:
-            if not nav.segment_clear(world.map_id,point,target):
+            if require_firing and not nav.segment_clear(world.map_id,point,target):
                 continue
             prefix=path[:index+1]
             if not path_avoids_pack(prefix,hazards,radius=19):
@@ -88,8 +91,17 @@ def plan_approach(nav, world, goal, enemies, unknown, *, visited, guard):
             ranked.append(Approach(point,enemy.position,enemy.guid,enemy.entry,True,length))
     if ranked:
         return min(ranked,key=lambda a:a.length)
-    return min((Approach(p,center,target.guid if target else '',goal.entry,False,d)
-                for d,p in direct),key=lambda a:a.length,default=None)
+    if direct:
+        return min((Approach(p,center,target.guid if target else '',goal.entry,False,d)
+                    for d,p in direct),key=lambda a:a.length)
+    # A door or bend can hide every firing position. Explore a safe prefix
+    # of the *actual* entrance route, not another radial guess.
+    bends=mesh_approaches(nav,world,center,hazards=hazards,visited=visited,
+                         guard=guard,require_firing=False)
+    if bends:
+        length,point=max(bends,key=lambda pair:pair[0])
+        return Approach(point,center,target.guid if target else '',goal.entry,False,length)
+    return None
 
 
 def explore_required_approach(s, *, routes, goal, world, driver, nav, navigate,
@@ -129,9 +141,18 @@ def explore_required_approach(s, *, routes, goal, world, driver, nav, navigate,
     routes.structured_attempts+=1
     routes.staging_visited.append(approach.point)
     log(f'Structured approach {routes.structured_attempts}/12: '
-        f'{"clear isolated entrance guard" if approach.guard else "explore entrance-facing firing position"} '
+        f'{"clear isolated entrance guard" if approach.guard else "explore entrance-facing mesh route"} '
         f'entry {approach.entry}; {approach.length:.1f}y via verified mesh route')
     try:
+        state=capture()
+        guard(state)
+        if state.player.in_combat:
+            clear_remaining_aggro(state)
+            return True
+        _,current=world_position(state)
+        if current.map_id!=world.map_id or current.position.distance_to(world.position)>2:
+            log('Structured approach: player moved during planning; refreshing route')
+            return True
         s=navigate(state,approach.point)
         if s.player.in_combat:
             clear_remaining_aggro(s)
