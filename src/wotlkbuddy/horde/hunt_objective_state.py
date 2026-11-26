@@ -6,6 +6,28 @@ from dataclasses import dataclass, field
 from wotlkbuddy.live.control import LiveControlError
 
 
+def seed_objective_names(driver, spec, observed, allowed_sources, *, collect_items, log):
+    """Names are selection hints only; the exact live GUID remains mandatory."""
+    import re
+    awareness=getattr(driver,'awareness',None)
+    if not isinstance(getattr(awareness,'names',None),dict):
+        return
+    for source in getattr(spec,'sources',()):
+        if source.kind=='mob' and source.entry in allowed_sources and source.name:
+            awareness.names.setdefault(source.entry,source.name)
+    if collect_items or len(allowed_sources)!=1:
+        return
+    # Kill objective text is already reconciled with the XML entry/order.
+    # Never infer a creature name from a collection-item objective.
+    match=re.fullmatch(r"([A-Za-z][A-Za-z0-9 '\-]{0,78}) slain:\s*\d+\s*/\s*\d+",observed.description)
+    if match:
+        entry=allowed_sources[0]
+        name=match.group(1)
+        if awareness.names.get(entry)!=name:
+            awareness.names[entry]=name
+            log(f'Objective targeting: {name} (entry {entry}) from verified live journal')
+
+
 @dataclass
 class HuntObjectiveState:
     active_tracked_item: int = 0
@@ -118,6 +140,7 @@ class HuntObjectiveState:
                 else:
                     log(f'KillMob entry {spec.entry}: live journal progress '
                         f'{live_credit[0]}/{live_credit[1]}')
+        seed_objective_names(driver,spec,observed,allowed_sources,collect_items=collect_items,log=log)
         return s, spec, observed, allowed_sources
 
     def after_loot(self, s, *, qlog, collect_items, spec, observed, before_text, log):

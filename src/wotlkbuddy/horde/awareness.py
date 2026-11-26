@@ -76,9 +76,11 @@ class ObjectAwareness:
         name=self.names.get(entry)
         select=getattr(self.driver,'target_objective_name',None)
         if name and callable(select) and select(name):
+            self.log(f'Exact-name acquisition: {name} (entry {entry}), expected GUID {guid}')
             state=self._fresh(state)
             if state.player.in_combat or state.player.target_guid==guid:
                 return state
+            self.log(f'Exact-name acquisition not verified: selected {state.player.target_guid or "<none>"}; expected {guid}')
         stamp=self.now()
         if stamp-self.last_tab>=12:
             self.last_tab=stamp
