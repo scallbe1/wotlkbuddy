@@ -107,6 +107,29 @@ def _execute_boarding(*, keyboard, memory, owner, floor, budget, pos, grab, guar
     return result, pos, boarded
 
 
+def _prepare_approach(args, keyboard, pid, start, owner, grab, guard, emit):
+    from wotlkbuddy.game.win32 import ProcessMemory
+    from wotlkbuddy.live.world_position import observe_world_position
+    from wotlkbuddy.live.transport_staging import stage_lower, staging_area, staged, LOWER_TARGET
+
+    floor = args.floor
+    if floor == 'lower' and staging_area(start) and not staged(start):
+        if not args.enable_input:
+            emit('dry_run_staging_required', target=LOWER_TARGET)
+            return None
+        with ProcessMemory(pid, writable=False) as memory:
+            start = stage_lower(
+                keyboard=keyboard, pos=start, owner=owner, grab=grab, guard=guard,
+                emit=emit, read_position=lambda: observe_world_position(memory, expected_guid=owner))
+        if not staged(start):
+            emit('staging_incomplete', target=LOWER_TARGET)
+            return None
+    if not landing_aligned(start, floor):
+        emit('reposition_required', floor=floor, landing=LANDINGS[floor], center_x=CENTER_X)
+        return None
+    return start
+
+
 def trial_board(args):
     import mss
     from wotlkbuddy.game.win32 import ProcessMemory
@@ -154,9 +177,8 @@ def trial_board(args):
         pid, start = verified_live_position(initial)
         owner = initial.player.guid
         emit('approach', **start.to_dict(), aligned=landing_aligned(start, floor))
-        if not landing_aligned(start, floor):
-            emit('reposition_required', floor=floor, landing=LANDINGS[floor],
-                 center_x=CENTER_X)
+        start = _prepare_approach(args, keyboard, pid, start, owner, grab, guard, emit)
+        if start is None:
             return
         tracker = OpeningTracker(floor=floor)
         began = time.monotonic()
