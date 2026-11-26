@@ -93,8 +93,12 @@ def safe_sale_candidates(
             if (a.inventory_slot==16 and state.weapon_swap_safe is not True) or current is None or (a.score,a.item_level)>(current.score,current.item_level):
                 retain.add(a.item_id)
     from wotlkbuddy.combat.consumables import HEALING_POTIONS
+    # Keep exact conjured supplies even if a client classifies them differently.
+    essentials={6948,2455,3385,3827,6149,13443,13444,22832,33448,
+        5349,1113,1114,1487,8075,8076,22895,22019,
+        5350,2288,2136,3772,8077,8078,8079,30703,22018}
     for item in state.merchant_items:
-        if item.item_id in HEALING_POTIONS or item.item_id in (6948,2455,3385,3827,6149,13443,13444,22832,33448):
+        if item.item_id in HEALING_POTIONS or item.item_id in essentials:
             continue
         if item.item_id in protected_item_ids or item.item_id in retain or item.quest_flag != 0 or item.locked:
             continue
@@ -368,6 +372,7 @@ def free_bag_space(
     capture: Callable[[], ClientTelemetry], driver, nav, spawns,
     min_free_slots: int = 3,
     raise_cash: bool = False,
+    force_sale: bool = False,
     log: Callable[[str], None] = lambda _: None,
 ) -> VendorSaleReport | None:
     """Find a real local merchant, sell verified junk/gear, return to caller."""
@@ -376,7 +381,7 @@ def free_bag_space(
             initial.player.dead or initial.player.in_combat or
             initial.resources is None):
         raise LiveControlError('Cannot recover bags without safe player telemetry')
-    if not raise_cash and initial.resources.free_bag_slots >= min_free_slots:
+    if not (raise_cash or force_sale) and initial.resources.free_bag_slots >= min_free_slots:
         return None
     real_pid, world = verified_live_position(initial, pid=pid)
     if real_pid != pid:
@@ -389,7 +394,7 @@ def free_bag_space(
         raise LiveControlError(
             'Full bags: no merchant named by Horde XML and verified in '
             'CreatureSpawns.db within 600 yards')
-    reason=('Raising training cash' if raise_cash else f'Bags low ({initial.resources.free_bag_slots} free)')
+    reason=('Explicit vendor sale' if force_sale else 'Raising training cash' if raise_cash else f'Bags low ({initial.resources.free_bag_slots} free)')
     last_error=None
     log(f'{len(options)} verified merchant candidate(s) within 600y')
     for target in options[:8]:

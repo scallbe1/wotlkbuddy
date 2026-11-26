@@ -340,11 +340,11 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
 
             inventory.reconcile_upgrades(args.only, cap=cap, driver=driver, log=log)
 
-            def ensure_reward_bag_space():
+            def ensure_reward_bag_space(*,force_sale=False):
                 return inventory.ensure_reward_space(
                     quest_profile=quest_profile, profiles_root=profiles_root,
                     pid=pid, cap=cap, driver=driver, nav=nav, db=db,
-                    location=location, hud=hud, set_native_status=set_native_status, log=log)
+                    location=location, hud=hud, set_native_status=set_native_status, log=log, force_sale=force_sale)
 
             # A previous run may have completed a reward and left the next
             # detail open. Resume it before vendor movement or quest hunting.
@@ -367,7 +367,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                               'turnin'):
                 # Bags can fill while collecting items. Preflight before
                 # questing and again immediately before claiming a reward.
-                ensure_reward_bag_space()
+                ensure_reward_bag_space(force_sale=args.only=='vendor')
                 if args.only == 'vendor':
                     report['vendor'] = {
                         'status': 'bag space verified',
