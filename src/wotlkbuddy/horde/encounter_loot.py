@@ -69,6 +69,14 @@ def approach_corpse(state, where, point, distance, *, cg, retry_after, now, nav,
     return state,where,True
 
 
+def corpse_approach_limit(driver,entry,nearby_only):
+    """Keep ordinary travel loot local; quest-source loot gets priority."""
+    if nearby_only:
+        return 4.
+    entries=getattr(driver,'active_quest_entries',())
+    return 40. if entry in entries else 12.
+
+
 def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda _:None,
                    sleep=real_sleep, max_corpses=12, now=monotonic, nearby_only=False):
     if getattr(driver,'looting_encounter',False):
@@ -117,21 +125,23 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                     point=corpse_position(state,cg)
                 except (OSError,ValueError,RuntimeError) as exc:
                     log(f'Loot deferred: {cg}; corpse coordinates unavailable: {exc}')
-                    retry_after[cg]=now()+10
+                    retry_after[cg]=now()+90
                     continue
                 if point is None:
                     log(f'Loot deferred: {cg}; corpse not observed in object manager')
-                    retry_after[cg]=now()+10
-                if point is not None and (not nearby_only or (where.position.distance_to(point)<=4 and abs(point.z-where.z)<=4)):
-                    candidates.append((where.position.distance_to(point),cg,entry,name,point))
+                    retry_after[cg]=now()+90
+                if point is not None:
+                    distance=where.position.distance_to(point)
+                    if distance<=corpse_approach_limit(driver,entry,nearby_only) and (not nearby_only or abs(point.z-where.z)<=4):
+                        candidates.append((distance,cg,entry,name,point))
             if not candidates:
                 break
-            distance,cg,entry,name,point=min(candidates,key=lambda x:(x[1]!=state.player.target_guid,x[0]))
+            distance,cg,entry,name,point=min(candidates,key=lambda x:(x[2] not in getattr(driver,'active_quest_entries',()),x[1]!=state.player.target_guid,x[0]))
             attempted.add(cg)
             log(f'Encounter loot: {name or entry} {cg}, {distance:.1f}y')
             # A failed attempt should not drag the character repeatedly off
             # the current quest/service route. Retain it for a later pass.
-            retry_after[cg]=now()+10
+            retry_after[cg]=now()+45
             state,where,approached=approach_corpse(state,where,point,distance,
                 cg=cg,retry_after=retry_after,now=now,nav=nav,driver=driver,observe=observe,log=log)
             if state.player.in_combat:

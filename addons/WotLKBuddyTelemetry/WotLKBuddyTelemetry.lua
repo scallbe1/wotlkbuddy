@@ -1656,7 +1656,8 @@ local phaseLabels = {
 }
 local function setQuestGoal(id)
     if hudQuestId ~= id then
-        hudTravelKind, hudTravelName, hudActivity = '', '', ''
+        hudTravelKind, hudTravelName = '', ''
+        hudActivity = ''
     end
     hudQuestId = id
     hudQuestName = ''
@@ -1685,7 +1686,8 @@ SLASH_WOTLKBUDDYPHASE1 = '/wbtphase'
 SlashCmdList['WOTLKBUDDYPHASE'] = function(message)
     if phaseLabels[message or ''] then
         if hudPhase ~= message then
-            hudTravelKind, hudTravelName, hudActivity = '', '', ''
+            hudTravelKind, hudTravelName = '', ''
+            hudActivity = ''
             destinationText:SetText('')
         end
         hudPhase = message
@@ -1720,8 +1722,13 @@ end
 
 SLASH_WOTLKBUDDYTRAVEL1 = '/wbttravel'
 SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
-    if message == 'clear' then
+    if message == 'activityclear' then
+        hudActivity = ''
+    elseif message == 'assess' or message == 'range' then
+        hudActivity = message
+    elseif message == 'clear' then
         hudTravelKind, hudTravelName = '', ''
+        hudActivity = ''
         destinationText:SetText('')
     elseif message == 'enemies' or message == 'corpse' or
             message == 'firing' or message == 'deathrun' or
