@@ -70,11 +70,15 @@ def classify_scores(errors):
 
 
 def plausible_transition(errors):
-    """Allow only a short ambiguity with matching stonework anchors."""
+    """Allow brief anchored ambiguity, including midpoint animation frames.
+
+    Live v2 observed 25.68/24.93 template errors while the door moved.
+    This does not classify the door as open or produce a phase estimate.
+    """
     return bool(errors and
                 all(isfinite(v) and v >= 0 for v in errors.values()) and
                 max(errors['left_error'], errors['right_error']) <= 11 and
-                min(errors['open_error'], errors['closed_error']) <= 22 and
+                min(errors['open_error'], errors['closed_error']) <= 26 and
                 max(errors['open_error'], errors['closed_error']) <= 45)
 
 
