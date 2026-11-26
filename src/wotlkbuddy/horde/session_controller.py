@@ -73,7 +73,9 @@ class QuestSession:
                 raise exc
         with self.activity.claim(Activity.RECOVERY):
             recovery = self.recover_with_redeath(exc,cycle)
-        if recovery.get('status') == 'combat_cleared':
+        if recovery.get('status') == 'ghost_wait':
+            action = 'ghost_wait'
+        elif recovery.get('status') == 'combat_cleared':
             self.aggro_recoveries += 1
             action = 'aggro_recovery'
         else:
@@ -85,12 +87,26 @@ class QuestSession:
     def recover_with_redeath(self, exc, cycle):
         """A second verified death is a new recovery, not a fatal nested exception."""
         from wotlkbuddy.live.control import WindowsKeyboard
+        owner=None
         while True:
             if self.time_expired() or self.recoveries>=3:
                 raise exc
+            before=capture_monitor(self.args.monitor)
+            if before.truncated or not before.player.guid or (owner and before.player.guid!=owner):
+                raise exc
+            owner=before.player.guid
             try:
                 return self.recover(self.args,original_error=exc)
             except LiveControlError as error:
+                if 'no safe reclaim site found' in str(error) or 'Reclaim window changed' in str(error) or 'Final reclaim check failed' in str(error):
+                    keyboard=WindowsKeyboard()
+                    state=capture_monitor(self.args.monitor)
+                    if (not keyboard.emergency_stop_requested() and keyboard.wow_is_foreground() and
+                            not state.truncated and state.player.guid==owner and state.player.dead and
+                            state.death_state and state.death_state.ghost):
+                        print('No safe resurrection yet; remaining ghost and retrying next cycle',file=sys.stderr,flush=True)
+                        return {'status':'ghost_wait','character_guid':owner}
+                    raise
                 if not any(marker in str(error) for marker in (
                         'character died again','Post-resurrection recovery did not restore',
                         'Defense lost player identity')):
@@ -99,7 +115,7 @@ class QuestSession:
                 if keyboard.emergency_stop_requested() or not keyboard.wow_is_foreground():
                     raise
                 state=capture_monitor(self.args.monitor)
-                if state.truncated or not state.player.dead or not state.player.guid:
+                if state.truncated or not state.player.dead or state.player.guid!=owner:
                     raise
                 self.recoveries+=1
                 self.steps.append({'cycle':cycle,'action':'redeath','reason':str(error)})
