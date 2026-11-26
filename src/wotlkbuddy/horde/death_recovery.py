@@ -274,7 +274,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
         # Compare actual terrain-aware local counts before moving to a site.
         ranked = [(len(local_reclaim_threats(nav,corpse_map,point,hazards)),point,path)
                   for point,path in sites]
-        ranked.sort(key=lambda item:(item[0],position.position.distance_to(item[1])))
+        ranked.sort(key=lambda item:(item[0],-clearance(item[1],hazards),position.position.distance_to(item[1])))
         sites = [(point,path) for _,point,path in ranked]
         log(f'Resurrection search {search+1}/8: {len(hazards)} mapped creatures, '
             f'{len(sites)} reachable scouting candidates; ranked attacker counts '
