@@ -55,7 +55,7 @@ class HuntTerrain:
                 continue
             if not path:
                 continue
-            log(f'Terrain retreat: returning {distance:.1f}y to previously traversed XYZ '
+            log(f'Terrain retreat: moving {distance:.1f}y to validated XYZ '
                 f'({point.x:.2f},{point.y:.2f},{point.z:.2f})')
             try:
                 navigate(state,point)
@@ -113,3 +113,16 @@ def retreat_candidates(anchors,state,where,driver,nav,log):
         log('No suitable measured breadcrumb; checking validated retreat routes away from observed enemies')
     for _,point in sorted(ranked,key=lambda item:-item[0]):
         yield where.map_id,point
+
+
+def attach_hunt_memory(driver,guid,memory):
+    """Retain only per-character, in-process observations across phase drivers."""
+    if memory is None:
+        return
+    record=memory.setdefault(guid,{
+        'hunt_terrain':HuntTerrain(), 'defeated_corpses':{},
+        'finished_corpses':set(), 'seen_kill_events':set(),
+        'corpse_retry_after':{}, 'dangerous_hunt_positions':[],
+        'blocked_combat_guids':set()})
+    for name,value in record.items():
+        setattr(driver,name,value)
