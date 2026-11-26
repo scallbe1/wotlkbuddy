@@ -203,8 +203,10 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
     unchanged = 0
     landed_damage = False
     approach_attempts = 0
+    from wotlkbuddy.combat.consumables import emergency_heal
     for _ in range(18):
         guard(s)
+        s=emergency_heal(s,driver=driver,fresh=fresh,log=log)
         t = s.combat_target
         if (s.player.target_guid != target_guid or t is None or
                 t.entry_id != expected):
