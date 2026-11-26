@@ -5,6 +5,7 @@ import time
 
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.transport_plan import APPROACHES, elevator_source
+from wotlkbuddy.live.transport_route import transport_edges
 from wotlkbuddy.live.world_travel import validate_nav_path
 
 
@@ -22,7 +23,7 @@ def staging_pulse(pos, floor):
         raise LiveControlError('Outside elevator staging area')
     point, facing = APPROACHES[floor]
     dx, dy = point.x-pos.x, point.y-pos.y
-    if hypot(dx, dy) > .10:
+    if hypot(dx, dy) > (.045 if floor == 'lower' else .10):
         forward = dx*cos(pos.facing_rad)+dy*sin(pos.facing_rad)
         left = -dx*sin(pos.facing_rad)+dy*cos(pos.facing_rad)
         if abs(forward) >= abs(left):
@@ -109,10 +110,12 @@ def walk_with_elevator(route, *, sample, walk, nav, destination, map_id,
                        keyboard, pid, owner, remaining, log, ride=ride_elevator,
                        now=time.monotonic):
     """Walk to the landing, ride, then freshly plan to the original NPC."""
+    if not transport_edges(route):
+        return walk(route, remaining)
     _, world = sample()
     floor = elevator_source(route, world.position, destination, map_id)
     if floor is None:
-        return walk(route, remaining)
+        raise LiveControlError('Elevator route no longer matches verified position')
     deadline = now()+remaining
     target, _ = APPROACHES[floor]
     log(f'Undercity elevator route: {floor} landing; retaining original NPC destination')
@@ -136,6 +139,8 @@ def walk_with_elevator(route, *, sample, walk, nav, destination, map_id,
     log('Elevator exit verified; replanning to original NPC')
     if deadline-now() < 15:
         raise LiveControlError('NPC travel time exhausted after elevator')
+    if arrived.position.distance_to(destination) <= 1.8:
+        return SimpleNamespace(stopped_reason='complete')
     continuation = validate_nav_path(nav.find_path(map_id, arrived.position, destination),
                                      arrived.position, destination, max_step=18.)
     return walk(continuation, deadline-now())
