@@ -55,7 +55,7 @@ class EncounterControl:
         if t.dead or t.health<=0:
             self.attackers.discard(guid)
             self.controlled.pop(guid,None)
-        elif t.attackable and t.attacks_player is True:
+        elif t.attackable and t.attacks_player is True and t.reaction is not None and 1<=t.reaction<=3:
             self.attackers.add(guid)
         if guid in self.controlled and self.controlled[guid].aura not in state.target_auras:
             self.controlled.pop(guid,None)
