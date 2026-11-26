@@ -38,3 +38,15 @@ def test_lost_focus_is_not_a_merchant_retry():
 def test_same_entry_different_guid_is_rejected():
     with pytest.raises(MerchantUnavailable,match='target changed'):
         verify(state('0xF130000DDB000002','Hamlin Atkins'))
+
+
+def test_slumber_sand_can_be_sold_but_quest_protection_wins():
+    from wotlkbuddy.horde.merchant import safe_sale_candidates
+    from wotlkbuddy.live.codec import MerchantItem
+    sand=MerchantItem(0,1,3434,5,1,3,0,False,'VENDOR_JUNK')
+    old_robe=MerchantItem(0,2,1234,1,1,10,0,False,'INVTYPE_ROBE')
+    potion=MerchantItem(0,3,858,1,1,10,0,False,'')
+    snapshot=NS(merchant_open=True,merchant_scan_complete=True,resources=NS(),
+        truncated=False,inventory_sale_scan=False,merchant_items=(sand,old_robe,potion))
+    assert safe_sale_candidates(snapshot,protected_item_ids=frozenset())==(sand,old_robe)
+    assert safe_sale_candidates(snapshot,protected_item_ids=frozenset({3434}))==(old_robe,)
