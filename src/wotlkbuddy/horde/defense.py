@@ -12,6 +12,7 @@ from typing import Callable
 from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
+from wotlkbuddy.combat.crowd_control import linked_focus, protected_control_target, fleeing_target, linked_target_authorized
 
 
 def verified_attacker(snapshot):
@@ -20,6 +21,17 @@ def verified_attacker(snapshot):
                 and t.health > 0 and t.attacks_player is True
                 and creature_entry_from_guid(snapshot.player.target_guid)
                 == t.entry_id)
+
+
+def guard_defense(s: ClientTelemetry,guid,driver):
+    if (s.truncated or s.player.guid != guid or s.player.dead or
+            s.resources is None or
+            s.resources.class_token.upper() != 'MAGE' or
+            driver.emergency_stop_requested() or
+            not driver.wow_is_foreground()):
+        raise LiveControlError('Defense lost player identity, telemetry or input focus')
+    # Low HP is a reason to finish the active encounter, not stop input.
+    # Death, invalid telemetry, focus and bounded fight limits still stop.
 
 
 def defend_against_aggro(
@@ -39,15 +51,7 @@ def defend_against_aggro(
     if not initial.player.in_combat:
         return initial
 
-    def guard(s: ClientTelemetry):
-        if (s.truncated or s.player.guid != guid or s.player.dead or
-                s.resources is None or
-                s.resources.class_token.upper() != 'MAGE' or
-                driver.emergency_stop_requested() or
-                not driver.wow_is_foreground()):
-            raise LiveControlError('Defense lost player identity, telemetry or input focus')
-        # Low HP is a reason to finish the active encounter, not stop input.
-        # Death, invalid telemetry, focus and bounded fight limits still stop.
+    guard = lambda s: guard_defense(s,guid,driver)
 
     def fresh(before: ClientTelemetry, delay: float=.15) -> ClientTelemetry:
         guard(before)
@@ -68,8 +72,8 @@ def defend_against_aggro(
     state=initial
     guard(state)
 
-    target_guid = None
-    target_entry = None
+    target_guid = getattr(driver,'engaged_target_guid',None)
+    target_entry = getattr(driver,'engaged_target_entry',None)
     no_damage = 0
     critical_logged = False
     melee_target=None
@@ -86,7 +90,9 @@ def defend_against_aggro(
         for _acquire in range(max_acquire + 1):
             if not state.player.in_combat:
                 return state
-            if verified_attacker(state):
+            state,controlled_focus=linked_focus(state,driver=driver,fresh=fresh,log=log)
+            if controlled_focus or (not protected_control_target(state,driver) and
+                    (verified_attacker(state) or fleeing_target(state,target_guid,target_entry))):
                 break
             if _acquire == max_acquire:
                 raise LiveControlError(
@@ -104,7 +110,8 @@ def defend_against_aggro(
                 guard(state)
                 if not state.player.in_combat:
                     return state
-                if not verified_attacker(state) or state.player.target_guid != target_guid:
+                if state.player.target_guid != target_guid or not (verified_attacker(state) or
+                        fleeing_target(state,target_guid,target_entry) or linked_target_authorized(state,driver)):
                     target_guid = None
                     continue
         if state.player.health/max(1,state.player.max_health) < .25 and not critical_logged:

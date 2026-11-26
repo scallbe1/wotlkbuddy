@@ -325,7 +325,7 @@ end
 local managedMageSpells = {
     Fireball=true, Frostbolt=true, ['Fire Blast']=true,
     ['Arcane Intellect']=true, ['Frost Armor']=true,
-    ['Conjure Food']=true, ['Conjure Water']=true
+    ['Conjure Food']=true, ['Conjure Water']=true, Polymorph=true, ['Frost Nova']=true
 }
 local function visibleBarIdentity(button)
     if not GetActionBarPage or GetActionBarPage() ~= 1 then return nil end
@@ -801,7 +801,8 @@ local function tickData()
         tostring(targetMax), tostring(targetDead), tostring(canAttack),
         tostring(targetRange), attackingPlayer, tostring(reaction),
         tostring(UnitExists('target') and UnitLevel('target') or 0),
-        tostring(UnitExists('target') and UnitClassification('target') or '')}, '\t'))
+        tostring(UnitExists('target') and UnitClassification('target') or ''),
+        safe(UnitExists('target') and UnitCreatureType and UnitCreatureType('target') or '', 32)}, '\t'))
     local function known(spellId)
         if not IsSpellKnown then return -1 end
         local ok, value = pcall(IsSpellKnown, spellId)
