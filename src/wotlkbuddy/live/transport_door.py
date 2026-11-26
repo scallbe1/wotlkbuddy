@@ -47,13 +47,35 @@ def mae(a, b):
 def classify_signatures(door, left, right):
     errors = {'open_error': mae(door, OPEN), 'closed_error': mae(door, CLOSED),
               'left_error': mae(left, LEFT), 'right_error': mae(right, RIGHT)}
-    state = 'unknown'
-    if max(errors['left_error'], errors['right_error']) <= 6:
-        if errors['open_error'] <= 6 and errors['closed_error'] >= 20:
-            state = 'open'
-        elif errors['closed_error'] <= 6 and errors['open_error'] >= 20:
-            state = 'closed'
-    return state, errors
+    return classify_scores(errors), errors
+
+
+def classify_scores(errors):
+    """Diagnostic-only score calibration from the 180-sample live trace.
+
+    Require both anchors and separation between the two door templates.
+    The limits are calibrated to one upper-landing view, not a general
+    doorway detector or a guarantee that the platform can be boarded.
+    """
+    if not errors or not all(isfinite(v) and v >= 0 for v in errors.values()):
+        return 'unknown'
+    if max(errors['left_error'], errors['right_error']) > 11:
+        return 'unknown'
+    opened, closed = errors['open_error'], errors['closed_error']
+    if opened <= 12 and closed-opened >= 20:
+        return 'open'
+    if closed <= 18 and opened-closed >= 16:
+        return 'closed'
+    return 'unknown'
+
+
+def plausible_transition(errors):
+    """Allow only a short ambiguity with matching stonework anchors."""
+    return bool(errors and
+                all(isfinite(v) and v >= 0 for v in errors.values()) and
+                max(errors['left_error'], errors['right_error']) <= 11 and
+                min(errors['open_error'], errors['closed_error']) <= 22 and
+                max(errors['open_error'], errors['closed_error']) <= 45)
 
 
 def classify_frame(rgb, width, height):
@@ -70,7 +92,8 @@ class OpeningTracker:
     """Synchronize only after two consecutive plausible observed openings.
 
     Nominal DBC phase is an estimate, not a physical platform pose measurement.
-    Reset on unknown view, excessive sample gap, or inconsistent edge timing.
+    Reset on unmatched view, excessive sample gap, or inconsistent edge timing.
+    Brief plausible transition frames bracket the edge but emit no phase.
     """
     last_state: str = 'unknown'
     last_ms: float | None = None
@@ -79,10 +102,16 @@ class OpeningTracker:
     edge_error_ms: float = 0
     locked: bool = False
 
-    def update(self, state, elapsed_ms, capture_error_ms=0):
+    def update(self, state, elapsed_ms, capture_error_ms=0, *, transition=False):
         if (not isfinite(elapsed_ms) or not isfinite(capture_error_ms)
                 or capture_error_ms < 0):
             raise ValueError('Invalid capture timing')
+        # An ambiguous animation frame never emits a phase estimate. Retain
+        # the last confident observation briefly to bracket the next edge.
+        # A mismatched view, nonmonotonic clock or long gap still resets.
+        if (state == 'unknown' and transition and self.last_ms is not None
+                and 0 < elapsed_ms-self.last_ms <= 750):
+            return None
         if (state not in ('open', 'closed') or
                 (self.last_ms is not None and
                  not 0 < elapsed_ms-self.last_ms <= 750)):
@@ -125,7 +154,8 @@ def watch_upper_door(args):
             rgb, size = reduce_rgb(frame.rgb, frame.width, frame.height)
             state, errors = classify_frame(rgb, *size)
             elapsed = ((before+after)/2-started)*1000
-            phase = tracker.update(state, elapsed, (after-before)*500)
+            phase = tracker.update(state, elapsed, (after-before)*500,
+                                   transition=plausible_transition(errors))
             print(json.dumps({'elapsed_ms': round(elapsed, 2), 'door': state,
                               'errors': {k: round(v, 2) for k, v in errors.items()},
                               'phase_ms': round(phase.phase_ms, 2) if phase else None,
