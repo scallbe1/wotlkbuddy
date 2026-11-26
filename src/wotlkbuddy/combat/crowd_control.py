@@ -114,6 +114,27 @@ def select_exact(state, enemy, *, driver, fresh, max_tabs=4):
     return state
 
 
+def verified_uncontrolled_pair(state,plan,chosen,escort,escort_snapshot):
+    """Resolve unknown escort classification without relaxing the combat budget."""
+    from wotlkbuddy.horde.encounter import Enemy, PullPlan
+    if (not plan.allowed or len(plan.enemies)!=2 or escort.classification!='unknown'
+            or not exact_hostile(escort_snapshot,escort) or not exact_hostile(state,chosen)
+            or state.player.dead or state.player.in_combat
+            or getattr(state,'current_cast_remaining_ms',0) or state.resources is None):
+        return None
+    primary=state.combat_target
+    secondary=escort_snapshot.combat_target
+    if (any(t.classification!='normal' or t.level is None or
+            not 0<t.level<=state.player.level-1 for t in (primary,secondary))
+            or state.player.health<.95*state.player.max_health
+            or state.resources.mana<.90*state.resources.max_mana
+            or primary.health+secondary.health>2.5*state.player.max_health):
+        return None
+    verified=tuple(Enemy(e.guid,e.entry,e.name,e.position,t.level,t.classification,t.health)
+                   for e,t in ((chosen,primary),(escort,secondary)))
+    return PullPlan(True,verified,'verified normal weaker pair; high resources')
+
+
 def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries, log):
     """Attempt control on a required objective or verified travel-corridor pair."""
     from wotlkbuddy.horde.encounter import PullPlan
@@ -150,7 +171,12 @@ def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries
         return cast_control(state,chosen,escort,rule,plan,denied,
                             driver=driver,fresh=fresh,log=log)
     log('Linked pull: escort not verified as eligible for ready crowd control: '+control_rejection(state,escort,rules,driver))
+    escort_snapshot=state
     state=select_exact(state,chosen,driver=driver,fresh=fresh,max_tabs=3)
+    verified=verified_uncontrolled_pair(state,plan,chosen,escort,escort_snapshot)
+    if verified is not None:
+        log('Linked pull: escort classification verified; approved weaker pair without crowd control')
+        return state,verified
     return state,denied
 
 
