@@ -17,6 +17,19 @@ from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_position import WorldPosition, WorldPositionError
 
 
+def entrance_scan_scope(driver, path_ahead, detection_yards, corridor_yards):
+    """Clear the immediate walking corridor, not the entire tower from outside."""
+    if isinstance(getattr(driver,'entrance_approach_guid',None),str) and path_ahead:
+        return path_ahead[:1], min(detection_yards,15.), min(corridor_yards,8.)
+    return path_ahead,detection_yards,corridor_yards
+
+
+def reacquired_corridor_candidate(state,candidates):
+    """An exact other observed corridor GUID may be a valid new pull."""
+    return next((row for row in candidates if row[1]==state.player.target_guid
+                 and state.combat_target and state.combat_target.entry_id==row[2]),None)
+
+
 def distance_to_corridor(point: Vec3, start: Vec3,
                          waypoints: Sequence[Vec3]) -> float:
     """2D distance to the upcoming Detour polyline, without extrapolating."""
@@ -58,6 +71,7 @@ def scan_and_clear_hostiles(
         raise ValueError('Invalid hostile scan budgets')
     if not path_ahead:
         return initial
+    path_ahead,detection_yards,corridor_yards=entrance_scan_scope(driver,path_ahead,detection_yards,corridor_yards)
     guid=initial.player.guid
     map_id=player_position.map_id
     if not guid or initial.truncated or initial.player.dead or (
@@ -262,8 +276,12 @@ def scan_and_clear_hostiles(
             if state.player.in_combat:
                 return defend(state)
             if state.player.target_guid!=chosen_guid:
-                remember_pack(driver,pack_positions,monotonic())
-                raise LiveControlError('Unsafe encounter: could not acquire exact discovered hostile GUID')
+                alternative=reacquired_corridor_candidate(state,candidates)
+                if alternative is None:
+                    remember_pack(driver,pack_positions,monotonic())
+                    raise LiveControlError('Unsafe encounter: could not acquire exact discovered hostile GUID')
+                distance,chosen_guid,chosen_entry=alternative
+                log(f'Using alternate verified corridor enemy {chosen_entry} {chosen_guid}')
         else:
             for _ in range(max_targets+2):
                 driver.chat('/targetenemy')
