@@ -98,6 +98,10 @@ def handle_spawn_failure(exc, *, routes, key, allowed_sources, capture,
             raise LiveControlError('Aggro unresolved before starting quest phase') from exc
         routes.recently_visited.pop(key,None)
         return
+    if 'combat or death present; navigation is not a combat routine' in str(exc).lower():
+        routes.recently_visited.pop(key,None)
+        log('Combat ended before route retry; refreshing objective without excluding spawn')
+        return
     if encounter_displaced_route(exc):
         routes.recently_visited.pop(key,None)
         raise EncounterRouteUnavailable('Encounter displaced route; refreshing same objective from current position') from exc
@@ -172,6 +176,14 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
         goal,staging=alternatives[0]
         key=(round(goal.x),round(goal.y),round(goal.z))
         log(f'Alternate hunting plan: entry {goal.entry}, ranged staging {staging.distance_to(goal.position):.1f}y from spawn; avoiding {len(hazards)} recent danger points')
+    # Route search is synchronous; an enemy can reach us while it runs.
+    s=capture()
+    guard(s)
+    if s.player.in_combat:
+        log('Combat began during alternate route selection; defending before navigation')
+        clear_remaining_aggro(s)
+        routes.recently_visited.pop(key,None)
+        return
     routes.recently_visited[key]=routes.recently_visited.get(key,0)+1
     routes.staging_visited.append(staging)
     try:

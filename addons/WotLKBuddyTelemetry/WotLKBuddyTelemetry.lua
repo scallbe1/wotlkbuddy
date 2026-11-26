@@ -1515,6 +1515,26 @@ canvas:SetScript('OnUpdate', function(_, elapsed)
     publish()
 end)
 
+-- Explicit read-only audit of ALL occupied bag slots, including those
+-- intentionally omitted from the sale-candidate telemetry.
+local function auditVendorBags()
+    DEFAULT_CHAT_FRAME:AddMessage('WotLKBuddy bag audit: bag/slot, item, count, quality, class, vendor price per item, quest status')
+    for bag=0,4 do
+        for slot=1,(GetContainerNumSlots(bag) or 0) do
+            local link=GetContainerItemLink(bag,slot)
+            if link then
+                local _,qty,locked=GetContainerItemInfo(bag,slot)
+                local name,_,quality,_,_,itemType,subtype,_,equipLoc,_,price=GetItemInfo(link)
+                local quest=GetContainerItemQuestInfo and GetContainerItemQuestInfo(bag,slot)
+                DEFAULT_CHAT_FRAME:AddMessage(string.format('%d/%d %s x%d | quality %s | %s/%s %s | %sc | quest %s%s',
+                    bag,slot,link,qty or 0,tostring(quality or '?'),itemType or '?',subtype or '?',
+                    equipLoc or '',tostring(price or '?'),quest and 'yes' or (GetContainerItemQuestInfo and 'no' or 'unknown'),
+                    locked and ' | locked' or ''))
+            end
+        end
+    end
+end
+
 SLASH_WOTLKBUDDY1 = '/wbt'
 SlashCmdList['WOTLKBUDDY'] = function(msg)
     if msg == 'hide' then
@@ -1523,8 +1543,10 @@ SlashCmdList['WOTLKBUDDY'] = function(msg)
     elseif msg == 'show' then
         canvas:Show()
         DEFAULT_CHAT_FRAME:AddMessage('WotLKBuddy telemetry visible.')
+    elseif msg == 'vendor' then
+        auditVendorBags()
     else
-        DEFAULT_CHAT_FRAME:AddMessage('WotLKBuddy telemetry: /wbt show or /wbt hide')
+        DEFAULT_CHAT_FRAME:AddMessage('WotLKBuddy telemetry: /wbt show, /wbt hide, or /wbt vendor')
     end
 end
 

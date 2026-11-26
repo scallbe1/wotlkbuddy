@@ -107,3 +107,35 @@ def test_loot_displacement_preserves_required_spawn_and_collision_budget():
     assert not routes.failed_navigation
     assert not routes.recently_visited
     assert routes.navigation_mismatches==1
+
+
+def test_navigation_preflight_combat_transitions_to_defense():
+    fighting=NS(player=NS(in_combat=True))
+    safe=NS(player=NS(in_combat=False))
+    defend=Mock(return_value=safe)
+    routes=HuntRouteState(recently_visited={(1,2,3):1})
+    args=failure_context(routes=routes,capture=Mock(return_value=fighting),
+                         clear_remaining_aggro=defend)
+    handle_spawn_failure(LiveControlError(
+        'Combat or death present; navigation is not a combat routine'),**args)
+    defend.assert_called_once_with(fighting)
+    assert not routes.recently_visited
+    assert not routes.failed_navigation
+    assert routes.navigation_mismatches==0
+
+
+def test_navigation_preflight_aggro_already_ended_does_not_blacklist_spawn():
+    routes=HuntRouteState(recently_visited={(1,2,3):1})
+    args=failure_context(routes=routes)
+    handle_spawn_failure(LiveControlError(
+        'Combat or death present; navigation is not a combat routine'),**args)
+    assert not routes.recently_visited
+    assert not routes.failed_navigation
+
+
+def test_navigation_preflight_error_can_recover_at_session_boundary():
+    from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error
+    assert recoverable_aggro_error(LiveControlError(
+        'Combat or death present; navigation is not a combat routine'))
+    assert not recoverable_aggro_error(LiveControlError(
+        'World map/GUID inconsistent with live addon before navigation'))
