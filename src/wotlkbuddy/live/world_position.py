@@ -37,6 +37,10 @@ class WorldPositionError(RuntimeError):
     """Client memory and live addon state cannot be safely reconciled."""
 
 
+class PositionDiscontinuity(WorldPositionError):
+    """Same-map samples jumped; diagnostic callers may retry without using them."""
+
+
 class MemoryReader(Protocol):
     def read(self, address: int, size: int) -> bytes: ...
     def read_u32(self, address: int) -> int: ...
@@ -158,9 +162,10 @@ def verified_live_position(snapshot: ClientTelemetry, *, pid: int | None = None,
         before = observe_world_position(memory, expected_guid=snapshot.player.guid)
         sleep(0.12)
         after = observe_world_position(memory, expected_guid=snapshot.player.guid)
-    if before.map_id != after.map_id or dist((before.x, before.y, before.z),
-                                             (after.x, after.y, after.z)) > 50:
+    if before.map_id != after.map_id:
         raise WorldPositionError('World coordinates changed implausibly between samples')
+    if dist((before.x, before.y, before.z), (after.x, after.y, after.z)) > 50:
+        raise PositionDiscontinuity('World coordinates changed implausibly between samples')
     return pid, after
 
 
