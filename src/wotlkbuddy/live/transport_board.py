@@ -173,6 +173,14 @@ def _hybrid_board_window(*, read_position, start, grab, guard, owner, emit, dead
             if upper_descent_view(pos):
                 state = classify_upper_descent_scores(errors)
                 transition = plausible_upper_descent_transition(errors)
+        elif floor == 'lower':
+            from wotlkbuddy.live.transport_door import (
+                lower_ascent_view, classify_lower_ascent_scores,
+                plausible_lower_ascent_transition,
+            )
+            if lower_ascent_view(pos):
+                state = classify_lower_ascent_scores(errors)
+                transition = plausible_lower_ascent_transition(errors)
         phase = tracker.update(state, captured*1000, capture_error,
                                transition=transition)
         budget = crossing_seconds(pos, floor)
