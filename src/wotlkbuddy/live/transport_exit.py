@@ -24,13 +24,13 @@ def projected_phase(phase, age_ms):
 
 def exit_deck_lane(pos):
     heading = abs(atan2(sin(pos.facing_rad), cos(pos.facing_rad)))
-    return (pos.map_id == 0 and -3 <= pos.x <= 10.5 and abs(pos.y) <= 2.2
+    return (pos.map_id == 0 and -3 <= pos.x <= 10.5 and abs(pos.y) <= 3
             and abs(pos.z+.464) <= .35 and heading <= .20)
 
 
 def upper_exit_corridor(pos):
     heading = pos.facing_rad-4.712389
-    return (pos.map_id == 0 and abs(pos.x-1596.15) <= 2
+    return (pos.map_id == 0 and abs(pos.x-1596.15) <= 2.5
             and 278 <= pos.y <= 285.5 and abs(pos.z-55.24) <= .9
             and abs(atan2(sin(heading), cos(heading))) <= .25)
 
@@ -53,6 +53,26 @@ def exit_window(phase, age_ms, crossing_seconds):
                                margin_ms=EXIT_BUDGET_MARGIN_MS)
 
 
+def _center_for_exit(*, keyboard, read_position, grab, guard, owner, pos):
+    """Remove lateral offset while still near the middle of the platform."""
+    for _ in range(5):
+        if not exit_deck_lane(pos) or abs(pos.x) > 2:
+            break
+        if abs(pos.y) <= .5:
+            break
+        _, snap, _, _ = grab()
+        guard(snap, owner)
+        key = 0x12 if pos.y > 0 else 0x10
+        keyboard.key_down(key)
+        try:
+            time.sleep(min(.15, max(.035, abs(pos.y)/7)))
+        finally:
+            keyboard.key_up(key)
+        time.sleep(.06)
+        pos = read_position()
+    return pos
+
+
 def _walk_off(*, keyboard, read_position, grab, guard, owner, budget, pos):
     """Keep moving only in the expected local lane or destination corridor."""
     from wotlkbuddy.live.control import LiveControlError
@@ -60,7 +80,8 @@ def _walk_off(*, keyboard, read_position, grab, guard, owner, budget, pos):
     last_snap = time.monotonic()
     on_landing = False
     result = 'exit_timeout'
-    keyboard.key_down(0x11)
+    held = 0x11
+    keyboard.key_down(held)
     try:
         while time.monotonic() < deadline:
             if keyboard.emergency_stop_requested() or not keyboard.wow_is_foreground():
@@ -73,16 +94,29 @@ def _walk_off(*, keyboard, read_position, grab, guard, owner, budget, pos):
                     break
             pos = read_position()
             if upper_exit_corridor(pos):
+                if not on_landing:
+                    # Already on stationary upper ground: finish clearing the lip.
+                    deadline = max(deadline, time.monotonic()+1)
                 on_landing = True
                 if pos.y <= UPPER_EXIT_Y:
                     result = 'exited_upper'
                     break
+                key = 0x11
             elif on_landing or not exit_deck_lane(pos):
                 result = 'unexpected_exit_position'
                 break
+            else:
+                limit = .65 if held != 0x11 else 1.8
+                key = (0x12 if pos.y > 0 else 0x10) if abs(pos.y) > limit else 0x11
+            if key != held:
+                keyboard.key_up(held)
+                held = None
+                keyboard.key_down(key)
+                held = key
             time.sleep(.035)
     finally:
-        keyboard.key_up(0x11)
+        if held is not None:
+            keyboard.key_up(held)
     return result, pos
 
 
@@ -94,6 +128,12 @@ def ride_and_exit(*, keyboard, memory, owner, phase, captured, pos, grab, guard,
     def read_position():
         return observe_world_position(memory, expected_guid=owner)
 
+    pos = _center_for_exit(keyboard=keyboard, read_position=read_position,
+                           grab=grab, guard=guard, owner=owner, pos=pos)
+    if not exit_deck_lane(pos) or abs(pos.x) > 2 or abs(pos.y) > 1.7:
+        emit('exit_alignment_unavailable', **pos.to_dict())
+        return
+    emit('exit_aligned', **pos.to_dict())
     budget = exit_budget_seconds(pos)
     emit('riding', destination='upper', exit_budget_seconds=round(budget,3),
          phase_source='lower_door_forecast')
