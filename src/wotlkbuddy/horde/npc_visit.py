@@ -6,7 +6,6 @@ target GUID must contain the exact NPC creature template ID.
 from __future__ import annotations
 
 from math import hypot
-from functools import partial
 from time import monotonic, sleep as real_sleep
 from typing import Callable
 
@@ -158,20 +157,21 @@ def visit_npc(
                 except RouteCombatInterrupted:
                     route=defend_and_replan()
                     continue
-                walk=partial(travel,
-                    sample=sample, keyboard=getattr(driver,'keyboard',driver),
-                    stop_requested=driver.emergency_stop_requested,
-                    expected_quest_id=None, expected_map_id=world.map_id,
-                    can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
-                    replan_path=lambda a,b:nav.find_path(world.map_id,a,b),
-                    destination_status=getattr(driver,'set_navigation_destination',None),
-                    distance_status=getattr(driver,'set_navigation_distance',None),
-                    progress=log,on_aggro=getattr(driver,'on_aggro',None),
-                    on_threat=getattr(driver,'scan_hostiles',None),
-                    waypoint_spacing=18.,continuous_forward=True,
-                    fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
+                def walk(p, t):
+                    return travel(p, max_seconds=t,
+                        sample=sample, keyboard=getattr(driver,'keyboard',driver),
+                        stop_requested=driver.emergency_stop_requested,
+                        expected_quest_id=None, expected_map_id=world.map_id,
+                        can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
+                        replan_path=lambda a,b:nav.find_path(world.map_id,a,b),
+                        destination_status=getattr(driver,'set_navigation_destination',None),
+                        distance_status=getattr(driver,'set_navigation_distance',None),
+                        progress=log,on_aggro=getattr(driver,'on_aggro',None),
+                        on_threat=getattr(driver,'scan_hostiles',None),
+                        waypoint_spacing=18.,continuous_forward=True,
+                        fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
                 result=walk_with_elevator(
-                    route, sample=sample, walk=lambda p,t:walk(p,max_seconds=t),
+                    route, sample=sample, walk=walk,
                     nav=nav, destination=dest, map_id=world.map_id,
                     keyboard=getattr(driver,'keyboard',driver), pid=pid,
                     owner=player.guid, remaining=remaining, log=log, now=now)
