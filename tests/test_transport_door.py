@@ -126,3 +126,22 @@ def test_lower_phase_uses_lower_opening_offset():
     phase = tracker.update('open', 17000)
     assert phase is not None
     assert phase.phase_ms == 2125
+
+
+def test_patch_mean_rgb_channels():
+    from wotlkbuddy.live.transport_door import patch_signature
+    rgb = bytes([10, 20, 30])*20*20
+    assert patch_signature(rgb, 20, 20, (.4, .4, .6, .6, 1, 1)) == bytes([10, 20, 30])
+
+
+def test_lower_patch_scores_from_shifted_calibration_images():
+    from wotlkbuddy.live.transport_door import classify_lower_patch_scores
+    for row, expected in [
+        ((16.682, 3.083, .681, .556), 'closed'),  # frame 46, +4,+4
+        ((5.125, 16.255, .757, .653), 'open'),   # frame 69, -4,-4
+        ((4.833, 17.901, .681, .556), 'open'),   # frame 69, +4,+4
+        ((17.443, 5.25, 15.576, 0), 'unknown'), # obstructed frame 63
+        ((18.286, 7.219, 4.333, 4.104), 'unknown'), # moving frame 37
+        ((10, 10, 0, 0), 'unknown'),
+    ]:
+        assert classify_lower_patch_scores(scores(*row)) == expected
