@@ -9,8 +9,8 @@ from wotlkbuddy.live.world_travel import validate_nav_path
 # drift, client/server range differences and Lua-derived corpse elevation.
 MIN_OFFSET = 18.0
 MAX_OFFSET = 37.0
-MIN_CLEARANCE = 20.0
-MAX_RECLAIM_THREATS = 1
+MIN_CLEARANCE = 26.0
+MAX_RECLAIM_THREATS = 0
 APPROACH_DISTANCE = 42.0
 
 
@@ -67,7 +67,7 @@ def acceptable_site(point, corpse, hazards):
 def watch_reclaim_window(*, sample, read_hazards, corpse, nav, map_id,
                          sleep, now, log=lambda _:None,
                          patrol_seconds=24, reclaim_seconds=180):
-    """Wait for a stable <=1-attacker opening without moving the ghost.
+    """Wait for a stable zero-attacker opening without moving the ghost.
 
     Do not abandon a usable spot merely because a patrol passes once.
     Require three consecutive observations before accepting the popup.
@@ -94,7 +94,7 @@ def watch_reclaim_window(*, sample, read_hazards, corpse, nav, map_id,
             previous_count = count
         if count <= MAX_RECLAIM_THREATS and state.death_state.retrieve_ready:
             stable += 1
-            if stable >= 3:
+            if stable >= 5:
                 return pos.position
         else:
             stable = 0
