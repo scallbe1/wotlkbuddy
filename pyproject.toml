@@ -17,7 +17,7 @@ classifiers = [
 
 [project.optional-dependencies]
 gui = ["PySide6>=6.7"]
-live = ["mss>=9"]
+live = ["mss>=9", "colorama>=0.4.6; platform_system == 'Windows'"]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
