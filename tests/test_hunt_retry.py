@@ -75,3 +75,23 @@ def test_patrol_refresh_does_not_clear_failed_navigation():
     assert not routes.recently_visited and not guids and not positions
     assert routes.failed_navigation == {(1, 2, 3): error}
     sleep.assert_called_once_with(8)
+
+
+def test_combat_during_failed_route_is_resolved_without_excluding_objective():
+    fighting=NS(player=NS(in_combat=True))
+    safe=NS(player=NS(in_combat=False))
+    defend=Mock(return_value=safe)
+    routes=HuntRouteState(recently_visited={(1,2,3):1})
+    args=failure_context(routes=routes,capture=Mock(return_value=fighting),
+                         clear_remaining_aggro=defend)
+    handle_spawn_failure(LiveControlError('Unsafe encounter: could not acquire exact discovered hostile GUID'),**args)
+    defend.assert_called_once_with(fighting)
+    assert not routes.failed_navigation
+    assert not routes.recently_visited
+    assert routes.route_replans==0
+
+
+def test_off_axis_combat_is_recoverable_at_session_boundary():
+    from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error
+    assert recoverable_aggro_error(LiveControlError('Combat began during off-axis navigation; refusing alternate routing'))
+    assert not recoverable_aggro_error(LiveControlError('Cannot verify map/PID after interrupted navigation'))
