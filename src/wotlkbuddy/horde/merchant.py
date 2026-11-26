@@ -295,7 +295,7 @@ def sell_at_verified_merchant(
             eligible = eligible_items(s)
             if not eligible:
                 retained=[(x.item_id,x.quantity) for x in s.merchant_items]
-                log(f'No further verified sale candidates; retained scanned items: {retained}')
+                log(f'No further verified sale candidates; retained candidate rows: {retained}. Full bag audit: /wbt vendor; excluded items are not listed here.')
                 break
             item = eligible[0]
             # A consecutive fresh frame must preserve the exact slot and
