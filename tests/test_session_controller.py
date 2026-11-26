@@ -1,6 +1,8 @@
 """Independent tests of continuous-session orchestration."""
 from argparse import Namespace
 from unittest.mock import Mock
+from types import SimpleNamespace as NS
+from time import monotonic
 
 import pytest
 
@@ -9,7 +11,7 @@ from wotlkbuddy.live.control import LiveControlError
 
 
 def session(progress=None, recover=None):
-    return QuestSession(Namespace(), progress or Mock(), recover or Mock(), 0)
+    return QuestSession(Namespace(auto_minutes=180,monitor=0), progress or Mock(), recover or Mock(), monotonic())
 
 
 def test_phase_passes_training_state_without_mutating_parent_args():
@@ -26,7 +28,8 @@ def test_phase_passes_training_state_without_mutating_parent_args():
 
 
 @pytest.mark.parametrize('mode', ['objectives', 'quests'])
-def test_both_phases_share_recovery_and_do_not_advance_on_error(mode):
+def test_both_phases_share_recovery_and_do_not_advance_on_error(mode,monkeypatch):
+    monkeypatch.setattr('wotlkbuddy.horde.session_controller.capture_monitor',lambda _:NS(truncated=False,player=NS(guid='player')))
     error = LiveControlError('verified encounter interruption')
     s = session(Mock(side_effect=error), Mock(return_value={'status': 'combat_cleared'}))
     assert s.guarded_phase(mode, 3) is None
