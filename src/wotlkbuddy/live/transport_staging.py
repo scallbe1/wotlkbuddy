@@ -39,7 +39,7 @@ def next_pulse(pos):
     error = signed_heading_error(pos.facing_rad, facing)
     if abs(error) > HEADING_TOLERANCE:
         # Standard WoW A increases facing, D decreases it.
-        return (0x1E if error > 0 else 0x20, min(.12, max(.025, abs(error)/3)))
+        return (0x1E if error > 0 else 0x20, min(.12, max(.008, abs(error)/4.15)))
     dx, dy = x-pos.x, y-pos.y
     f = pos.facing_rad
     forward = dx*cos(f)+dy*sin(f)

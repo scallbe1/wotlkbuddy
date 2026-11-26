@@ -26,7 +26,7 @@ def test_measured_boarding_pose_and_forecast():
 
 def test_exit_corridor_distinguishes_landings():
     assert exit_trial.exit_deck_lane(pos(8.5, 1.7, -.464, .087))
-    assert not exit_trial.exit_deck_lane(pos(8.5, 3, -.464, .087))
+    assert not exit_trial.exit_deck_lane(pos(8.5, 3.1, -.464, .087))
     assert exit_trial.upper_exit_corridor(pos(1597.5, 282.9, 55.24, 4.791))
     assert not exit_trial.upper_exit_corridor(pos(1597.5, 302, -41.42, 4.791))
     assert not exit_trial.upper_exit_corridor(pos(1597.5, 282.9, 55.24, 1.57))
@@ -88,3 +88,20 @@ def test_exit_releases_forward_on_emergency_stop(monkeypatch):
     with pytest.raises(LiveControlError):
         walk(monkeypatch, iter([]), keyboard)
     assert keyboard.events == [('down', 0x11), ('up', 0x11)]
+
+
+def test_previous_exit_failure_corrects_lateral_drift(monkeypatch):
+    keyboard = Keyboard()
+    result, final = walk(monkeypatch, iter([
+        pos(7.5556, 2.2053, -.464, .087),
+        pos(7.55, 1.1, -.464, .087),
+        pos(7.55, .5, -.464, .087),
+        pos(1597.1, 282.9, 55.24, 4.791),
+        pos(1597.3, 280.7, 55.24, 4.791),
+    ]), keyboard)
+    assert result == 'exited_upper'
+    assert keyboard.events == [
+        ('down', 0x11), ('up', 0x11),
+        ('down', 0x12), ('up', 0x12),
+        ('down', 0x11), ('up', 0x11),
+    ]
