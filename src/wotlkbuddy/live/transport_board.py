@@ -164,8 +164,17 @@ def _hybrid_board_window(*, read_position, start, grab, guard, owner, emit, dead
             return None
         rgb, size = reduce_rgb(frame.rgb, frame.width, frame.height)
         state, errors = classify_frame(rgb, *size, floor=floor)
+        transition = plausible_transition(errors, floor=floor)
+        if floor == 'upper':
+            from wotlkbuddy.live.transport_door import (
+                upper_descent_view, classify_upper_descent_scores,
+                plausible_upper_descent_transition,
+            )
+            if upper_descent_view(pos):
+                state = classify_upper_descent_scores(errors)
+                transition = plausible_upper_descent_transition(errors)
         phase = tracker.update(state, captured*1000, capture_error,
-                               transition=plausible_transition(errors, floor=floor))
+                               transition=transition)
         budget = crossing_seconds(pos, floor)
         ready = board_window(floor, state, phase,
                              age_ms=(time.monotonic()-captured)*1000,
