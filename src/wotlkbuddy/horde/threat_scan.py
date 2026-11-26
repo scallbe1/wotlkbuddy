@@ -99,6 +99,41 @@ def assess_corridor_pull(driver,assess,state):
         driver.assessing_travel_corridor=prior
 
 
+def tactical_status(driver,kind):
+    update=getattr(driver,'set_activity_status',None)
+    if callable(update):
+        update(kind)
+
+
+def scan_with_tactical_status(driver,scan):
+    try:
+        return scan()
+    finally:
+        tactical_status(driver,'clear')
+
+
+def can_close_range(state,*,origin,ahead,target_position,candidates,blocked_nearby):
+    """Only approach an isolated distant enemy along the existing route.
+
+    The travel follower still checks geometry, combat and fresh threats.
+    Never bypass a linked group or charge directly toward a selected GUID.
+    """
+    if len(candidates)!=1 or blocked_nearby or not ahead or state.player.in_combat:
+        return False
+    target=state.combat_target
+    if (not target or target.dead or not target.attackable or
+            target.reaction not in (1,2,3) or target.fireball_in_range is not False):
+        return False
+    try:
+        actual=target_position(state)
+    except (OSError,RuntimeError,ValueError):
+        return False
+    distance=origin.distance_to(actual)
+    return (30<distance<=42 and abs(actual.z-origin.z)<=4 and
+            ahead[0].distance_to(actual)<distance-1 and
+            distance_to_corridor(actual,origin,ahead)<=12)
+
+
 def scan_and_clear_hostiles(
     *, initial: ClientTelemetry, player_position: WorldPosition,
     path_ahead: Sequence[Vec3],
@@ -323,7 +358,12 @@ def scan_and_clear_hostiles(
     state,chosen_guid,chosen_entry=acquire_corridor_target(state,chosen_guid,chosen_entry,awareness=awareness,candidates=candidates,driver=driver,fresh=fresh,max_targets=max_targets,pack_positions=pack_positions,log=log)
     if state.player.in_combat:
         return defend(state)
+    tactical_status(driver,'assess')
     target=state.combat_target
+    if state.player.target_guid==chosen_guid and can_close_range(state,origin=player_position.position,
+            ahead=path_ahead,target_position=target_position,candidates=candidates,blocked_nearby=blocked_nearby):
+        log(f'Isolated hostile {chosen_guid} moved out of Fireball range; continuing checked route to close distance')
+        return finish(state)
     if (not target or target.entry_id!=chosen_entry or target.dead or
             not target.attackable or target.reaction is None or
             not 1<=target.reaction<=3 or target.fireball_in_range is not True):
@@ -389,6 +429,11 @@ def scan_and_clear_hostiles(
             remember_pack(driver,([m.position for m in plan.enemies] if plan and plan.enemies else pack_positions),monotonic())
             raise LiveControlError('Unsafe encounter: '+(plan.reason if plan and not plan.allowed else 'corridor pack not fully accounted for in assessment'))
         target=state.combat_target
+        if (plan and len(plan.enemies)==1 and state.player.target_guid==chosen_guid and
+                can_close_range(state,origin=player_position.position,ahead=path_ahead,
+                    target_position=target_position,candidates=candidates,blocked_nearby=blocked_nearby)):
+            log('Approved isolated target moved out of range; advancing along checked route')
+            return finish(state)
         if (state.player.target_guid!=chosen_guid or not target or target.dead or
                 target.fireball_in_range is not True):
             raise LiveControlError('Unsafe encounter: target moved during assessment')
