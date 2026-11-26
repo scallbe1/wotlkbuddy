@@ -103,7 +103,10 @@ def ghost_route_burst(before, waypoints, index, snapshot, *, guard, fast_observe
     measured progress; the caller performs full telemetry after release.
     """
     guard()
-    pos,_=fast_observe(snapshot,35.)
+    try:
+        pos,_=fast_observe(snapshot,35.)
+    except (OSError,ValueError,RuntimeError) as exc:
+        raise LiveControlError(f'Fast ghost position unavailable: {exc}') from exc
     if pos.map_id!=expected_map_id or pos.player_guid.lower()!=guid.lower():
         raise LiveControlError('Fast ghost observation changed map or identity')
     if pos.position.distance_to(before.position)>1.5:
@@ -180,6 +183,10 @@ def ghost_route_burst(before, waypoints, index, snapshot, *, guard, fast_observe
                 last=pos
                 next_read=now()+.06
             sleep(.03)
+    except (OSError,ValueError,RuntimeError) as exc:
+        if isinstance(exc,LiveControlError):
+            raise
+        raise LiveControlError(f'Fast ghost position unavailable: {exc}') from exc
     finally:
         try:
             if turn_key is not None:
