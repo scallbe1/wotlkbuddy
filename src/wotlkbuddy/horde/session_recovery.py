@@ -104,8 +104,13 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
     with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, NavigationProxy(py32, dll) as nav:
         def hazards(state, corpse):
             _, where = verified_live_position(state,pid=pid)
-            return verified_nearby_creatures(state,pid=pid,center=corpse,
+            local=verified_nearby_creatures(state,pid=pid,center=where.position,
                 ignored_guids=scout.ignored_guids())
+            if where.position.distance_to(corpse)<2:
+                return local
+            around_corpse=verified_nearby_creatures(state,pid=pid,center=corpse,
+                ignored_guids=scout.ignored_guids())
+            return tuple(dict.fromkeys((*local,*around_corpse)))
 
         def spawn_hints(state, corpse):
             _, where = verified_live_position(state,pid=pid)
