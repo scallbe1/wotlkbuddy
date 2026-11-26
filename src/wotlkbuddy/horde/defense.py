@@ -70,6 +70,8 @@ def defend_against_aggro(
 
     target_guid = getattr(driver,'engaged_target_guid',None)
     target_entry = getattr(driver,'engaged_target_entry',None)
+    if target_guid and target_entry:
+        control.attackers.add(target_guid)
     fleeing_logged=set()
     no_damage = 0
     critical_logged = False
@@ -146,6 +148,7 @@ def defend_against_aggro(
                 else:
                     log(f'Crowd control unconfirmed: {rule.spell}; resuming verified defense')
                 continue
+            continue
         before_hp=state.combat_target.health
         from wotlkbuddy.combat.runtime import selected_action
         ability=selected_action(state)
