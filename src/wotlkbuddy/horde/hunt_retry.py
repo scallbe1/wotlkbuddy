@@ -146,7 +146,8 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             raise RouteCombatInterrupted('Aggro/combat detected during route retry')
     log(f'Alternate hunt planning: {len(nearby)} spawn candidates, {len(hazards)} remembered threats')
     try:
-        alternatives=alternate_hunt_routes(nav,world.map_id,world.position,nearby,hazards,
+        candidates=[p for p in nearby if routes.recently_visited.get((round(p.x),round(p.y),round(p.z)),0)<2][:6]
+        alternatives=alternate_hunt_routes(nav,world.map_id,world.position,candidates,hazards,
             routes.recently_visited,excluded_staging=routes.staging_visited,guard=supervise)
         supervise()
         if alternatives:
