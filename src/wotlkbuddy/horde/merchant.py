@@ -77,6 +77,8 @@ def safe_sale_candidates(
 
     Grey vendor junk and low-rarity unused equipment are eligible; food,
     reagents, trade goods, bag containers and rare/epic items are retained.
+    Slumber Sand (3434) is explicitly eligible as unused vendor stock unless
+    protected by the profile or quest flags.
     """
     if ((require_open and not state.merchant_open) or not state.merchant_scan_complete or
             state.resources is None or state.truncated):
@@ -91,8 +93,6 @@ def safe_sale_candidates(
             if (a.inventory_slot==16 and state.weapon_swap_safe is not True) or current is None or (a.score,a.item_level)>(current.score,current.item_level):
                 retain.add(a.item_id)
     for item in state.merchant_items:
-        if item.item_id == 3434:  # Slumber Sand: retain emergency crowd control.
-            continue
         if item.item_id in protected_item_ids or item.item_id in retain or item.quest_flag != 0 or item.locked:
             continue
         if protect_upgrades and item.equip_loc.startswith('INVTYPE_') and not state.gear_scan_complete:
@@ -360,7 +360,7 @@ def free_bag_space(
                 nav=nav,spawns=spawns,radius=600,destination_hint=target.position,log=log)
             return sell_at_verified_merchant(npc_name=target.name,npc_id=target.entry,
                 profile=profile,capture=capture,driver=driver,min_free_slots=min_free_slots,
-                protect_mage_gear=raise_cash,log=log)
+                protect_mage_gear=True,log=log)
         except (MerchantUnavailable, EncounterRouteUnavailable) as exc:
             last_error=exc
             s=capture()
