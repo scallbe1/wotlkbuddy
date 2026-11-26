@@ -1,6 +1,7 @@
 from wotlkbuddy.live.transport_animation import PERIOD_MS
 from wotlkbuddy.live.transport_door import (
     CLOSED, OPEN, LEFT, RIGHT, OpeningTracker, classify_signatures,
+    classify_scores, plausible_transition,
 )
 
 
@@ -33,4 +34,40 @@ def test_sample_gap_discards_phase():
     tracker.update('closed', 0)
     tracker.update('open', 250)
     assert tracker.update('closed', 250+PERIOD_MS) is None
+    assert tracker.edge_ms is None
+
+
+def scores(opened, closed, left, right):
+    return dict(open_error=opened, closed_error=closed,
+                left_error=left, right_error=right)
+
+
+def test_live_recorded_scores():
+    closed = scores(34.93, 16.48, 6.28, 7.19)
+    opened = scores(9.8, 35.52, 6.28, 9.4)
+    transition = scores(18.46, 30.09, 6.28, 9.4)
+    wrong_view = scores(9.8, 35.52, 18, 9.4)
+    assert classify_scores(closed) == 'closed'
+    assert classify_scores(opened) == 'open'
+    assert classify_scores(transition) == 'unknown'
+    assert plausible_transition(transition)
+    assert classify_scores(wrong_view) == 'unknown'
+    assert not plausible_transition(wrong_view)
+    assert classify_scores(scores(11, 14, 6, 6)) == 'unknown'
+
+
+def test_short_animation_ambiguity_brackets_next_opening():
+    tracker = OpeningTracker()
+    for t in range(0, 17000, 250):
+        state = 'open' if 250 <= t < 4750 else 'closed'
+        if t == 16750:
+            assert tracker.update('unknown', t, transition=True) is None
+        else:
+            assert tracker.update(state, t) is None
+    phase = tracker.update('open', 17000)
+    assert phase is not None
+    assert phase.uncertainty_ms >= 450
+    assert tracker.update('unknown', 17250, transition=True) is None
+    assert tracker.update('unknown', 18000, transition=True) is None
+    assert not tracker.locked
     assert tracker.edge_ms is None
