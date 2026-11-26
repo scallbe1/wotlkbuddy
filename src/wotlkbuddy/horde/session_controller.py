@@ -86,7 +86,6 @@ class QuestSession:
 
     def recover_with_redeath(self, exc, cycle):
         """A second verified death is a new recovery, not a fatal nested exception."""
-        from wotlkbuddy.live.control import WindowsKeyboard
         owner=None
         while True:
             if self.time_expired() or self.recoveries>=3:
