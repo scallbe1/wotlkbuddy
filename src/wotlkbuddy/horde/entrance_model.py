@@ -19,6 +19,7 @@ class EntranceMemory:
     offered: list = field(default_factory=list)
     steps: int = 0
     last_remaining: float | None = None
+    pending_path: tuple = ()
 
     def reject(self,start,end):
         if start.distance_to(end)>.2:
@@ -47,6 +48,10 @@ def choose_route(nav,where,memory,check):
     start=where.position
     target=memory.target
     check()
+    if memory.pending_path and memory.pending_path[0].distance_to(start)<=3:
+        retained=(start,*memory.pending_path[1:])
+        if not route_reuses_collision(retained,memory.blocked_edges):
+            return retained
     direct=verified_path(nav,where.map_id,start,target)
     if direct and not route_reuses_collision(direct,memory.blocked_edges):
         return direct
@@ -125,12 +130,15 @@ def advance_entrance(terrain,state,*,routes,world_position,navigate,nav,driver,l
         return None
     if origin.distance_to(target.position)>65:
         return None
+    awareness._guard(state,state.player.guid)
     if memory is None or memory.guid!=target.guid or memory.target.distance_to(target.position)>5:
         memory=EntranceMemory(where.map_id,target.entry,target.guid,target.position)
         terrain.entrance=memory
         log(f'Entrance model: tracking required entry {target.entry} {target.guid} at '
             f'XYZ ({target.position.x:.2f},{target.position.y:.2f},{target.position.z:.2f})')
     else:
+        if memory.target.distance_to(target.position)>2:
+            memory.pending_path=()
         memory.target=target.position
     if ready_position(nav,where,memory):
         if routes.force_spawn_search:
@@ -163,6 +171,7 @@ def move_entrance(terrain,memory,state,where,*,routes,world_position,navigate,na
         if 'Aggro/combat detected during entrance planning' in str(exc):
             return True
         raise
+    memory.pending_path=path
     point=next_stage(path,memory.target)
     if point is None:
         raise EncounterRouteUnavailable('Entrance model has no further verified ramp/doorway route; not circling the same target')
@@ -184,6 +193,7 @@ def move_entrance(terrain,memory,state,where,*,routes,world_position,navigate,na
         if actual.map_id!=where.map_id:
             raise LiveControlError('Map changed during entrance approach')
         memory.reject(actual.position,point)
+        memory.pending_path=()
         log('Entrance model: recorded blocked corridor; will seek a different connected route: '+str(exc))
         return True
     _,actual=world_position(result)
@@ -193,9 +203,11 @@ def move_entrance(terrain,memory,state,where,*,routes,world_position,navigate,na
         return True
     if actual.position.distance_to(point)>3 or abs(actual.z-point.z)>1.5:
         memory.reject(actual.position,point)
+        memory.pending_path=()
         log(f'Entrance model: waypoint not reached on expected floor; '
             f'expected z={point.z:.2f}, measured z={actual.z:.2f}; corridor marked blocked')
     else:
+        memory.pending_path=(actual.position,*path[path.index(point)+1:])
         memory.reached.append(actual.position)
         terrain.remember(actual)
         log(f'Entrance model: confirmed XYZ ({actual.x:.2f},{actual.y:.2f},{actual.z:.2f})')
