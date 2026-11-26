@@ -97,6 +97,45 @@ def classify_scores(errors, *, floor='upper'):
     return 'unknown'
 
 
+def upper_descent_view(pos):
+    """The stationary upper approach recorded in the first descent trial."""
+    return (pos.map_id == 0 and abs(pos.x-1595.5478515625) <= .35
+            and abs(pos.y-277.0728454589844) <= .35
+            and abs(pos.z-55.242218017578125) <= .6
+            and abs(pos.facing_rad-1.5677790641784668) <= .05)
+
+
+def classify_upper_descent_scores(errors):
+    """Recognize the repeated open signature in the recorded descent view.
+
+    Use only at the measured approach pose. Do not relax the general
+    upper-door classifier or treat ambiguous animation frames as open.
+    """
+    state = classify_scores(errors, floor='upper')
+    if state != 'unknown' or not errors:
+        return state
+    if not all(isfinite(v) and v >= 0 for v in errors.values()):
+        return 'unknown'
+    if (abs(errors['open_error']-20.71) <= 1
+            and abs(errors['closed_error']-28.12) <= 1
+            and 6 <= errors['left_error'] <= 11
+            and abs(errors['right_error']-12.10) <= 1):
+        return 'open'
+    return 'unknown'
+
+
+def plausible_upper_descent_transition(errors):
+    if plausible_transition(errors, floor='upper'):
+        return True
+    # Observed partially closed frame at 31163.5 ms. This merely preserves
+    # the edge bracket briefly; it never authorizes forward movement.
+    return bool(errors and all(isfinite(v) and v >= 0 for v in errors.values())
+                and 6 <= errors['left_error'] <= 11
+                and abs(errors['right_error']-11.99) <= 1
+                and abs(errors['open_error']-28.61) <= 1.5
+                and abs(errors['closed_error']-22.16) <= 1.5)
+
+
 def plausible_transition(errors, *, floor='upper'):
     """Allow brief anchored ambiguity, including midpoint animation frames.
 

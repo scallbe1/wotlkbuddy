@@ -145,3 +145,46 @@ def test_lower_patch_scores_from_shifted_calibration_images():
         ((10, 10, 0, 0), 'unknown'),
     ]:
         assert classify_lower_patch_scores(scores(*row)) == expected
+
+
+def test_measured_upper_descent_view_and_score_signature():
+    from types import SimpleNamespace
+    from wotlkbuddy.live.transport_door import (
+        upper_descent_view, classify_upper_descent_scores,
+        plausible_upper_descent_transition,
+    )
+
+    pose = SimpleNamespace(map_id=0, x=1595.5478515625,
+                           y=277.0728454589844, z=55.242218017578125,
+                           facing_rad=1.5677790641784668)
+    assert upper_descent_view(pose)
+    pose.x += 1
+    assert not upper_descent_view(pose)
+    closed = scores(34.34, 16.46, 7.65, 7.08)
+    opened = scores(20.71, 28.12, 7.65, 12.1)
+    transition = scores(28.61, 22.16, 7.65, 11.99)
+    assert classify_scores(opened) == 'unknown'
+    assert classify_upper_descent_scores(opened) == 'open'
+    assert classify_upper_descent_scores(closed) == 'closed'
+    assert classify_upper_descent_scores(transition) == 'unknown'
+    assert plausible_upper_descent_transition(transition)
+    assert classify_upper_descent_scores(scores(20.71, 28.12, 16, 12.1)) == 'unknown'
+    assert classify_upper_descent_scores(scores(20.71, 28.12, 7.65, 20)) == 'unknown'
+
+
+def test_descent_recorded_opening_signature_synchronizes():
+    from wotlkbuddy.live.transport_door import classify_upper_descent_scores
+    from wotlkbuddy.live.transport_board import board_window
+
+    tracker = OpeningTracker(floor='upper')
+    closed = scores(34.34, 16.46, 7.65, 7.08)
+    opened = scores(20.71, 28.12, 7.65, 12.10)
+    ready = False
+    for t in range(0, 19000, 100):
+        is_open = (1000 <= t < 5400 or 17700 <= t)
+        state = classify_upper_descent_scores(opened if is_open else closed)
+        phase = tracker.update(state, t, 25)
+        if board_window('upper', state, phase, age_ms=75, crossing_ms=2504):
+            ready = True
+    assert tracker.locked
+    assert ready
