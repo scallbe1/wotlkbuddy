@@ -225,7 +225,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     from wotlkbuddy.horde.merchant import (
         free_bag_space, next_ready_profile_turnin)
     from wotlkbuddy.horde.npc_catalog import (
-        nearby_profile_quest_givers, nearby_service_npcs)
+        nearby_service_npcs)
     from wotlkbuddy.horde.npc_visit import visit_npc
     from wotlkbuddy.horde.quest_offers import accept_npc_offers
     from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
@@ -373,28 +373,15 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                         'status': 'bag space verified',
                         'free_slots': cap().resources.free_bag_slots}
 
-            if args.only in ('all', 'quests'):
-                state, current = location()
-                givers = nearby_profile_quest_givers(
-                    profile=quest_profile, telemetry=state, spawns=db,
-                    origin=current.position, map_id=current.map_id, radius=160)
-                log(f'Unresolved, reachable profile quest givers: {len(givers)}')
-                quests = {}
-                set_native_status('quests')
-                for giver in givers[:12]:
-                    hud.set(goal=f'Accept quests from {giver.name}',
-                            action='Navigating to quest giver')
-                    log(f'Profile quest giver: {giver.name} ({giver.entry}) '
-                        f'from {giver.source}')
-                    visit_npc(npc_name=giver.name, npc_id=giver.entry,
-                              pid=pid, capture=cap, driver=driver, nav=nav,
-                              spawns=db, radius=240,
-                              destination_hint=giver.position, log=log)
-                    quests[giver.name] = accept_npc_offers(
-                        npc_name=giver.name, npc_id=giver.entry, capture=cap,
-                        driver=driver, max_quests=4,
-                        profile=quest_profile, log=log)
-                report['accepted_quests'] = quests
+            local_memory=getattr(args,'_local_offer_memory',None)
+            if args.only in ('all','quests') or (args.only=='objectives' and local_memory is not None):
+                from wotlkbuddy.horde.local_offers import collect_profile_offers
+                local=args.only=='objectives'
+                offers=collect_profile_offers(profile=quest_profile,location=location,
+                    cap=cap,driver=driver,nav=nav,db=db,pid=pid,hud=hud,
+                    set_native_status=set_native_status,log=log,
+                    memory=local_memory if local else None)
+                report['local_accepted_quests' if local else 'accepted_quests']=offers
 
             from wotlkbuddy.horde.session_training import execute_training_phase
             execute_training_phase(
