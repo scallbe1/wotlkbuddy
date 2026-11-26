@@ -8,6 +8,7 @@ import json
 import time
 from dataclasses import asdict
 
+from wotlkbuddy.live.console_log import log_console
 from wotlkbuddy.bots.grind import GrindBot
 from wotlkbuddy.bots.quest import QuestBot
 from wotlkbuddy.engine.runner import BotRunner
@@ -167,7 +168,7 @@ def _horde_quest_pickup(args: argparse.Namespace) -> None:
         profile, capture=cap, driver=driver,
         character=args.character, expected_guid=first.player.guid,
         quest_id=363, world_map_id=0,
-        progress=lambda line: print(line, file=sys.stderr, flush=True),
+        progress=lambda line: log_console(line),
     )
     print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
     if result.status not in ('accepted', 'already_in_journal'):
@@ -260,7 +261,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                         enabled=False)
     atexit.register(hud.close)
     def log(line):
-        print(line, file=sys.stderr, flush=True)
+        log_console(line)
         hud.note(line)
     if not _skip_countdown:
         log(f'Switch to WoW now; post-quest progression begins in {args.countdown:g}s.')
@@ -514,7 +515,7 @@ def _horde_next(args: argparse.Namespace) -> None:
         enabled=args.enable_input and not args.no_hud)
     atexit.register(hud.close)
     def progress(line):
-        print(line, file=sys.stderr, flush=True)
+        log_console(line)
         hud.note(line)
     # Show the source-of-truth mapping when planning a collection quest.
     # The objective ItemId is never itself treated as an NPC template ID.
@@ -676,7 +677,7 @@ def _horde_return_turnin(args: argparse.Namespace) -> None:
                         enabled=not args.no_hud)
     atexit.register(hud.close)
     def progress(line):
-        print(line, file=sys.stderr, flush=True)
+        log_console(line)
         hud.note(line)
     _execute_profile_return(
         profile=profile, quest_id=args.quest_id, pid=pid,
@@ -746,7 +747,7 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
                               arrival_radius=.0015 if args.experimental_direct_travel else .0006,
                               max_step_seconds=.8, max_seconds=180,
                               resume=bool(args.recorded_route),
-                              progress=lambda line: print(line, file=sys.stderr, flush=True))
+                              progress=lambda line: log_console(line))
         print('Travel:', json.dumps(report.to_dict(), ensure_ascii=False))
         if report.stopped_reason != 'complete':
             raise LiveControlError('Travel did not complete: ' + report.stopped_reason)
@@ -755,7 +756,7 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
     driver = KeyboardQuestInput(interact_key=args.interact_key)
     result = turnin_rude_awakening(profile, capture=cap, driver=driver,
                                  character=p.name, expected_guid=p.guid, timeout=10.0,
-                                 progress=lambda line: print(line, file=sys.stderr, flush=True))
+                                 progress=lambda line: log_console(line))
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
     if result.status not in ('turned_in', 'already_turned_in'):
         raise LiveControlError('Turn-in not confirmed: ' + result.status +
@@ -937,7 +938,7 @@ def _horde_nav_deliver(args: argparse.Namespace) -> None:
             max_seconds=args.max_seconds,
             can_traverse=(None if args.no_stuck_recovery else
                           lambda start,end: nav.segment_clear(world.map_id, start, end)),
-            progress=lambda line: print(line, file=sys.stderr, flush=True),
+            progress=lambda line: log_console(line),
         )
     print('World travel:', json.dumps(report.to_dict(), ensure_ascii=False))
     if report.stopped_reason != 'complete':
@@ -948,7 +949,7 @@ def _horde_nav_deliver(args: argparse.Namespace) -> None:
     turnin = turnin_rude_awakening(
         profile, capture=cap, driver=driver,
         character=player.name, expected_guid=player.guid,
-        timeout=10, progress=lambda line: print(line, file=sys.stderr, flush=True),
+        timeout=10, progress=lambda line: log_console(line),
     )
     print('Quest turn-in:', json.dumps(turnin.to_dict(), ensure_ascii=False, indent=2))
     if turnin.status not in ('turned_in', 'already_turned_in'):
@@ -1576,7 +1577,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.func(args)
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        log_console(f"Error: {exc}")
         return 1
     return 0
 

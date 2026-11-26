@@ -28,6 +28,47 @@ def select_corpse(state, where, cg, entry, name, *, driver, fresh, exact, log):
     return state,where
 
 
+def approach_corpse(state, where, point, distance, *, cg, retry_after, now, nav, driver, observe, log):
+    """Return the observed state and a reasoned outcome for a bounded corpse approach."""
+    dz=point.z-where.z
+    if abs(dz)>4:
+        retry_after[cg]=now()+45
+        log(f'Loot deferred: {cg}; height difference {dz:+.1f}y exceeds 4y (distance {distance:.1f}y)')
+        return state,where,False
+    if distance<=4:
+        return state,where,True
+    if distance>35:
+        retry_after[cg]=now()+45
+        log(f'Loot deferred: {cg}; corpse {distance:.1f}y away exceeds 35y approach limit')
+        return state,where,False
+    dx,dy=point.x-where.x,point.y-where.y
+    d=hypot(dx,dy)
+    if d<.1:
+        log(f'Loot deferred: {cg}; no horizontal approach to corpse')
+        return state,where,False
+    dest=Vec3(point.x-dx/d*2.5,point.y-dy/d*2.5,point.z)
+    try:
+        path=validate_nav_path(nav.find_path(where.map_id,where.position,dest),
+            where.position,dest,max_distance=45,max_step=5)
+    except (OSError,ValueError,RuntimeError) as exc:
+        log(f'Loot deferred: {cg}; no verified corpse route: {exc}')
+        return state,where,False
+    log(f'Loot approach: {cg}; {distance:.1f}y away, height difference {dz:+.1f}y')
+    report=follow_world_path(path,sample=observe,keyboard=driver.keyboard,
+        stop_requested=driver.emergency_stop_requested,expected_quest_id=None,
+        expected_map_id=where.map_id,max_seconds=45,arrival_yards=1.,
+        progress=log,on_threat=None,on_aggro=None,
+        can_traverse=lambda a,b:nav.segment_clear(where.map_id,a,b))
+    state,where=observe()
+    if state.player.in_combat:
+        log(f'Loot deferred: {cg}; combat interrupted corpse approach')
+        return state,where,False
+    if report.stopped_reason!='complete':
+        log(f'Loot deferred: {cg}; corpse approach stopped: {report.stopped_reason}')
+        return state,where,False
+    return state,where,True
+
+
 def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda _:None,
                    sleep=real_sleep, max_corpses=12, now=monotonic, nearby_only=False):
     if getattr(driver,'looting_encounter',False):
@@ -65,6 +106,8 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
         for _ in range(max_corpses):
             state,where=observe()
             if state.player.in_combat or state.resources.free_bag_slots<=0:
+                if driver.defeated_corpses:
+                    log('Loot deferred: active combat' if state.player.in_combat else 'Loot deferred: no free bag slots')
                 break
             candidates=[]
             for cg,(entry,name) in driver.defeated_corpses.items():
@@ -72,8 +115,13 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                     continue
                 try:
                     point=corpse_position(state,cg)
-                except (OSError,ValueError,RuntimeError):
+                except (OSError,ValueError,RuntimeError) as exc:
+                    log(f'Loot deferred: {cg}; corpse coordinates unavailable: {exc}')
+                    retry_after[cg]=now()+10
                     continue
+                if point is None:
+                    log(f'Loot deferred: {cg}; corpse not observed in object manager')
+                    retry_after[cg]=now()+10
                 if point is not None and (not nearby_only or (where.position.distance_to(point)<=4 and abs(point.z-where.z)<=4)):
                     candidates.append((where.position.distance_to(point),cg,entry,name,point))
             if not candidates:
@@ -84,36 +132,12 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
             # A failed attempt should not drag the character repeatedly off
             # the current quest/service route. Retain it for a later pass.
             retry_after[cg]=now()+10
-            if distance>4:
-                if distance>25 or abs(point.z-where.z)>4:
-                    retry_after[cg]=now()+45
-                    log('Corpse too far or on different floor; retaining for later')
-                    continue
-                # A combat-log GUID and live object-manager XYZ already
-                # identify this corpse. Selection may fail outside interact
-                # range; approach the verified position first, then select.
-                # No interaction is authorized by XYZ alone.
-                dx,dy=point.x-where.x,point.y-where.y
-                d=hypot(dx,dy)
-                if d<.1:
-                    continue
-                dest=Vec3(point.x-dx/d*2.5,point.y-dy/d*2.5,point.z)
-                try:
-                    path=validate_nav_path(nav.find_path(where.map_id,where.position,dest),
-                        where.position,dest,max_distance=40,max_step=5)
-                except (OSError,ValueError,RuntimeError):
-                    continue
-                report=follow_world_path(path,sample=observe,keyboard=driver.keyboard,
-                    stop_requested=driver.emergency_stop_requested,expected_quest_id=None,
-                    expected_map_id=where.map_id,max_seconds=45,arrival_yards=1.,
-                    progress=log,on_threat=None,on_aggro=None,
-                    can_traverse=lambda a,b:nav.segment_clear(where.map_id,a,b))
-                state,where=observe()
-                if state.player.in_combat:
-                    break
-                if report.stopped_reason!='complete':
-                    log('Corpse approach incomplete; retaining pending corpse')
-                    continue
+            state,where,approached=approach_corpse(state,where,point,distance,
+                cg=cg,retry_after=retry_after,now=now,nav=nav,driver=driver,observe=observe,log=log)
+            if state.player.in_combat:
+                break
+            if not approached:
+                continue
             state,where=select_corpse(state,where,cg,entry,name,driver=driver,fresh=fresh,exact=exact,log=log)
             if state.player.in_combat:
                 break
@@ -124,9 +148,11 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                 continue
             try:
                 actual=corpse_position(state,cg)
-            except (OSError,ValueError,RuntimeError):
+            except (OSError,ValueError,RuntimeError) as exc:
+                log(f'Loot deferred: {cg}; final corpse position unavailable: {exc}')
                 continue
             if actual is None or where.position.distance_to(actual)>4.4:
+                log(f'Loot deferred: {cg}; final corpse position missing or outside interact range')
                 continue
             baseline=state.loot_sequence
             before=(state.tracked_item_count,state.resources.money_copper,state.resources.free_bag_slots)
@@ -156,7 +182,7 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                 retry_after.pop(cg,None)
                 log(f'Encounter corpse processed: {cg}')
             else:
-                log('Loot not confirmed; corpse remains pending')
+                log(f'Loot not confirmed: {cg}; window opened={opened}, remaining slots={state.loot_count}, inventory/cash/bag change={before!=after}; corpse remains pending')
         return state
     finally:
         driver.looting_encounter=False

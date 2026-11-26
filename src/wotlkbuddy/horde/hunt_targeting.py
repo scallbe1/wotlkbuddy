@@ -17,7 +17,10 @@ def acquire_hunt_target(s: ClientTelemetry, *, driver, spec, allowed_sources,
             rows=awareness.read(s,where.position)
             possible=[m for m in rows if m.entry in allowed_sources and
                       m.guid not in unhittable_guids and
-                      abs(m.position.z-where.z)<=8]
+                      abs(m.position.z-where.z)<=4]
+            for mob in rows:
+                if mob.entry in allowed_sources and abs(mob.position.z-where.z)>4:
+                    log(f'Target skipped: {mob.entry} {mob.guid}; height difference {mob.position.z-where.z:+.1f}y exceeds 4y')
             def rank(m):
                 neighbors=sum(other.guid!=m.guid and
                               other.position.distance_to(m.position)<=16
@@ -34,7 +37,7 @@ def acquire_hunt_target(s: ClientTelemetry, *, driver, spec, allowed_sources,
                         t.entry_id==mob.entry and t.attackable and not t.dead):
                     selected=True
                     log(f'Object-selected quest creature {mob.entry} {mob.guid}, '
-                        f'{mob.position.distance_to(where.position):.1f}y')
+                        f'{mob.position.distance_to(where.position):.1f}y, height {mob.position.z-where.z:+.1f}y')
                     break
             if not selected and not s.player.in_combat and s.player.target_guid:
                 driver.chat('/cleartarget')
@@ -63,7 +66,7 @@ def acquire_hunt_target(s: ClientTelemetry, *, driver, spec, allowed_sources,
                 if s.player.in_combat:
                     break
                 if s.player.target_guid in unhittable_guids:
-                    log(f'Skipping previously blocked spider '
+                    log(f'Skipping previously blocked creature '
                         f'{s.player.target_guid}; exact GUID only')
                     driver.chat('/cleartarget')
                     s=fresh(s)

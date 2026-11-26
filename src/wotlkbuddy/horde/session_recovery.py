@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from wotlkbuddy.live.console_log import log_console
 
 
 def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dict:
@@ -52,8 +53,8 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
             state,capture=cap,driver=recovery_driver,
             player_position=lambda s:verified_live_position(s,pid=recovery_pid)[1],
             target_position=lambda s:verified_target_position(s,pid=recovery_pid),
-            log=lambda line:print(line,file=sys.stderr,flush=True))
-        log_recovery=lambda line:print(line,file=sys.stderr,flush=True)
+            log=log_console)
+        log_recovery=log_console
         log_recovery('Quest phase interrupted by unresolved aggro; keeping control until combat clears or death is verified')
         first=settle_aggro(initial=first,capture=cap,driver=recovery_driver,
             defend=lambda state:defend_against_aggro(initial=state,capture=cap,
@@ -76,7 +77,7 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
         state = cap()
         pid, pos = verified_live_position(state, pid=pid)
         return state, pos
-    log = lambda line: print(line, file=sys.stderr, flush=True)
+    log = log_console
 
     from wotlkbuddy.horde.recovery_rest import recover_and_buff
     retreat_hints = []
