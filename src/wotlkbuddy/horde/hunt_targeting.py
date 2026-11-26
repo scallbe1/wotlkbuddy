@@ -14,6 +14,8 @@ def acquire_hunt_target(s: ClientTelemetry, *, driver, spec, allowed_sources,
         awareness=getattr(driver,'awareness',None)
         if awareness is not None:
             _,where=world_position(s)
+            if terrain is not None and not terrain.anchors:
+                terrain.remember(where)
             rows=awareness.read(s,where.position)
             possible=[m for m in rows if m.entry in allowed_sources and
                       m.guid not in unhittable_guids and

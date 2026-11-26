@@ -37,9 +37,9 @@ def approach_corpse(state, where, point, distance, *, cg, retry_after, now, nav,
         return state,where,False
     if distance<=4:
         return state,where,True
-    if distance>35:
+    if distance>40:
         retry_after[cg]=now()+45
-        log(f'Loot deferred: {cg}; corpse {distance:.1f}y away exceeds 35y approach limit')
+        log(f'Loot deferred: {cg}; corpse {distance:.1f}y away exceeds 40y approach limit')
         return state,where,False
     dx,dy=point.x-where.x,point.y-where.y
     d=hypot(dx,dy)
@@ -49,7 +49,7 @@ def approach_corpse(state, where, point, distance, *, cg, retry_after, now, nav,
     dest=Vec3(point.x-dx/d*2.5,point.y-dy/d*2.5,point.z)
     try:
         path=validate_nav_path(nav.find_path(where.map_id,where.position,dest),
-            where.position,dest,max_distance=45,max_step=5)
+            where.position,dest,max_distance=48,max_step=5)
     except (OSError,ValueError,RuntimeError) as exc:
         log(f'Loot deferred: {cg}; no verified corpse route: {exc}')
         return state,where,False

@@ -57,6 +57,8 @@ def wire_hunt_services(*, capture, driver, guid, quest_id, started, max_seconds,
     progress = HuntProgress()
     from wotlkbuddy.horde.hunt_retry import HuntRouteState
     routes = HuntRouteState()
+    if getattr(driver,'hunt_terrain',None) is not None:
+        routes.terrain=driver.hunt_terrain
     from wotlkbuddy.horde.hunt_loot import LootStats, loot_corpse
     loot_stats = LootStats()
     # Share exact GUID exclusions with the proactive path scanner.
@@ -79,11 +81,15 @@ def wire_hunt_services(*, capture, driver, guid, quest_id, started, max_seconds,
     from wotlkbuddy.horde.hunt_navigation import navigate_hunt
 
     def navigate(s: ClientTelemetry, dest: Vec3, *, camp_transit=False) -> ClientTelemetry:
-        return navigate_hunt(
+        result = navigate_hunt(
             s, dest, camp_transit=camp_transit, pid=pid, guid=guid, quest_id=quest_id,
             capture=capture, driver=driver, nav=nav, world_position=world_position,
             guard=guard, fresh=fresh, travel=travel, max_seconds=max_seconds,
             now=now, started=started, log=log)
+        if (getattr(driver,'awareness',None) is not None and not result.player.in_combat
+                and not result.player.dead and routes.terrain.failures==0):
+            routes.terrain.remember(world_position(result)[1])
+        return result
 
     from wotlkbuddy.horde.hunt_firing import recover_firing_position
 

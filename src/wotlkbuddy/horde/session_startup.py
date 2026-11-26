@@ -29,6 +29,8 @@ def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[st
         raise LiveControlError('Only a verified living Undead Mage is supported')
     driver = KeyboardQuestInput(interact_key=args.interact_key)
     driver.native_hud_enabled = not args.no_hud
+    from wotlkbuddy.horde.hunt_terrain import attach_hunt_memory
+    attach_hunt_memory(driver,first.player.guid,getattr(args,'_hunt_memory',None))
     from wotlkbuddy.horde.defense import defend_against_aggro
     def resolve_aggro(snapshot):
         from wotlkbuddy.horde.post_encounter import finish_encounter
