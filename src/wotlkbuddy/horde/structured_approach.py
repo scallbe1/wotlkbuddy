@@ -7,7 +7,8 @@ side, and consider isolated guards as intermediate objectives.
 from dataclasses import dataclass
 from math import hypot
 
-from wotlkbuddy.horde.hunt_routes import path_avoids_pack, recoverable_hunt_failure
+from wotlkbuddy.horde.hunt_routes import (
+    path_avoids_pack, recoverable_hunt_failure, RouteCombatInterrupted)
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import validate_nav_path
 
@@ -35,7 +36,7 @@ def mesh_approaches(nav, world, target, *, hazards, visited, guard):
         return []
     options=[]
     length=0.
-    for a,point in zip(path,path[1:]):
+    for index,(a,point) in enumerate(zip(path,path[1:]),1):
         guard()
         length+=a.distance_to(point)
         distance=point.distance_to(target)
@@ -46,7 +47,7 @@ def mesh_approaches(nav, world, target, *, hazards, visited, guard):
         try:
             if not nav.segment_clear(world.map_id,point,target):
                 continue
-            prefix=path[:path.index(point)+1]
+            prefix=path[:index+1]
             if not path_avoids_pack(prefix,hazards,radius=19):
                 continue
         except (OSError,ValueError,RuntimeError,TimeoutError):
@@ -85,7 +86,10 @@ def plan_approach(nav, world, goal, enemies, unknown, *, visited, guard):
         for length,point in mesh_approaches(nav,world,enemy.position,
                 hazards=hazards,visited=visited,guard=guard):
             ranked.append(Approach(point,enemy.position,enemy.guid,enemy.entry,True,length))
-    return min(ranked,key=lambda a:a.length,default=None)
+    if ranked:
+        return min(ranked,key=lambda a:a.length)
+    return min((Approach(p,center,target.guid if target else '',goal.entry,False,d)
+                for d,p in direct),key=lambda a:a.length,default=None)
 
 
 def explore_required_approach(s, *, routes, goal, world, driver, nav, navigate,
@@ -100,7 +104,10 @@ def explore_required_approach(s, *, routes, goal, world, driver, nav, navigate,
         return False
 
     def check():
-        guard(capture())
+        current=capture()
+        guard(current)
+        if current.player.in_combat:
+            raise RouteCombatInterrupted('Aggro/combat detected during structured approach planning')
         if driver.emergency_stop_requested() or not driver.wow_is_foreground():
             raise LiveControlError('Structured approach interrupted by Escape or focus loss')
 
@@ -108,8 +115,15 @@ def explore_required_approach(s, *, routes, goal, world, driver, nav, navigate,
     if state.player.in_combat:
         clear_remaining_aggro(state)
         return True
-    approach=plan_approach(nav,world,goal,enemies,unknown,
-                           visited=routes.staging_visited,guard=check)
+    try:
+        approach=plan_approach(nav,world,goal,enemies,unknown,
+                               visited=routes.staging_visited,guard=check)
+    except RouteCombatInterrupted:
+        current=capture()
+        guard(current)
+        if current.player.in_combat:
+            clear_remaining_aggro(current)
+        return True
     if approach is None:
         return False
     routes.structured_attempts+=1
