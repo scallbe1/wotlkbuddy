@@ -1310,6 +1310,16 @@ def _register_world_observation_commands(sub):
     door.add_argument('--countdown', type=float, default=5)
     door.add_argument('--monitor', type=int, default=1)
     door.set_defaults(func=watch_upper_door)
+    from wotlkbuddy.live.transport_board import trial_board
+    board = sub.add_parser('horde-transport-board',
+                           help='Supervised elevator boarding trial; dry run by default')
+    board.add_argument('--floor', choices=('lower', 'upper'), default='lower')
+    board.add_argument('--seconds', type=float, default=60)
+    board.add_argument('--countdown', type=float, default=5)
+    board.add_argument('--monitor', type=int, default=1)
+    board.add_argument('--enable-input', action='store_true',
+                       help='Permit one bounded forward boarding attempt; manual exit')
+    board.set_defaults(func=trial_board)
 
 
 def main(argv: list[str] | None = None) -> int:
