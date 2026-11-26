@@ -8,7 +8,9 @@ from wotlkbuddy.horde.hunt_terrain import HuntTerrain
 
 class RampMesh:
     def find_path(self,map_id,start,end):
-        # The ramp begins behind the player, then rises toward the tower.
+        # Once on the ramp's top, the route is direct.
+        if start.z>=4:
+            return (start,end)
         return (start,Vec3(-8,0,0),Vec3(-8,12,4),Vec3(4,12,6),end)
 
     def segment_clear(self,map_id,start,end):
