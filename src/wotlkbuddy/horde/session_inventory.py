@@ -33,11 +33,11 @@ class SessionInventory:
                 self.report['equipped_item_ids'] = upgraded
 
     def ensure_reward_space(self, *, quest_profile, profiles_root, pid, cap,
-                            driver, nav, db, location, hud, set_native_status, log):
+                            driver, nav, db, location, hud, set_native_status, log, force_sale=False):
         """Reserve bag space using the existing verified merchant policy."""
         state, _ = location()
         minimum = max(2, quest_profile.min_free_bag_slots + 1)
-        if state.resources.free_bag_slots >= minimum:
+        if not force_sale and state.resources.free_bag_slots >= minimum:
             return None
         hud.set(goal='Free bag space for quest rewards',
                 action='Finding safe non-quest items to sell')
@@ -45,7 +45,7 @@ class SessionInventory:
         sold = free_bag_space(
             profile=quest_profile, profiles_root=profiles_root,
             pid=pid, capture=cap, driver=driver, nav=nav, spawns=db,
-            min_free_slots=minimum, log=log)
+            min_free_slots=minimum, force_sale=force_sale, log=log)
         return self.record_sale(sold)
 
 
