@@ -20,8 +20,8 @@ def test_corpse_height_and_range_are_reported_separately():
                  observe=lambda:(state,where),log=logs.append)
     assert not encounter_loot.approach_corpse(state,where,Vec3(27,0,6),28,**options)[2]
     assert 'height difference +6.0y' in logs[-1]
-    assert not encounter_loot.approach_corpse(state,where,Vec3(40,0,0),40,**options)[2]
-    assert 'exceeds 35y' in logs[-1]
+    assert not encounter_loot.approach_corpse(state,where,Vec3(44,0,0),44,**options)[2]
+    assert 'exceeds 40y' in logs[-1]
 
 
 def test_ranged_corpse_can_be_approached_from_27_yards(monkeypatch):
