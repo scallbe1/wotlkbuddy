@@ -4,7 +4,7 @@ import pytest
 
 from wotlkbuddy.live.transport_animation import PhaseEstimate
 from wotlkbuddy.live.transport_board import (
-    landing_aligned, deck_position, at_center, crossing_seconds, board_window,
+    landing_aligned, approach_corridor, deck_position, at_center, crossing_seconds, board_window,
 )
 
 
@@ -36,3 +36,20 @@ def test_boarding_window_uses_live_lower_trace():
     assert not board_window('lower', 'open', phase, age_ms=251, crossing_ms=2700)
     assert not board_window('lower', 'open', PhaseEstimate(5500, 367),
                             age_ms=100, crossing_ms=2700)
+
+
+def test_measured_lower_calibration_pose_and_corridor():
+    approach = pos(1595.6241455078125, 310.6530456542969,
+                   -41.423553466796875, 4.791058540344238)
+    assert landing_aligned(approach, 'lower')
+    assert approach_corridor(approach, 'lower')
+    assert not landing_aligned(pos(approach.x, 311.1, approach.z,
+                                   approach.facing_rad), 'lower')
+    assert not approach_corridor(pos(approach.x, 311.6, approach.z,
+                                     approach.facing_rad), 'lower')
+    duration = crossing_seconds(approach, 'lower')
+    assert duration == pytest.approx(3.0932922363)
+    assert board_window('lower', 'open', PhaseEstimate(2700, 367),
+                        age_ms=75, crossing_ms=duration*1000)
+    assert not board_window('lower', 'open', PhaseEstimate(2700, 500),
+                            age_ms=75, crossing_ms=duration*1000)
