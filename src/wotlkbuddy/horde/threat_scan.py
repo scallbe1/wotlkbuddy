@@ -48,6 +48,35 @@ def distance_to_corridor(point: Vec3, start: Vec3,
     return best
 
 
+def acquire_corridor_target(state, chosen_guid, chosen_entry, *, awareness, candidates, driver, fresh, max_targets, pack_positions, log):
+    from wotlkbuddy.horde.hunt_routes import remember_pack
+    from time import monotonic
+    # Reacquire the exact GUID after cycling: never select by ambiguous name.
+    if state.player.target_guid!=chosen_guid:
+        if awareness is not None:
+            state=awareness.acquire(state,chosen_guid,chosen_entry)
+            if state.player.in_combat:
+                return state,chosen_guid,chosen_entry
+            if state.player.target_guid!=chosen_guid:
+                alternative=reacquired_corridor_candidate(state,candidates)
+                if alternative is None:
+                    remember_pack(driver,pack_positions,monotonic())
+                    raise LiveControlError('Unsafe encounter: could not acquire exact discovered hostile GUID')
+                distance,chosen_guid,chosen_entry=alternative
+                log(f'Using alternate verified corridor enemy {chosen_entry} {chosen_guid}')
+        else:
+            for _ in range(max_targets+2):
+                driver.chat('/targetenemy')
+                state=fresh(state)
+                if state.player.in_combat:
+                    return state,chosen_guid,chosen_entry
+                if state.player.target_guid==chosen_guid:
+                    break
+            else:
+                raise LiveControlError('Could not reselect exact scanned hostile GUID')
+    return state,chosen_guid,chosen_entry
+
+
 def scan_and_clear_hostiles(
     *, initial: ClientTelemetry, player_position: WorldPosition,
     path_ahead: Sequence[Vec3],
@@ -269,29 +298,9 @@ def scan_and_clear_hostiles(
     # Prefer a ranged opening, not the nearest melee-range enemy.
     candidates.sort(key=(lambda row: (0,row[0]) if row[0]<=20 else (1,abs(row[0]-32))) if awareness is not None else None)
     distance, chosen_guid, chosen_entry=candidates[0]
-    # Reacquire the exact GUID after cycling: never select by ambiguous name.
-    if state.player.target_guid!=chosen_guid:
-        if awareness is not None:
-            state=awareness.acquire(state,chosen_guid,chosen_entry)
-            if state.player.in_combat:
-                return defend(state)
-            if state.player.target_guid!=chosen_guid:
-                alternative=reacquired_corridor_candidate(state,candidates)
-                if alternative is None:
-                    remember_pack(driver,pack_positions,monotonic())
-                    raise LiveControlError('Unsafe encounter: could not acquire exact discovered hostile GUID')
-                distance,chosen_guid,chosen_entry=alternative
-                log(f'Using alternate verified corridor enemy {chosen_entry} {chosen_guid}')
-        else:
-            for _ in range(max_targets+2):
-                driver.chat('/targetenemy')
-                state=fresh(state)
-                if state.player.in_combat:
-                    return defend(state)
-                if state.player.target_guid==chosen_guid:
-                    break
-            else:
-                raise LiveControlError('Could not reselect exact scanned hostile GUID')
+    state,chosen_guid,chosen_entry=acquire_corridor_target(state,chosen_guid,chosen_entry,awareness=awareness,candidates=candidates,driver=driver,fresh=fresh,max_targets=max_targets,pack_positions=pack_positions,log=log)
+    if state.player.in_combat:
+        return defend(state)
     target=state.combat_target
     if (not target or target.entry_id!=chosen_entry or target.dead or
             not target.attackable or target.reaction is None or
