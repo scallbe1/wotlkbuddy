@@ -188,3 +188,45 @@ def test_descent_recorded_opening_signature_synchronizes():
             ready = True
     assert tracker.locked
     assert ready
+
+
+def test_lower_ascent_recurring_signature_is_pose_specific():
+    from types import SimpleNamespace
+    from wotlkbuddy.live.transport_door import (
+        lower_ascent_view, classify_lower_ascent_scores,
+        plausible_lower_ascent_transition, classify_lower_patch_scores,
+    )
+
+    pose = SimpleNamespace(map_id=0, x=1595.635986328125,
+                           y=310.557861328125, z=-41.42379379272461,
+                           facing_rad=4.800477027893066)
+    assert lower_ascent_view(pose)
+    pose.facing_rad += .05
+    assert not lower_ascent_view(pose)
+    closed = scores(16.44, 4.33, 2.14, 1.48)
+    opened = scores(25.49, 15.72, 2.14, 1.48)
+    midpoint = scores(24.75, 15.09, 2.14, 1.48)
+    assert classify_lower_patch_scores(opened) == 'unknown'
+    assert classify_lower_ascent_scores(opened) == 'open'
+    assert classify_lower_ascent_scores(closed) == 'closed'
+    assert classify_lower_ascent_scores(midpoint) == 'unknown'
+    assert plausible_lower_ascent_transition(midpoint)
+    assert classify_lower_ascent_scores(scores(25.49, 15.72, 5, 1.48)) == 'unknown'
+
+
+def test_lower_ascent_profile_synchronizes_at_recorded_opening_interval():
+    from wotlkbuddy.live.transport_door import classify_lower_ascent_scores
+    from wotlkbuddy.live.transport_board import board_window
+
+    tracker = OpeningTracker(floor='lower')
+    closed = scores(16.44, 4.33, 2.14, 1.48)
+    opened = scores(25.49, 15.72, 2.14, 1.48)
+    ready = False
+    for t in range(0, 22000, 100):
+        state = classify_lower_ascent_scores(
+            opened if 4100 <= t < 9000 or t >= 20700 else closed)
+        phase = tracker.update(state, t, 25)
+        if board_window('lower', state, phase, age_ms=75, crossing_ms=3080):
+            ready = True
+    assert tracker.locked
+    assert ready
