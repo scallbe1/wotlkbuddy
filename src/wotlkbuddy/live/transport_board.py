@@ -151,23 +151,23 @@ def _run_collision_trial(args, keyboard, pid, start, owner, grab, guard, emit):
                  read_position=lambda: observe_world_position(memory, expected_guid=owner))
 
 
-def _hybrid_board_window(*, read_position, start, grab, guard, owner, emit, deadline):
+def _hybrid_board_window(*, read_position, start, grab, guard, owner, emit, deadline, floor='lower'):
     """Reacquire the live door phase after every return to the landing."""
-    tracker = OpeningTracker(floor='lower')
+    tracker = OpeningTracker(floor=floor)
     began = time.monotonic()
     while time.monotonic() < deadline:
         frame, snap, captured, capture_error = grab()
         guard(snap, owner)
         pos = read_position()
-        if not landing_aligned(pos, 'lower') or pos.position.distance_to(start.position) > .35:
+        if not landing_aligned(pos, floor) or pos.position.distance_to(start.position) > .35:
             emit('approach_changed', **pos.to_dict())
             return None
         rgb, size = reduce_rgb(frame.rgb, frame.width, frame.height)
-        state, errors = classify_frame(rgb, *size, floor='lower')
+        state, errors = classify_frame(rgb, *size, floor=floor)
         phase = tracker.update(state, captured*1000, capture_error,
-                               transition=plausible_transition(errors, floor='lower'))
-        budget = crossing_seconds(pos, 'lower')
-        ready = board_window('lower', state, phase,
+                               transition=plausible_transition(errors, floor=floor))
+        budget = crossing_seconds(pos, floor)
+        ready = board_window(floor, state, phase,
                              age_ms=(time.monotonic()-captured)*1000,
                              crossing_ms=budget*1000)
         emit('wait', door=state, elapsed_ms=round((captured-began)*1000, 2),
@@ -177,7 +177,7 @@ def _hybrid_board_window(*, read_position, start, grab, guard, owner, emit, dead
              crossing_seconds=round(budget, 3), ready=ready)
         if ready:
             guard(snap, owner)
-            if board_window('lower', state, phase,
+            if board_window(floor, state, phase,
                             age_ms=(time.monotonic()-captured)*1000,
                             crossing_ms=budget*1000):
                 return pos, phase, captured, budget
@@ -257,6 +257,69 @@ def _recovering_ride(args, keyboard, pid, start, owner, grab, guard, emit):
     emit('boarding_attempts_exhausted')
 
 
+def _descending_ride(args, keyboard, pid, start, owner, grab, guard, emit):
+    """Use the same verified upper-door boarding and mirrored deck exit."""
+    from wotlkbuddy.game.win32 import ProcessMemory
+    from wotlkbuddy.live.world_position import observe_world_position
+    from wotlkbuddy.live.transport_collision import route_region, traverse
+
+    region = route_region(start, 'upper')
+    aligned = landing_aligned(start, 'upper')
+    emit('approach', **start.to_dict(), aligned=aligned, mode='descending_ride')
+    if not aligned and region not in ('deck', 'lower'):
+        emit('reposition_required', floor='upper', landing=LANDINGS['upper'], center_x=CENTER_X)
+        return
+    if not args.enable_input:
+        emit('descending_ride_dry_run', **start.to_dict())
+        return
+    deadline = time.monotonic()+args.seconds
+    with ProcessMemory(pid, writable=False) as memory:
+        def read_position():
+            return observe_world_position(memory, expected_guid=owner)
+
+        if aligned:
+            window = _hybrid_board_window(
+                read_position=read_position, start=start, grab=grab, guard=guard,
+                owner=owner, emit=emit, deadline=deadline, floor='upper')
+            if window is None:
+                return
+            pos, phase, captured, budget = window
+            result, pos, boarded = _execute_boarding(
+                keyboard=keyboard, memory=memory, owner=owner, floor='upper',
+                budget=budget, pos=pos, grab=grab, guard=guard)
+            emit(result, **pos.to_dict(), transport_relative=boarded)
+            if route_region(pos, 'upper') not in ('deck', 'lower'):
+                emit('boarding_recovery_unavailable', **pos.to_dict())
+                return
+            # A fresh boarding has a phase reference. Wait near the deck
+            # centre for the nominal lower opening before attempting the exit.
+            if route_region(pos, 'upper') == 'deck':
+                from wotlkbuddy.live.transport_exit import projected_phase
+                while time.monotonic() < deadline:
+                    _, snap, _, _ = grab()
+                    guard(snap, owner)
+                    pos = read_position()
+                    if route_region(pos, 'upper') != 'deck':
+                        emit('unexpected_ride_position', **pos.to_dict())
+                        return
+                    forecast = projected_phase(phase, (time.monotonic()-captured)*1000)
+                    if forecast is None:
+                        emit('exit_window_expired', **pos.to_dict())
+                        return
+                    crossing = (11.5+pos.x)/7+.65
+                    if nominal_open_window('lower', forecast, crossing_ms=crossing*1000,
+                                           margin_ms=350):
+                        break
+                    time.sleep(.035)
+                else:
+                    emit('exit_window_expired', **pos.to_dict())
+                    return
+        traverse(keyboard=keyboard, read_position=read_position, grab=grab,
+                 guard=guard, owner=owner, emit=emit,
+                 seconds=max(0, deadline-time.monotonic()), resume_attached=True,
+                 source_floor='upper')
+
+
 def trial_board(args):
     import mss
     from wotlkbuddy.game.win32 import ProcessMemory
@@ -268,8 +331,6 @@ def trial_board(args):
             or not 20 <= args.seconds <= 120):
         raise ValueError('Board trial: monitor >=1, countdown 0..20, seconds 20..120')
     floor = args.floor
-    if getattr(args, 'ride_through', False) and floor != 'lower':
-        raise ValueError('Ride-through trial currently supports lower-to-upper only')
     if getattr(args, 'collision_guided', False) and (floor != 'lower' or not args.ride_through):
         raise ValueError('Collision-guided trial requires --floor lower --ride-through')
     keyboard = WindowsKeyboard()
@@ -311,8 +372,9 @@ def trial_board(args):
         if getattr(args, 'collision_guided', False):
             _run_collision_trial(args, keyboard, pid, start, owner, grab, guard, emit)
             return
-        if floor == 'lower' and getattr(args, 'ride_through', False):
-            _recovering_ride(args, keyboard, pid, start, owner, grab, guard, emit)
+        if getattr(args, 'ride_through', False):
+            ride = _recovering_ride if floor == 'lower' else _descending_ride
+            ride(args, keyboard, pid, start, owner, grab, guard, emit)
             return
         emit('approach', **start.to_dict(), aligned=landing_aligned(start, floor))
         start = _prepare_approach(args, keyboard, pid, start, owner, grab, guard, emit)
