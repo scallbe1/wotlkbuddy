@@ -55,6 +55,8 @@ def execute_waypoint(state, waypoint, *, index, waypoint_count, arrival_yards,
             if abs(delta_actual) < 0.035 or delta_actual * delta < -0.025:
                 raise LiveControlError('Turn key did not rotate toward waypoint')
             if _distance_xy(before.position, released[1].position) > 2:
+                if ghost_only and recover_collision('terrain slide during ghost turn'):
+                    return True
                 raise LiveControlError('Unexpected player displacement during turn')
         else:
             # Smooth, distance-dependent forward holds reduce the
