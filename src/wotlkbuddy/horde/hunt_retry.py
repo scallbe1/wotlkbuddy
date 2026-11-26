@@ -142,6 +142,27 @@ def tactical_navigate(driver,navigate,state,destination,path,kind):
         driver.hunt_travel_kind=prior
 
 
+def search_remote_hunt_alternative(*,routes,world,nearby,hazards,nav,supervise,
+                                   capture,guard,clear_remaining_aggro):
+    """Search remaining staging locations under the same live guard."""
+    try:
+        candidates=[p for p in nearby if routes.recently_visited.get((round(p.x),round(p.y),round(p.z)),0)<2][:6]
+        alternatives=alternate_hunt_routes(nav,world.map_id,world.position,candidates,hazards,
+            routes.recently_visited,excluded_staging=routes.staging_visited,guard=supervise)
+        supervise()
+        if alternatives:
+            return alternatives[0],False
+    except RouteCombatInterrupted:
+        current=capture()
+        guard(current)
+        if current.player.in_combat:
+            clear_remaining_aggro(current)
+        return None,True
+    # An exhaustive search from the same position will not improve by
+    # blacklisting one remote spawn at a time. Refresh live patrols instead.
+    raise EncounterRouteUnavailable('No verified alternate corridor; reobserve patrols before retry')
+
+
 def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
                           nav, capture, guard, world_position, pid,
                           clear_remaining_aggro, navigate, log):
@@ -252,22 +273,9 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
                 update('planning')
         except (OSError,ValueError,RuntimeError,TimeoutError):
             continue
-    try:
-        candidates=[p for p in nearby if routes.recently_visited.get((round(p.x),round(p.y),round(p.z)),0)<2][:6]
-        alternatives=alternate_hunt_routes(nav,world.map_id,world.position,candidates,hazards,
-            routes.recently_visited,excluded_staging=routes.staging_visited,guard=supervise)
-        supervise()
-        if alternatives:
-            return alternatives[0],False
-    except RouteCombatInterrupted:
-        current=capture()
-        guard(current)
-        if current.player.in_combat:
-            clear_remaining_aggro(current)
-        return None,True
-    # An exhaustive search from the same position will not improve by
-    # blacklisting one remote spawn at a time. Refresh live patrols instead.
-    raise EncounterRouteUnavailable('No verified alternate corridor; reobserve patrols before retry')
+    return search_remote_hunt_alternative(routes=routes,world=world,nearby=nearby,
+        hazards=hazards,nav=nav,supervise=supervise,capture=capture,guard=guard,
+        clear_remaining_aggro=clear_remaining_aggro)
 
 
 def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_camp,
