@@ -30,6 +30,7 @@ class LinkedFight:
     rule: ControlRule
     expires: float
     primary_dead: bool = False
+    prior_kills: frozenset = frozenset()
 
 
 def exact_hostile(state, enemy):
@@ -129,7 +130,8 @@ def cast_control(state, primary, escort, rule, plan, denied, *, driver, fresh, l
         if state.player.target_guid!=escort.guid:
             break
         if rule.aura in state.target_auras:
-            driver.linked_fight=LinkedFight(primary,escort,rule,monotonic()+rule.duration-2)
+            driver.linked_fight=LinkedFight(primary,escort,rule,monotonic()+rule.duration+2,
+                prior_kills=frozenset(getattr(state,'recent_kills',())))
             log(f'Crowd control confirmed on {escort.guid}; priority target {primary.guid}')
             state=select_exact(state,primary,driver=driver,fresh=fresh)
             if exact_hostile(state,primary):
@@ -149,7 +151,8 @@ def linked_focus(state, *, driver, fresh, log):
         return state,False
     if (state.player.target_guid==fight.primary.guid and state.combat_target
             and (state.combat_target.dead or state.combat_target.health==0)) or any(
-                g==fight.primary.guid for _,g,_ in getattr(state,'recent_kills',())):
+                g==fight.primary.guid and (serial,g,name) not in fight.prior_kills
+                for serial,g,name in getattr(state,'recent_kills',())):
         fight.primary_dead=True
     if not fight.primary_dead:
         if not exact_hostile(state,fight.primary):
@@ -159,11 +162,25 @@ def linked_focus(state, *, driver, fresh, log):
         # Do not authorize damage on a still-controlled escort. Another
         # genuinely attacking enemy can be handled by ordinary defense.
         return state,False
-    if state.player.target_guid==fight.secondary.guid and exact_hostile(state,fight.secondary):
+    # Do not switch away from a third enemy that is actually attacking.
+    t=state.combat_target
+    if (t and t.attacks_player is True and not t.dead and
+            state.player.target_guid!=fight.secondary.guid):
+        return state,False
+    if not exact_hostile(state,fight.secondary):
+        state=select_exact(state,fight.secondary,driver=driver,fresh=fresh,max_tabs=3)
+    if exact_hostile(state,fight.secondary):
         log(f'Priority enemy defeated; releasing {fight.rule.spell} escort for cleanup')
-        driver.linked_fight=None
         return state,True
     return state,False
+
+
+def linked_target_authorized(state,driver):
+    fight=getattr(driver,'linked_fight',None)
+    if not isinstance(fight,LinkedFight):
+        return False
+    enemy=fight.secondary if fight.primary_dead else fight.primary
+    return exact_hostile(state,enemy)
 
 
 def protected_control_target(state, driver):
