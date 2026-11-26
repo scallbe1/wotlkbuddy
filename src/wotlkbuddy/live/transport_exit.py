@@ -7,7 +7,7 @@ Explicit opt-in only, no quest integration, and no second-cycle retry.
 from math import atan2, cos, sin, isfinite
 import time
 
-from wotlkbuddy.live.transport_animation import PhaseEstimate, nominal_open_window
+from wotlkbuddy.live.transport_animation import PERIOD_MS, PhaseEstimate, nominal_open_window
 
 MAX_FORECAST_MS = 12000
 UPPER_EXIT_Y = 280.8
@@ -24,7 +24,7 @@ def projected_phase(phase, age_ms):
 
 def exit_deck_lane(pos):
     heading = abs(atan2(sin(pos.facing_rad), cos(pos.facing_rad)))
-    return (pos.map_id == 0 and -3 <= pos.x <= 10.5 and abs(pos.y) <= 1.7
+    return (pos.map_id == 0 and -3 <= pos.x <= 10.5 and abs(pos.y) <= 2.2
             and abs(pos.z+.464) <= .35 and heading <= .20)
 
 
@@ -36,7 +36,7 @@ def upper_exit_corridor(pos):
 
 
 def exit_budget_seconds(pos):
-    if not exit_deck_lane(pos) or abs(pos.x) > 2:
+    if not exit_deck_lane(pos) or abs(pos.x) > 2 or abs(pos.y) > 1.7:
         raise ValueError('Exit requires a centred deck position')
     # Local +X leads toward the upper landing; stop beyond the observed lip.
     return (11.5-pos.x)/7+.45
@@ -107,14 +107,14 @@ def ride_and_exit(*, keyboard, memory, owner, phase, captured, pos, grab, guard,
         _, snap, _, _ = grab()
         guard(snap, owner)
         pos = read_position()
-        if not exit_deck_lane(pos) or abs(pos.x) > 2:
+        if not exit_deck_lane(pos) or abs(pos.x) > 2 or abs(pos.y) > 1.7:
             emit('unexpected_ride_position', **pos.to_dict())
             return
         budget = exit_budget_seconds(pos)
         age = (time.monotonic()-captured)*1000
         forecast = projected_phase(phase, age)
         ready = exit_window(phase, age, budget)
-        emit('ride_wait', phase_ms=round(forecast.phase_ms%16667,2) if forecast else None,
+        emit('ride_wait', phase_ms=round(forecast.phase_ms%PERIOD_MS,2) if forecast else None,
              uncertainty_ms=round(forecast.uncertainty_ms,2) if forecast else None,
              ready=ready)
         if ready:
