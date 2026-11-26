@@ -3,6 +3,7 @@ from math import atan2, cos, sin, pi, hypot
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import validate_nav_path
+from wotlkbuddy.horde.route_diagnostics import DetourDiagnostics, planning_status, xyz
 
 
 def recoverable_hunt_failure(reason):
@@ -122,31 +123,45 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
     A shortest-path retry is insufficient: explicitly search alternative
     waypoints around the blocking pack. No unchecked straight-line shortcuts.
     """
+    diagnostics=DetourDiagnostics(log)
+    log(f'Navigation planning: detour from {xyz(origin)} to {xyz(destination)}; {len(hazards)} remembered threat positions, {len(rejected)} rejected corridors; movement paused')
     def route(a,b):
         guard()
         try:
-            raw=nav.find_path(map_id,a,b)
-        except (OSError,ValueError,RuntimeError,TimeoutError):
+            with planning_status(f'navmesh path {xyz(a)} -> {xyz(b)}',log):
+                raw=nav.find_path(map_id,a,b)
+        except (OSError,ValueError,RuntimeError,TimeoutError) as exc:
             guard()
+            diagnostics.reject(f'path query error: {type(exc).__name__}')
             return None
         guard()
         try:
             if not raw or raw[0].distance_to(a)>3 or raw[-1].distance_to(b)>3 or abs(raw[0].z-a.z)>2.5:
+                diagnostics.reject('partial path or start floor mismatch')
                 return None
             return validate_nav_path(raw,a,b,max_step=18.,max_distance=max_distance)
-        except (OSError,ValueError,RuntimeError,TimeoutError):
+        except (OSError,ValueError,RuntimeError,TimeoutError) as exc:
+            diagnostics.reject(f'path validation: {type(exc).__name__}')
             return None
 
     def acceptable(path):
-        if not path or not path_avoids_pack(path,hazards,radius=avoid_radius):
+        if not path:
+            return False
+        if not path_avoids_pack(path,hazards,radius=avoid_radius):
+            diagnostics.reject('hostile clearance')
             return False
         # Never retry the same failed initial corridor from the same location.
         if any(path[min(1,len(path)-1)].distance_to(p)<3 for p in rejected):
+            diagnostics.reject('previously rejected corridor')
             return False
-        return sum(a.distance_to(b) for a,b in zip(path,path[1:]))<=max_distance
+        within=sum(a.distance_to(b) for a,b in zip(path,path[1:]))<=max_distance
+        if not within:
+            diagnostics.reject('route length budget')
+        return within
 
     direct=route(origin,destination)
     if acceptable(direct):
+        diagnostics.summary(1)
         return direct
     local=sorted((h for h in hazards if h.distance_to(origin)<=100),
                  key=lambda h:h.distance_to(origin))[:3]
@@ -158,10 +173,13 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
                 guard()
                 angle=heading+offset
                 desired=Vec3(h.x+radius*cos(angle),h.y+radius*sin(angle),h.z)
+                diagnostics.candidate(desired,radius)
                 try:
-                    point=nav.nearest_point(map_id,desired)
+                    with planning_status(f'navmesh nearest point {xyz(desired)}',log):
+                        point=nav.nearest_point(map_id,desired)
                     guard()
                     if point is None or point.distance_to(desired)>6 or point.distance_to(origin)<5:
+                        diagnostics.reject('staging point not reachable or too close')
                         continue
                     first=route(origin,point)
                     if not acceptable(first):
@@ -177,12 +195,14 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
                             break
                 except LiveControlError:
                     raise
-                except (OSError,ValueError,RuntimeError,TimeoutError):
+                except (OSError,ValueError,RuntimeError,TimeoutError) as exc:
+                    diagnostics.reject(f'candidate query error: {type(exc).__name__}')
                     continue
             if ranked:
                 break
         if ranked:
             break
+    diagnostics.summary(len(ranked))
     if ranked:
         length,path,point=min(ranked,key=lambda item:item[0])
         log(f'Pack detour verified via ({point.x:.1f},{point.y:.1f},{point.z:.1f}); {length:.1f}y route')
