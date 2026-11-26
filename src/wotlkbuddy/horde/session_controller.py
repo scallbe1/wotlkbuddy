@@ -35,6 +35,7 @@ class QuestSession:
         return time.monotonic() - self.start >= self.args.auto_minutes * 60
 
     def phase(self, mode: str) -> dict:
+        self.args._hunt_memory = self.hunt_memory
         child = argparse.Namespace(**vars(self.args))
         child.only = mode
         child._continuous_training_check = mode == 'objectives'

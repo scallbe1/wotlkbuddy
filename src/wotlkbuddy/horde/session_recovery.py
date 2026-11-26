@@ -6,6 +6,37 @@ import sys
 from wotlkbuddy.live.console_log import log_console
 
 
+def settle_live_encounter(args,first,cap):
+    """Resume verified combat with the same character's learned control."""
+    from wotlkbuddy.horde.interaction import KeyboardQuestInput
+    from wotlkbuddy.live.world_position import verified_live_position, verified_target_position
+    from wotlkbuddy.horde.ranged_pull import face_target_in_place
+    from wotlkbuddy.horde.defense import defend_against_aggro
+    from wotlkbuddy.horde.aggro_recovery import settle_aggro
+    # The phase may have stopped before the final incoming hit. Keep
+    # supervising a verified live encounter instead of exiting to shell.
+    recovery_driver=KeyboardQuestInput(interact_key=args.interact_key)
+    recovery_driver.native_hud_enabled=not getattr(args,'no_hud',False)
+    from wotlkbuddy.horde.hunt_terrain import attach_hunt_memory
+    from wotlkbuddy.horde.combat_awareness import bind_combat_awareness
+    attach_hunt_memory(recovery_driver,first.player.guid,getattr(args,'_hunt_memory',None))
+    # Resolve once from the actual GUID-matched client, even when --pid
+    # was omitted. Every position callback must use the same integer PID.
+    recovery_pid,_=verified_live_position(first,pid=getattr(args,'pid',None))
+    print(f'Aggro recovery: verified WoW PID {recovery_pid}',file=sys.stderr,flush=True)
+    recovery_driver.face_combat_target=lambda state: face_target_in_place(
+        state,capture=cap,driver=recovery_driver,
+        player_position=lambda s:verified_live_position(s,pid=recovery_pid)[1],
+        target_position=lambda s:verified_target_position(s,pid=recovery_pid),
+        log=log_console)
+    bind_combat_awareness(recovery_driver,pid=recovery_pid,cap=cap,log=log_console)
+    log_console('Quest phase interrupted by unresolved aggro; keeping control until combat clears or death is verified')
+    first=settle_aggro(initial=first,capture=cap,driver=recovery_driver,
+        defend=lambda state:defend_against_aggro(initial=state,capture=cap,
+            driver=recovery_driver,log=log_console),log=log_console)
+    return first,recovery_pid
+
+
 def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dict:
     from wotlkbuddy.horde.death_recovery import recover_corpse
     from wotlkbuddy.live.lua_corpse_position import resolve_lua_corpse
@@ -14,7 +45,6 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
     from wotlkbuddy.live.control import LiveControlError
     from wotlkbuddy.live.world_position import verified_live_position, verified_nearby_creatures, fast_ghost_position
     from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase, resolve_creature_spawns
-    from wotlkbuddy.horde.defense import defend_against_aggro
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.resurrection_site import nearby_threats, plan_rest_site
     from wotlkbuddy.horde.ghost_scout import GhostScout
@@ -34,33 +64,16 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
         if original_error is not None:
             raise original_error
         raise LiveControlError('Recovery requires complete dead-character telemetry')
-    from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error,settle_aggro
+    from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error
     recovery_pid=getattr(args,'pid',None)
     if not first.player.dead:
         if original_error is None or not recoverable_aggro_error(original_error):
             if original_error is not None:
                 raise original_error
             raise LiveControlError('Recovery requires complete dead-character telemetry')
-        # The phase may have stopped before the final incoming hit. Keep
-        # supervising a verified live encounter instead of exiting to shell.
-        recovery_driver=KeyboardQuestInput(interact_key=args.interact_key)
-        recovery_driver.native_hud_enabled=not getattr(args,'no_hud',False)
-        # Resolve once from the actual GUID-matched client, even when --pid
-        # was omitted. Every position callback must use the same integer PID.
-        recovery_pid,_=verified_live_position(first,pid=getattr(args,'pid',None))
-        print(f'Aggro recovery: verified WoW PID {recovery_pid}',file=sys.stderr,flush=True)
-        recovery_driver.face_combat_target=lambda state: face_target_in_place(
-            state,capture=cap,driver=recovery_driver,
-            player_position=lambda s:verified_live_position(s,pid=recovery_pid)[1],
-            target_position=lambda s:verified_target_position(s,pid=recovery_pid),
-            log=log_console)
-        log_recovery=log_console
-        log_recovery('Quest phase interrupted by unresolved aggro; keeping control until combat clears or death is verified')
-        first=settle_aggro(initial=first,capture=cap,driver=recovery_driver,
-            defend=lambda state:defend_against_aggro(initial=state,capture=cap,
-                driver=recovery_driver,log=log_recovery),log=log_recovery)
+        first,recovery_pid=settle_live_encounter(args,first,cap)
         if not first.player.dead:
-            log_recovery('Combat cleared alive; refreshing quest and resource state')
+            log_console('Combat cleared alive; refreshing quest and resource state')
             return {'status':'combat_cleared','character_guid':first.player.guid}
     print('Verified death; starting corpse recovery',file=sys.stderr,flush=True)
     if not args.nav_dll or not args.python32:
