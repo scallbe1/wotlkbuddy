@@ -49,6 +49,38 @@ def verified_npc_route(raw,start,dest, *, map_id=None):
         raise
 
 
+def _wait_for_patrol_route(*, driver, nav, map_id, dest, rejected, guard_retry,
+                           supervise, sleep, log):
+    """Refresh observed patrol positions while searching for a safe detour."""
+    raw=None
+    awareness=getattr(driver,'awareness',None)
+    # Patrols are mobile. Wait briefly and refresh exact live
+    # creature positions rather than blindly retry the route.
+    if awareness is not None:
+        log('No immediate safe detour; watching patrols for up to 12 seconds')
+        for _ in range(6):
+            guard_retry()
+            for _tick in range(10):
+                sleep(.2)
+                state,measured=supervise()
+            from wotlkbuddy.live.world_position import passive_creature
+            live=[m.position for m in awareness.read(state,measured.position)
+                  if not passive_creature(m) and abs(m.position.z-measured.z)<=8]
+            if not live:
+                # Fresh stationary threat scan still runs before moving.
+                raw=nav.find_path(map_id,measured.position,dest)
+                if raw and abs(raw[0].z-measured.z)<=2.5:
+                    raw=verified_npc_route(raw,measured.position,dest,map_id=map_id)
+                    break
+                raw=None
+            else:
+                raw=detour_around_encounters(nav,map_id,measured.position,dest,live,
+                    rejected=rejected,guard=guard_retry,log=log)
+                if raw:
+                    break
+    return raw
+
+
 def visit_npc(
     *, npc_name: str, npc_id: int, pid: int, capture: Callable[[], ClientTelemetry],
     driver, nav, spawns, radius: float = 160,
@@ -218,31 +250,10 @@ def visit_npc(
                                                     rejected=rejected,guard=guard_retry,log=log)
                         supervise()
                         if raw is None:
-                            awareness=getattr(driver,'awareness',None)
-                            # Patrols are mobile. Wait briefly and refresh exact live
-                            # creature positions rather than blindly retry the route.
-                            if awareness is not None:
-                                log('No immediate safe detour; watching patrols for up to 12 seconds')
-                                for _ in range(6):
-                                    guard_retry()
-                                    for _tick in range(10):
-                                        sleep(.2)
-                                        state,measured=supervise()
-                                    from wotlkbuddy.live.world_position import passive_creature
-                                    live=[m.position for m in awareness.read(state,measured.position)
-                                          if not passive_creature(m) and abs(m.position.z-measured.z)<=8]
-                                    if not live:
-                                        # Fresh stationary threat scan still runs before moving.
-                                        raw=nav.find_path(world.map_id,measured.position,dest)
-                                        if raw and abs(raw[0].z-measured.z)<=2.5:
-                                            raw=verified_npc_route(raw,measured.position,dest,map_id=world.map_id)
-                                            break
-                                        raw=None
-                                    else:
-                                        raw=detour_around_encounters(nav,world.map_id,measured.position,dest,live,
-                                            rejected=rejected,guard=guard_retry,log=log)
-                                        if raw:
-                                            break
+                            raw=_wait_for_patrol_route(
+                                driver=driver,nav=nav,map_id=world.map_id,dest=dest,
+                                rejected=rejected,guard_retry=guard_retry,
+                                supervise=supervise,sleep=sleep,log=log)
                             supervise()
                             if raw is None:
                                 raise EncounterRouteUnavailable(f'NPC visit to {npc_name}: no safe detour around observed pack after patrol wait')
