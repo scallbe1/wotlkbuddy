@@ -437,7 +437,17 @@ SlashCmdList['WOTLKBUDDYBAR'] = function(message)
         if not wanted or not managedMageSpells[wanted] then return end
         for i=1,10 do
             local k,id,n=visibleBarIdentity(i)
-            if not k or (k=='spell' and n==wanted) then return end
+            if k=='spell' and n==wanted then return end
+            if not k then
+                -- An ambiguous unrelated button must not prevent placing a
+                -- learned spell into a separately verified empty button.
+                local rawKind,rawId=GetActionInfo(i)
+                if rawKind=='spell' then
+                    local dbName,bookName=auditActionIdentity(i,rawId)
+                    if (not dbName or dbName=='') and (not bookName or bookName=='') then return end
+                    if dbName==wanted or bookName==wanted then return end
+                elseif not rawKind then return end
+            end
         end
         local index, id = resolveSpellbook(wanted)
         if index>0 and id==spellId and PickupSpell and PlaceAction and ClearCursor then
