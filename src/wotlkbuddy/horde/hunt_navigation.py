@@ -10,7 +10,7 @@ from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import validate_nav_path
 
 
-def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False,
+def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approach_path=None,
                   pid, guid, quest_id, capture, driver, nav, world_position,
                   guard, fresh, travel, max_seconds, now, started, log) -> ClientTelemetry:
     """Follow Detour; retry a height mismatch once from measured live XYZ.
@@ -21,20 +21,22 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False,
     only if the failed route made meaningful progress toward the camp.
     """
     height_replans = 0
+    precise = approach_path is not None
     while True:
         _pid, world = world_position(s)
         if _pid != pid:
             raise LiveControlError('Active WoW PID changed')
         remaining_xy = hypot(world.x-dest.x, world.y-dest.y)
-        if remaining_xy < 4:
-            if abs(world.z-dest.z) > 5:
+        if remaining_xy < (1.0 if precise else 4):
+            if abs(world.z-dest.z) > (1.5 if precise else 5):
                 raise LiveControlError(
                     'Camp reached in XY but player and camp are on '
                     'different heights/floors; refusing to claim arrival')
             return s
-        path = nav.find_path(world.map_id, world.position, dest)
+        path = approach_path if approach_path is not None else nav.find_path(world.map_id, world.position, dest)
+        approach_path = None
         legs = validate_nav_path(
-            path, world.position, dest, max_step=18.0,
+            path, world.position, dest, max_step=5.0 if precise else 18.0,
             max_distance=6000 if camp_transit else 800)
         if camp_transit:
             from wotlkbuddy.horde.return_turnin import delivery_legs
@@ -65,7 +67,8 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False,
                 distance_status=getattr(driver,'set_navigation_distance',None),
                         progress=log, on_aggro=getattr(driver, 'on_aggro', None),
                         on_threat=getattr(driver, 'scan_hostiles', None),
-                        waypoint_spacing=18.0, continuous_forward=True,
+                        waypoint_spacing=5.0 if precise else 18.0, continuous_forward=not precise,
+                        arrival_yards=1.0 if precise else 1.8,
                         fast_observe=getattr(driver,'fast_travel_observe',None),
                         threat_check_yards=6.0))
         out = fresh(s)
