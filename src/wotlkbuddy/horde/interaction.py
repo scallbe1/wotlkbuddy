@@ -167,7 +167,7 @@ class KeyboardQuestInput:
             '/wbttravel clear', '/wbttravel enemies',
             '/wbttravel corpse', '/wbttravel firing', '/wbttravel deathrun',
             '/wbttravel planning', '/wbttravel retreat', '/wbttravel detour',
-            '/wbtaction clear', '/wbtaction assess', '/wbtaction range',
+            '/wbttravel activityclear', '/wbttravel assess', '/wbttravel range',
             '/run RepopMe()', '/run RetrieveCorpse()',
             '/cast Arcane Intellect', '/cast [target=player] Arcane Intellect',
             '/cast Frost Armor', '/cast Fireball', '/cast Frostbolt', '/startattack', '/stopattack', '/cast Polymorph',
@@ -258,7 +258,7 @@ class KeyboardQuestInput:
         if getattr(self,'_tactical_activity','clear')==kind:
             return
         if self.wow_is_foreground() and not self.emergency_stop_requested():
-            self.chat('/wbtaction '+kind)
+            self.chat('/wbttravel '+('activityclear' if kind=='clear' else kind))
             self._tactical_activity=kind
 
     def set_navigation_destination(self, point) -> None:
