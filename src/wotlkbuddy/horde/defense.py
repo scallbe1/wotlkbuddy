@@ -12,7 +12,7 @@ from typing import Callable
 from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
-from wotlkbuddy.combat.crowd_control import linked_focus, protected_control_target, fleeing_target, linked_target_authorized
+from wotlkbuddy.combat.crowd_control import linked_focus, protected_control_target, fleeing_target, linked_target_authorized, reactive_control
 
 
 def verified_attacker(snapshot):
@@ -104,6 +104,9 @@ def defend_against_aggro(
             target_entry = state.combat_target.entry_id
             no_damage = 0
             log(f'Defending against verified attacker {target_entry}, GUID {target_guid}')
+        state=reactive_control(state,driver=driver,fresh=fresh,log=log)
+        if state.player.target_guid!=target_guid or not state.player.in_combat:
+            continue
         face = getattr(driver, 'face_combat_target', None)
         if callable(face):
             state = face(state)
