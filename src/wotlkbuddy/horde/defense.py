@@ -74,8 +74,10 @@ def defend_against_aggro(
     readiness_waits=0
     # A global cast budget and bounded acquisition keep the encounter finite.
     # A dead, cleared, or changed target is normal while adds remain alive.
+    from wotlkbuddy.combat.consumables import emergency_heal
     for _ in range(max_casts):
         guard(state)
+        state=emergency_heal(state,driver=driver,fresh=fresh,log=log)
         if not state.player.in_combat:
             log('Incoming combat cleared; navigation may resume')
             return state
