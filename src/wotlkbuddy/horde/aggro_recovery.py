@@ -18,6 +18,7 @@ def recoverable_aggro_error(exc):
         'Aggro/combat detected during route retry',
         'Defensive fight cast limit reached',
         'Two Fireballs failed to damage verified attacker',
+        'Two Fireballs did not damage an actively attacking mob',
     ))
 
 
