@@ -91,6 +91,8 @@ def safe_sale_candidates(
             if (a.inventory_slot==16 and state.weapon_swap_safe is not True) or current is None or (a.score,a.item_level)>(current.score,current.item_level):
                 retain.add(a.item_id)
     for item in state.merchant_items:
+        if item.item_id == 3434:  # Slumber Sand: retain emergency crowd control.
+            continue
         if item.item_id in protected_item_ids or item.item_id in retain or item.quest_flag != 0 or item.locked:
             continue
         if protect_upgrades and item.equip_loc.startswith('INVTYPE_') and not state.gear_scan_complete:
@@ -130,6 +132,24 @@ def _capture_fresh(capture, first, guard, *, sleep, now, timeout=6):
     raise LiveControlError('Merchant telemetry stopped updating')
 
 
+def verify_merchant_state(s, *, guid, merchant_guid, npc_name, npc_id, driver, transaction_started):
+    """Distinguish recoverable pre-sale target loss from unsafe player state."""
+    if driver.emergency_stop_requested():
+        raise LiveControlError('Merchant interrupted by Escape')
+    if not driver.wow_is_foreground():
+        raise LiveControlError('Merchant interrupted: WoW lost foreground')
+    if (s.truncated or s.player.guid!=guid or s.player.dead or s.player.in_combat or
+            s.resources is None or s.resources.class_token.upper()!='MAGE'):
+        raise LiveControlError('Merchant player identity, combat or telemetry changed')
+    if (not merchant_guid or s.player.target_guid!=merchant_guid or
+            s.player.target_name!=npc_name or creature_entry_from_guid(merchant_guid)!=npc_id):
+        message=(f'{npc_name}: merchant target changed from {merchant_guid or "<none>"} '
+                 f'to {s.player.target_guid or "<none>"} ({s.player.target_name or "no target"})')
+        if not transaction_started and not s.merchant_open and (s.dialog is None or s.dialog.kind=='none'):
+            raise MerchantUnavailable(message+'; no transaction attempted')
+        raise LiveControlError(message+'; refusing further merchant input')
+
+
 def sell_at_verified_merchant(
     *, npc_name: str, npc_id: int, profile: HordeProfile,
     capture: Callable[[], ClientTelemetry], driver,
@@ -151,15 +171,13 @@ def sell_at_verified_merchant(
         raise LiveControlError('Player GUID missing before merchant transaction')
     protected = protected_profile_items(first,profile)
 
+    merchant_guid=first.player.target_guid
+    transaction_started=False
+
     def guard(s: ClientTelemetry):
-        if (s.truncated or s.player.guid != guid or s.player.dead or
-                s.player.in_combat or s.resources is None or
-                s.resources.class_token.upper() != 'MAGE' or
-                s.player.target_name != npc_name or
-                creature_entry_from_guid(s.player.target_guid) != npc_id or
-                driver.emergency_stop_requested() or not driver.wow_is_foreground()):
-            raise LiveControlError(
-                'Merchant target/GUID, Mage identity or WoW foreground changed')
+        verify_merchant_state(s, guid=guid, merchant_guid=merchant_guid,
+                              npc_name=npc_name,npc_id=npc_id,driver=driver,
+                              transaction_started=transaction_started)
 
     guard(first)
     s = first
@@ -209,6 +227,7 @@ def sell_at_verified_merchant(
     if not s.merchant_open:
         raise LiveControlError(f'{npc_name}: merchant window did not open')
 
+    transaction_started=True
     before_free = first.resources.free_bag_slots
     starting_money = first.resources.money_copper
     sold = []
