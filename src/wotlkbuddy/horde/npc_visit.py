@@ -10,6 +10,7 @@ from time import monotonic, sleep as real_sleep
 from typing import Callable
 
 from wotlkbuddy.horde.interaction import navigate_with_status
+from wotlkbuddy.horde.height_recovery import HeightRecovery
 from wotlkbuddy.horde.worlddata import distance_world
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
@@ -107,7 +108,7 @@ def visit_npc(
             route=path
             deadline=now()+450
             encounter_replans=0
-            height_failures=[]
+            height_recovery=HeightRecovery(world.position,dest)
             rejected=[]
             # All planning and patrol waits are supervised. An attack
             # invalidates the route search; defend now and re-anchor later.
@@ -134,12 +135,12 @@ def visit_npc(
                     state,where=supervise()
                 raw=nav.find_path(world.map_id,where.position,dest)
                 if not raw or abs(raw[0].z-where.z)>2.5:
-                    raise LiveControlError('NPC replan does not start on measured floor')
+                    raise EncounterRouteUnavailable('NPC replan does not start on measured floor')
                 return verified_npc_route(raw,where.position,dest)
             while True:
                 remaining=deadline-now()
                 if remaining<15:
-                    raise LiveControlError(f'NPC visit to {npc_name} exhausted travel time budget')
+                    raise EncounterRouteUnavailable(f'NPC visit to {npc_name} exhausted travel time budget')
                 try:
                     supervise()
                 except RouteCombatInterrupted:
@@ -177,9 +178,9 @@ def visit_npc(
                         raise EncounterRouteUnavailable(f'NPC visit to {npc_name} exhausted encounter replan budget: {reason}')
                     log(f'Encounter displacement recovery {encounter_replans}/12; retaining NPC {npc_name}')
                 else:
-                    if len(height_failures)>=3 or any(measured.position.distance_to(pos)<8 for pos in height_failures):
-                        raise LiveControlError(f'NPC visit to {npc_name} repeated height/floor mismatch: {reason}')
-                    height_failures.append(measured.position)
+                    if not height_recovery.record(measured.position):
+                        raise EncounterRouteUnavailable(f'NPC visit to {npc_name} repeated height/floor mismatch without progress: {reason}')
+                    log(f'Height recovery {height_recovery.attempts}: {height_recovery.best_remaining:.1f}y best remaining; {height_recovery.stagnant}/3 stagnant')
                 if hypot(measured.x-dest.x,measured.y-dest.y)<=3 and abs(measured.z-dest.z)<=5:
                     return result  # final exact arrival and identity guard below
                 log(f'Replanning NPC route from actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}) '
@@ -236,7 +237,7 @@ def visit_npc(
                     continue
                 raw=nav.find_path(world.map_id,measured.position,dest)
                 if not raw or abs(raw[0].z-measured.z)>2.5:
-                    raise LiveControlError('NPC replan does not start on measured floor')
+                    raise EncounterRouteUnavailable('NPC replan does not start on measured floor')
                 route=verified_npc_route(raw,measured.position,dest)
         navigate_with_status(driver,'npc',execute_visit,target=npc_name)
 
