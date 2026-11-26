@@ -10,6 +10,8 @@ from time import monotonic, sleep as real_sleep
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
+from wotlkbuddy.live.codec import TelemetryError
+
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 from wotlkbuddy.horde.resurrection_site import (
     APPROACH_DISTANCE, acceptable_site, approach_path, alternate_approach_path, clearance,
@@ -26,6 +28,39 @@ def _ghost_terrain_failure(reason):
         'Movement diverged from waypoint', 'Unexpected player displacement during turn',
         'ghost terrain slide', 'ghost movement diverged', 'no forward progress during continuous ghost'))
     return terrain_failure, partial_replan
+
+
+def wait_death_transition(*, observe, guard, predicate, seconds, now, sleep, log):
+    """Loading screens can temporarily hide or corrupt the pixel marker.
+
+    Retry observations, never resurrection/release input. A valid but
+    malformed frame, identity change, focus loss or unexpected error is fatal.
+    """
+    deadline=now()+seconds
+    missing=0
+    for _ in range(int(seconds/.5)+1):
+        if now()>=deadline:
+            break
+        guard()
+        sleep(.5)
+        guard()
+        try:
+            state,position=observe()
+        except TelemetryError as exc:
+            message=str(exc)
+            if not (message.startswith('Telemetry marker not visible or checksum invalid in 3 consecutive frames')
+                    or message.startswith('Telemetry marker not visible;')
+                    or message.startswith('Telemetry marker found but no valid checksum;')):
+                raise
+            missing+=1
+            if missing==1 or missing%5==0:
+                log('Death transition: waiting for fresh valid telemetry after loading screen; no movement or repeated input')
+            continue
+        if predicate(state,position):
+            if missing:
+                log('Death transition: telemetry restored and state verified')
+            return state,position
+    raise LiveControlError('Timed out waiting for verified death recovery transition; no further input sent')
 
 
 def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
@@ -57,16 +92,8 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
         return checked(*sample())
 
     def wait_for(predicate, seconds):
-        deadline = now() + seconds
-        for _ in range(int(seconds / .5) + 1):
-            if now() >= deadline:
-                break
-            guard()
-            sleep(.5)
-            state, position = observe()
-            if predicate(state, position):
-                return state, position
-        raise LiveControlError('Timed out waiting for verified death recovery transition')
+        return wait_death_transition(observe=observe,guard=guard,predicate=predicate,
+                                     seconds=seconds,now=now,sleep=sleep,log=log)
 
     if first.death_state.ghost:
         if known_corpse is None:
