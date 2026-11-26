@@ -389,13 +389,15 @@ def free_bag_space(
         map_id=world.map_id, role='merchant',
         profiles_root=profiles_root, radius=600)
     if not options:
-        raise LiveControlError(
+        raise EncounterRouteUnavailable(
             'Full bags: no merchant named by Horde XML and verified in '
             'CreatureSpawns.db within 600 yards')
     reason=('Explicit vendor sale' if force_sale else 'Raising training cash' if raise_cash else f'Bags low ({initial.resources.free_bag_slots} free)')
     last_error=None
     log(f'{len(options)} verified merchant candidate(s) within 600y')
-    for target in options[:8]:
+    # The catalog is bounded to the same map and 600y search radius.
+    # A rejected path must not consume all viable merchant alternatives.
+    for target in options[:24]:
         log(f'{reason}; visiting merchant {target.name} ({target.entry}), {target.distance:.1f}y from initial position; {target.source}')
         try:
             visit_npc(npc_name=target.name,npc_id=target.entry,pid=pid,capture=capture,driver=driver,
@@ -415,4 +417,5 @@ def free_bag_space(
                 log('Optional cash sale deferred; continuing with existing funds')
                 return None
             log('Trying another independently verified merchant if available')
-    raise last_error or MerchantUnavailable('No responsive verified merchant')
+    raise EncounterRouteUnavailable(
+        f'No reachable responsive merchant after {min(len(options),24)} candidates: {last_error}') from last_error
