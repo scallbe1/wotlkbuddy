@@ -79,3 +79,66 @@ def test_fleeing_enemy_must_be_exact_low_health_target():
     s=state(PRIMARY,hp=10,attacks=False,combat=True)
     assert fleeing_target(s,'primary',1662)
     assert not fleeing_target(s,'escort',1537)
+
+
+def travel_pair():
+    from wotlkbuddy.game.types import Vec3
+    primary=NS(guid=PRIMARY.guid,entry=1536,name='Scarlet Missionary',
+               level=8,classification='normal',position=Vec3(20,0,0),health=100)
+    escort=NS(guid=ESCORT.guid,entry=1537,name=ESCORT.name,
+              level=8,classification='normal',position=Vec3(22,0,0),health=100)
+    return primary,escort
+
+
+def test_turnin_corridor_can_control_pair_without_active_kill_objective():
+    from wotlkbuddy.combat.crowd_control import prepare_linked_pull
+    from wotlkbuddy.horde.threat_scan import assess_corridor_pull
+    primary,escort=travel_pair()
+    opening=state(primary)
+    opening.player.health=opening.player.max_health=162
+    opening.resources=NS(class_token='MAGE',mana=453,max_mana=453)
+    frames=iter([state(escort),state(escort),state(escort,aura=('Polymorph',),combat=True),
+                 state(primary,combat=True)])
+    actions=[]
+    awareness=NS(_fresh=lambda _:next(frames))
+    driver=NS(chat=actions.append,cast_action_spell=lambda s,i:actions.append(i),
+              target_objective_name=lambda name:actions.append(name) or True,
+              active_quest_entries=())
+    plan=PullPlan(False,(primary,escort),'linked')
+    result,allowed=assess_corridor_pull(driver,
+        lambda s,entries:prepare_linked_pull(s,plan,primary,driver=driver,
+            awareness=awareness,quest_entries=entries,log=lambda _:None),opening)
+    assert allowed.allowed and result.player.target_guid==primary.guid
+    assert actions==[escort.name,'/stopattack',118,primary.name]
+    assert driver.assessing_travel_corridor is False
+
+
+def test_unrelated_pair_without_corridor_context_is_not_authorized():
+    from wotlkbuddy.combat.crowd_control import prepare_linked_pull
+    primary,escort=travel_pair()
+    opening=state(primary)
+    plan=PullPlan(False,(primary,escort),'linked')
+    result,allowed=prepare_linked_pull(opening,plan,primary,driver=NS(),
+        awareness=NS(),quest_entries=(),log=lambda _:None)
+    assert result is opening and not allowed.allowed
+
+
+def test_control_rejection_explains_ineligible_creature_and_range():
+    from wotlkbuddy.combat.crowd_control import control_rejection
+    assert 'Undead' in control_rejection(state(creature='Undead'),ESCORT,(RULE,),NS())
+    s=state()
+    s.action_spells=()
+    s.resources=NS(mana=453)
+    assert '28.0y' in control_rejection(s,ESCORT,(RULE,),NS(control_range=lambda _:28))
+
+
+def test_corridor_context_is_restored_after_assessment_error():
+    import pytest
+    from wotlkbuddy.horde.threat_scan import assess_corridor_pull
+    driver=NS(assessing_travel_corridor=False)
+    def fail(*_):
+        assert driver.assessing_travel_corridor is True
+        raise RuntimeError('assessment interrupted')
+    with pytest.raises(RuntimeError,match='assessment interrupted'):
+        assess_corridor_pull(driver,fail,object())
+    assert driver.assessing_travel_corridor is False

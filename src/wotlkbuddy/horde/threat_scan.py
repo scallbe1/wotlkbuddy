@@ -77,6 +77,16 @@ def acquire_corridor_target(state, chosen_guid, chosen_entry, *, awareness, cand
     return state,chosen_guid,chosen_entry
 
 
+def assess_corridor_pull(driver,assess,state):
+    """Authorize control only for the verified hostile blocking this route."""
+    prior=getattr(driver,'assessing_travel_corridor',False)
+    driver.assessing_travel_corridor=True
+    try:
+        return assess(state,getattr(driver,'active_quest_entries',()))
+    finally:
+        driver.assessing_travel_corridor=prior
+
+
 def scan_and_clear_hostiles(
     *, initial: ClientTelemetry, player_position: WorldPosition,
     path_ahead: Sequence[Vec3],
@@ -359,7 +369,7 @@ def scan_and_clear_hostiles(
             raise LiveControlError('Target changed while turning for ranged pull')
     assess=getattr(driver,'assess_pull',None)
     if callable(assess):
-        state,plan=assess(state,getattr(driver,'active_quest_entries',()))
+        state,plan=assess_corridor_pull(driver,assess,state)
         if state.player.in_combat:
             return defend(state)
         corridor_guids={g for _,g,_ in candidates}|{g for d,g in blocked_nearby if d<=18}
