@@ -269,6 +269,7 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
                 f'({unchanged} unchanged cast)')
             if s.player.in_combat:
                 if unchanged>=2:
+                    log(f'Combat recovery: {target_guid} stopped taking damage; possible evade, resist or blocked line of sight; reassessing active attackers')
                     raise LiveControlError(
                         'Two Fireballs did not damage an actively '
                         'attacking mob; movement during combat unsafe')
