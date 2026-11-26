@@ -67,6 +67,31 @@ def control_action(state, enemy, rule, driver=None):
     return SimpleNamespace(spell_id=spell_id,named_fallback=True)
 
 
+def control_rejection(state,enemy,rules,driver):
+    """Expose which live observation prevented an opening sheep."""
+    if not exact_hostile(state,enemy):
+        return f'exact escort GUID not acquired (selected {state.player.target_guid or "none"})'
+    t=state.combat_target
+    if not any(getattr(t,'creature_type','') in r.creature_types for r in rules):
+        return f'creature type {getattr(t,"creature_type","unknown") or "unknown"} not eligible'
+    if t.classification!='normal' or t.level is None or not 0<t.level<=state.player.level+1:
+        return f'escort level/classification {t.level}/{t.classification}'
+    if getattr(state,'current_cast_remaining_ms',0):
+        return 'another spell is casting'
+    if any(r.aura in state.target_auras for r in rules):
+        return 'escort already controlled'
+    bound=[a for a in state.action_spells if any(a.name==r.spell for r in rules)]
+    if bound:
+        return f'bound action readiness {[(a.name,a.usable,a.in_range,a.cooldown_ms) for a in bound]}'
+    measure=getattr(driver,'control_range',None)
+    if callable(measure):
+        try:
+            return f'learned fallback distance {measure(state):.1f}y (limit 25y); mana {state.resources.mana} (minimum 60)'
+        except (OSError,RuntimeError,ValueError):
+            return 'live escort distance unavailable'
+    return 'no verified fallback range or bound action'
+
+
 def select_exact(state, enemy, *, driver, fresh, max_tabs=4):
     """Bounded selection; never use name or Tab as authorization to cast."""
     if state.player.target_guid==enemy.guid:
@@ -90,11 +115,13 @@ def select_exact(state, enemy, *, driver, fresh, max_tabs=4):
 
 
 def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries, log):
-    """Only attempt control on a required pair with healthy resources."""
+    """Attempt control on a required objective or verified travel-corridor pair."""
     from wotlkbuddy.horde.encounter import PullPlan
     denied=PullPlan(False,plan.enemies,'prefer isolated enemy; nearby linked group')
     on_entrance=isinstance(getattr(driver,'entrance_approach_guid',None),str)
-    if (len(plan.enemies)!=2 or len(quest_entries)!=1 or (chosen.entry not in quest_entries and not on_entrance)
+    on_corridor=getattr(driver,'assessing_travel_corridor',False) is True
+    required=len(quest_entries)==1 and chosen.entry in quest_entries
+    if (len(plan.enemies)!=2 or not (required or on_entrance or on_corridor)
             or state.player.in_combat or state.resources is None):
         log(f'Linked pull deferred: {len(plan.enemies)} linked enemies; required entries {quest_entries}; primary {chosen.entry}')
         return state,denied
@@ -111,6 +138,7 @@ def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries
         log(f'Linked pull deferred: HP {state.player.health}/{state.player.max_health}, mana {state.resources.mana}/{state.resources.max_mana}; enemies {[(e.entry,e.level,e.classification) for e in plan.enemies]}')
         return state,denied
     escort=next(e for e in plan.enemies if e.guid!=chosen.guid)
+    log(f'Linked pull: evaluating {escort.name or escort.entry} {escort.guid} for control before damage; primary {chosen.entry}; corridor={on_corridor}')
     fresh=awareness._fresh
     state=select_exact(state,escort,driver=driver,fresh=fresh)
     if state.player.in_combat:
@@ -121,7 +149,7 @@ def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries
             continue
         return cast_control(state,chosen,escort,rule,plan,denied,
                             driver=driver,fresh=fresh,log=log)
-    log('Linked pull: escort not verified as eligible for ready crowd control')
+    log('Linked pull: escort not verified as eligible for ready crowd control: '+control_rejection(state,escort,rules,driver))
     state=select_exact(state,chosen,driver=driver,fresh=fresh,max_tabs=3)
     return state,denied
 
@@ -157,7 +185,10 @@ def cast_control(state, primary, escort, rule, plan, denied, *, driver, fresh, l
             log(f'Crowd control confirmed on {escort.guid}; priority target {primary.guid}')
             state=select_exact(state,primary,driver=driver,fresh=fresh)
             if exact_hostile(state,primary):
-                return state,PullPlan(True,plan.enemies,'verified crowd-controlled escort')
+                if not state.player.in_combat and callable(face):
+                    state=face(state)
+                if exact_hostile(state,primary):
+                    return state,PullPlan(True,plan.enemies,'verified crowd-controlled escort')
             return state,None if state.player.in_combat else denied
     log(f'Linked pull: {rule.spell} not confirmed; no planned damage pull')
     return state,None if state.player.in_combat else denied
