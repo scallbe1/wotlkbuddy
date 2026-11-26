@@ -15,6 +15,8 @@ from wotlkbuddy.horde.worlddata import distance_world
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.transport_route import TransportRequired
+from wotlkbuddy.live.transport_plan import elevator_source
+from wotlkbuddy.horde.transport_visit import walk_with_elevator
 from wotlkbuddy.live.world_position import verified_live_position
 from wotlkbuddy.live.world_travel import validate_nav_path, follow_world_path
 from wotlkbuddy.horde.combat import creature_entry_from_guid
@@ -28,8 +30,10 @@ class NpcTargetUnavailable(LiveControlError):
     """NPC could not be selected after a bounded verified visit."""
 
 
-def verified_npc_route(raw,start,dest):
+def verified_npc_route(raw,start,dest, *, map_id=None):
     """Unusable destination geometry is recoverable; invalid live state is not."""
+    if elevator_source(raw, start, dest, map_id):
+        return tuple(raw)
     try:
         return validate_nav_path(raw,start,dest,max_step=18.)
     except TransportRequired as exc:
@@ -43,6 +47,38 @@ def verified_npc_route(raw,start,dest):
                 'route starts away from the verified player position')):
             raise EncounterRouteUnavailable('NPC destination unavailable: '+str(exc)) from exc
         raise
+
+
+def _wait_for_patrol_route(*, driver, nav, map_id, dest, rejected, guard_retry,
+                           supervise, sleep, log):
+    """Refresh observed patrol positions while searching for a safe detour."""
+    raw=None
+    awareness=getattr(driver,'awareness',None)
+    # Patrols are mobile. Wait briefly and refresh exact live
+    # creature positions rather than blindly retry the route.
+    if awareness is not None:
+        log('No immediate safe detour; watching patrols for up to 12 seconds')
+        for _ in range(6):
+            guard_retry()
+            for _tick in range(10):
+                sleep(.2)
+                state,measured=supervise()
+            from wotlkbuddy.live.world_position import passive_creature
+            live=[m.position for m in awareness.read(state,measured.position)
+                  if not passive_creature(m) and abs(m.position.z-measured.z)<=8]
+            if not live:
+                # Fresh stationary threat scan still runs before moving.
+                raw=nav.find_path(map_id,measured.position,dest)
+                if raw and abs(raw[0].z-measured.z)<=2.5:
+                    raw=verified_npc_route(raw,measured.position,dest,map_id=map_id)
+                    break
+                raw=None
+            else:
+                raw=detour_around_encounters(nav,map_id,measured.position,dest,live,
+                    rejected=rejected,guard=guard_retry,log=log)
+                if raw:
+                    break
+    return raw
 
 
 def visit_npc(
@@ -98,10 +134,10 @@ def visit_npc(
             f'Multiple ambiguous locations for NPC {npc_name}; refusing to guess')
     if not nav.ping():
         raise LiveControlError('Navmesh helper not responding')
-    if hypot(world.x-dest.x, world.y-dest.y) > 3:
+    if hypot(world.x-dest.x, world.y-dest.y) > 3 or abs(world.z-dest.z) > 5:
         path = verified_npc_route(
             nav.find_path(world.map_id, world.position, dest),
-            world.position, dest)
+            world.position, dest, map_id=world.map_id)
         log(f'Visiting {npc_name} ({npc_id}) via {len(path)-1} Detour legs')
         def sample():
             state = capture()
@@ -143,7 +179,7 @@ def visit_npc(
                 raw=nav.find_path(world.map_id,where.position,dest)
                 if not raw or abs(raw[0].z-where.z)>2.5:
                     raise EncounterRouteUnavailable('NPC replan does not start on measured floor')
-                return verified_npc_route(raw,where.position,dest)
+                return verified_npc_route(raw,where.position,dest,map_id=world.map_id)
             while True:
                 remaining=deadline-now()
                 if remaining<15:
@@ -153,19 +189,24 @@ def visit_npc(
                 except RouteCombatInterrupted:
                     route=defend_and_replan()
                     continue
-                result=travel(
-                    route, sample=sample, keyboard=getattr(driver,'keyboard',driver),
-                    stop_requested=driver.emergency_stop_requested,
-                    expected_quest_id=None, expected_map_id=world.map_id,
-                    max_seconds=remaining,
-                    can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
-                    replan_path=lambda a,b:nav.find_path(world.map_id,a,b),
-                    destination_status=getattr(driver,'set_navigation_destination',None),
-                    distance_status=getattr(driver,'set_navigation_distance',None),
-                    progress=log,on_aggro=getattr(driver,'on_aggro',None),
-                    on_threat=getattr(driver,'scan_hostiles',None),
-                    waypoint_spacing=18.,continuous_forward=True,
-                    fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
+                def walk(p, t):
+                    return travel(p, max_seconds=t,
+                        sample=sample, keyboard=getattr(driver,'keyboard',driver),
+                        stop_requested=driver.emergency_stop_requested,
+                        expected_quest_id=None, expected_map_id=world.map_id,
+                        can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
+                        replan_path=lambda a,b:nav.find_path(world.map_id,a,b),
+                        destination_status=getattr(driver,'set_navigation_destination',None),
+                        distance_status=getattr(driver,'set_navigation_distance',None),
+                        progress=log,on_aggro=getattr(driver,'on_aggro',None),
+                        on_threat=getattr(driver,'scan_hostiles',None),
+                        waypoint_spacing=18.,continuous_forward=True,
+                        fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
+                result=walk_with_elevator(
+                    route, sample=sample, walk=walk,
+                    nav=nav, destination=dest, map_id=world.map_id,
+                    keyboard=getattr(driver,'keyboard',driver), pid=pid,
+                    owner=player.guid, remaining=remaining, log=log, now=now)
                 reason=result.stopped_reason
                 if reason=='complete':
                     return result
@@ -209,31 +250,10 @@ def visit_npc(
                                                     rejected=rejected,guard=guard_retry,log=log)
                         supervise()
                         if raw is None:
-                            awareness=getattr(driver,'awareness',None)
-                            # Patrols are mobile. Wait briefly and refresh exact live
-                            # creature positions rather than blindly retry the route.
-                            if awareness is not None:
-                                log('No immediate safe detour; watching patrols for up to 12 seconds')
-                                for _ in range(6):
-                                    guard_retry()
-                                    for _tick in range(10):
-                                        sleep(.2)
-                                        state,measured=supervise()
-                                    from wotlkbuddy.live.world_position import passive_creature
-                                    live=[m.position for m in awareness.read(state,measured.position)
-                                          if not passive_creature(m) and abs(m.position.z-measured.z)<=8]
-                                    if not live:
-                                        # Fresh stationary threat scan still runs before moving.
-                                        raw=nav.find_path(world.map_id,measured.position,dest)
-                                        if raw and abs(raw[0].z-measured.z)<=2.5:
-                                            raw=verified_npc_route(raw,measured.position,dest)
-                                            break
-                                        raw=None
-                                    else:
-                                        raw=detour_around_encounters(nav,world.map_id,measured.position,dest,live,
-                                            rejected=rejected,guard=guard_retry,log=log)
-                                        if raw:
-                                            break
+                            raw=_wait_for_patrol_route(
+                                driver=driver,nav=nav,map_id=world.map_id,dest=dest,
+                                rejected=rejected,guard_retry=guard_retry,
+                                supervise=supervise,sleep=sleep,log=log)
                             supervise()
                             if raw is None:
                                 raise EncounterRouteUnavailable(f'NPC visit to {npc_name}: no safe detour around observed pack after patrol wait')
@@ -245,7 +265,7 @@ def visit_npc(
                 raw=nav.find_path(world.map_id,measured.position,dest)
                 if not raw or abs(raw[0].z-measured.z)>2.5:
                     raise EncounterRouteUnavailable('NPC replan does not start on measured floor')
-                route=verified_npc_route(raw,measured.position,dest)
+                route=verified_npc_route(raw,measured.position,dest,map_id=world.map_id)
         navigate_with_status(driver,'npc',execute_visit,target=npc_name)
 
     after = capture()
