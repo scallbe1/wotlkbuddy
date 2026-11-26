@@ -53,6 +53,8 @@ def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[st
         state, capture=cap, driver=driver,
         player_position=lambda s: verified_live_position(s, pid=pid)[1],
         target_position=lambda s: verified_target_position(s, pid=pid), log=log)
+    from wotlkbuddy.horde.combat_awareness import bind_combat_awareness
+    bind_combat_awareness(driver,pid=pid,cap=cap,log=log)
     if first.player.in_combat:
         first = driver.on_aggro(first)
     if first.player.in_combat:
@@ -69,18 +71,11 @@ def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[st
         require_verified_combat_key(first)
         log('Combat ready: verified damage action-bar key; learned Polymorph fallback available only if verified')
     pid, world = verified_live_position(first, pid=pid)
-    driver.combat_position=lambda s: verified_live_position(s,pid=pid)[1]
-    driver.control_range=lambda s: driver.combat_position(s).position.distance_to(verified_target_position(s,pid=pid))
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
     from wotlkbuddy.horde.encounter import survey_pull
-    from wotlkbuddy.horde.awareness import ObjectAwareness
-    from wotlkbuddy.live.world_position import verified_nearby_creature_details, fast_travel_observation
+    from wotlkbuddy.live.world_position import fast_travel_observation
     driver.fast_travel_observe=lambda state,radius: fast_travel_observation(state,pid=pid,radius=radius)
-    driver.awareness=ObjectAwareness(
-        read=lambda state,center: verified_nearby_creature_details(
-            state,pid=pid,center=center,radius=50),
-        capture=cap,driver=driver,log=log)
     driver.assess_pull = lambda snapshot, entries=(): survey_pull(
         initial=snapshot,capture=cap,driver=driver,
         player_position=lambda s: verified_live_position(s,pid=pid)[1],
