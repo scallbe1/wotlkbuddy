@@ -65,6 +65,8 @@ def validate_nav_path(raw: Sequence[Vec3], start: Vec3, destination: Vec3,
         # executed safely as ordinary W/A/D keyboard movement.
         if abs(a.z - b.z) > 8 and _distance_xy(a, b) < 4:
             raise LiveControlError('Navmesh path needs an unsupported vertical/off-mesh transition')
+    from wotlkbuddy.live.transport_route import require_walkable_transport_edges
+    require_walkable_transport_edges(raw)
     expanded = [raw[0]]
     for a, b in segments:
         steps = max(1, int(_distance_xy(a, b) / max_step) + 1)
