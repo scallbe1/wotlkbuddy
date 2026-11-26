@@ -42,3 +42,55 @@ def test_unselectable_merchant_falls_back_to_another(monkeypatch,failure):
     assert merchant.free_bag_space(profile=None,profiles_root='profiles',pid=1,
         capture=lambda:state,driver=driver,nav=None,spawns=None)==2118
     assert visits==[3547,2118]
+
+
+def test_overlong_route_does_not_prevent_later_merchant_selection(monkeypatch):
+    from wotlkbuddy.horde.npc_visit import verified_npc_route
+    state=NS(truncated=False,player=NS(guid='player',dead=False,in_combat=False),
+             resources=NS(free_bag_slots=1),merchant_open=False,dialog=None)
+    driver=NS(emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True)
+    world=NS(position=Vec3(0,0,0),map_id=0)
+    options=tuple(npc_catalog.NpcDestination(f'Vendor {i}',4604+i,
+        Vec3(351+i,0,0),351+i,'catalog','merchant') for i in range(17))
+    monkeypatch.setattr(merchant,'verified_live_position',lambda s,pid:(pid,world))
+    monkeypatch.setattr(merchant,'nearby_service_npcs',lambda **kw:options)
+    visits=[]
+    def visit(**kw):
+        visits.append(kw['npc_id'])
+        destination=kw['destination_hint']
+        raw=[world.position,Vec3(-300,0,0),destination] if len(visits)<17 else [world.position,destination]
+        verified_npc_route(raw,world.position,destination)
+    monkeypatch.setattr(merchant,'visit_npc',visit)
+    monkeypatch.setattr(merchant,'sell_at_verified_merchant',lambda **kw:kw['npc_id'])
+    assert merchant.free_bag_space(profile=None,profiles_root='profiles',pid=1,
+        capture=lambda:state,driver=driver,nav=None,spawns=None)==4620
+    assert visits==[option.entry for option in options]
+
+
+def test_all_rejected_merchants_return_recoverable_route_unavailability(monkeypatch):
+    from wotlkbuddy.horde.npc_visit import verified_npc_route
+    state=NS(truncated=False,player=NS(guid='player',dead=False,in_combat=False),
+             resources=NS(free_bag_slots=1),merchant_open=False,dialog=None)
+    driver=NS(emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True)
+    world=NS(position=Vec3(0,0,0),map_id=0)
+    target=npc_catalog.NpcDestination('Abigail Sawyer',4604,Vec3(351,0,0),
+        351,'catalog','merchant')
+    monkeypatch.setattr(merchant,'verified_live_position',lambda s,pid:(pid,world))
+    monkeypatch.setattr(merchant,'nearby_service_npcs',lambda **kw:(target,))
+    def visit(**kw):
+        verified_npc_route([world.position,Vec3(-300,0,0),target.position],
+            world.position,target.position)
+    monkeypatch.setattr(merchant,'visit_npc',visit)
+    with pytest.raises(EncounterRouteUnavailable,match='No reachable responsive merchant.*distance outside bounded travel limits'):
+        merchant.free_bag_space(profile=None,profiles_root='profiles',pid=1,
+            capture=lambda:state,driver=driver,nav=None,spawns=None)
+
+
+def test_invalid_live_coordinates_still_fail_closed():
+    from wotlkbuddy.horde.npc_visit import verified_npc_route
+    from wotlkbuddy.live.control import LiveControlError
+    origin=Vec3(float('nan'),0,0)
+    dest=Vec3(351,0,0)
+    with pytest.raises(LiveControlError,match='Invalid live start') as err:
+        verified_npc_route([origin,dest],origin,dest)
+    assert not isinstance(err.value,EncounterRouteUnavailable)
