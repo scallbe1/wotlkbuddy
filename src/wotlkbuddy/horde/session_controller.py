@@ -28,6 +28,7 @@ class QuestSession:
     recoveries: int = 0
     aggro_recoveries: int = 0
     activity: ActivityGate = field(default_factory=ActivityGate)
+    hunt_memory: dict = field(default_factory=dict)
 
     def time_expired(self) -> bool:
         return time.monotonic() - self.start >= self.args.auto_minutes * 60
@@ -37,6 +38,7 @@ class QuestSession:
         child.only = mode
         child._continuous_training_check = mode == 'objectives'
         child._last_training_level = self.train_level
+        child._hunt_memory = self.hunt_memory
         owner = {'objectives': Activity.OBJECTIVES, 'quests': Activity.OFFERS,
                  'train': Activity.TRAINING}[mode]
         with self.activity.claim(owner):
