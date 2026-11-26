@@ -21,9 +21,12 @@ class EntranceMemory:
     last_remaining: float | None = None
     pending_path: tuple = ()
 
-    def reject(self,start,end):
+    def reject(self,start,end,approach_start=None):
         if start.distance_to(end)>.2:
-            self.blocked_edges.append((start,atan2(end.y-start.y,end.x-start.x)))
+            heading_from=start
+            if abs(start.x-end.x)+abs(start.y-end.y)<.5 and approach_start is not None:
+                heading_from=approach_start
+            self.blocked_edges.append((start,atan2(end.y-heading_from.y,end.x-heading_from.x)))
             del self.blocked_edges[:-24]
 
 
@@ -114,6 +117,8 @@ def advance_entrance(terrain,state,*,routes,world_position,navigate,nav,driver,l
     if (not isinstance(entries,tuple) or len(entries)!=1 or awareness is None or
             nav is None or state.player.in_combat):
         return None
+    if terrain.entrance is not None and terrain.entrance.entry!=entries[0]:
+        terrain.entrance=None
     if routes.route_replans<2 and terrain.failures<2 and terrain.entrance is None:
         return None
     _,where=world_position(state)
@@ -200,7 +205,7 @@ def move_entrance(terrain,memory,state,where,*,routes,world_position,navigate,na
         _,actual=world_position(current)
         if actual.map_id!=where.map_id:
             raise LiveControlError('Map changed during entrance approach')
-        memory.reject(actual.position,point)
+        memory.reject(actual.position,point,origin)
         memory.pending_path=()
         log('Entrance model: recorded blocked corridor; will seek a different connected route: '+str(exc))
         return True
@@ -210,7 +215,7 @@ def move_entrance(terrain,memory,state,where,*,routes,world_position,navigate,na
     if result.player.in_combat:
         return True
     if actual.position.distance_to(point)>3 or abs(actual.z-point.z)>1.5:
-        memory.reject(actual.position,point)
+        memory.reject(actual.position,point,origin)
         memory.pending_path=()
         log(f'Entrance model: waypoint not reached on expected floor; '
             f'expected z={point.z:.2f}, measured z={actual.z:.2f}; corridor marked blocked')
