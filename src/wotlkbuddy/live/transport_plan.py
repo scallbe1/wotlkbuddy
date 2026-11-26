@@ -30,7 +30,7 @@ def _floor(point):
 
 def elevator_source(raw, start, destination, map_id):
     """Return source floor for a complete route crossing this known shaft."""
-    if map_id != 0 or not 2 <= len(raw) <= 512:
+    if map_id != 0 or not raw or not 2 <= len(raw) <= 512:
         return None
     if not all(isfinite(v) and abs(v) <= 100000
                for p in (*raw, start, destination) for v in (p.x, p.y, p.z)):
@@ -44,6 +44,8 @@ def elevator_source(raw, start, destination, map_id):
                         for e in edges for p in (e.approach, e.destination)):
         return None
     first, last = edges[0].index-1, edges[-1].index
+    if any(not _shaft(p) or not -46 <= p.z <= 60 for p in raw[first:last+1]):
+        return None
     before = next((_floor(p) for p in reversed(raw[:first+1]) if _floor(p)), None)
     after = next((_floor(p) for p in raw[last:] if _floor(p)), None)
     if before is None or after is None or before == after:
