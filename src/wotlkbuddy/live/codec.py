@@ -281,6 +281,10 @@ class MageSupplies:
     water_bag: int
     water_slot: int
     water_item_id: int
+    potion_bag: int = -1
+    potion_slot: int = 0
+    potion_item_id: int = 0
+    potion_quantity: int = 0
 
 
 @dataclass(frozen=True)
@@ -386,6 +390,32 @@ class ClientTelemetry:
     bag_slots: tuple[tuple[int,int,int,int], ...] = ()  # bag index, item ID, capacity, family
     bag_candidates: tuple[tuple[int,int,int,int], ...] = ()  # source bag, slot, item ID, capacity
     bag_scan_complete: bool = False
+
+
+def _parse_mage_supplies(parts, supplies):
+    if len(parts) not in (11,15) or supplies is not None or any(
+            flag not in ('-1','0','1') for flag in parts[1:3]):
+        raise TelemetryError('Invalid or duplicate Mage supplies record')
+    try:
+        counts = list(map(int, parts[3:]))
+    except ValueError as exc:
+        raise TelemetryError('Malformed Mage supplies record') from exc
+    food_count, water_count, fb, fs, fid, wb, ws, wid = counts[:8]
+    def valid_location(count, bag, slot, item_id):
+        if not 0 <= count <= 5000:
+            return False
+        if count == 0:
+            return bag == -1 and slot == 0 and item_id == 0
+        return (0 <= bag <= 4 and 1 <= slot <= 36
+                and 1 <= item_id <= 999999)
+    if not (valid_location(food_count, fb, fs, fid) and
+            valid_location(water_count, wb, ws, wid) and
+            (len(counts)==8 or valid_location(counts[11], *counts[8:11]))):
+        raise TelemetryError('Invalid Mage consumable bag slot or count')
+    def flag(value):
+        return None if value == '-1' else value == '1'
+    return MageSupplies(flag(parts[1]), flag(parts[2]),
+                            *counts)
 
 
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
@@ -601,28 +631,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             buffs = MageBuffState(known(parts[1]), parts[2] == '1',
                                   known(parts[3]), parts[4] == '1', known(parts[5]))
         elif parts[0] == 'X':
-            if len(parts) != 11 or supplies is not None or any(
-                    flag not in ('-1','0','1') for flag in parts[1:3]):
-                raise TelemetryError('Invalid or duplicate Mage supplies record')
-            try:
-                counts = list(map(int, parts[3:]))
-            except ValueError as exc:
-                raise TelemetryError('Malformed Mage supplies record') from exc
-            food_count, water_count, fb, fs, fid, wb, ws, wid = counts
-            def valid_location(count, bag, slot, item_id):
-                if not 0 <= count <= 5000:
-                    return False
-                if count == 0:
-                    return bag == -1 and slot == 0 and item_id == 0
-                return (0 <= bag <= 4 and 1 <= slot <= 36
-                        and 1 <= item_id <= 999999)
-            if not (valid_location(food_count, fb, fs, fid) and
-                    valid_location(water_count, wb, ws, wid)):
-                raise TelemetryError('Invalid Mage consumable bag slot or count')
-            def flag(value):
-                return None if value == '-1' else value == '1'
-            supplies = MageSupplies(flag(parts[1]), flag(parts[2]),
-                                    *counts)
+            supplies = _parse_mage_supplies(parts, supplies)
         elif parts[0] == 'J':
             if (len(parts) not in (3, 4) or tracked_item_id is not None
                     or not parts[1].isdigit() or not parts[2].isdigit()):
