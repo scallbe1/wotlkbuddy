@@ -14,7 +14,7 @@ from wotlkbuddy.live.codec import TelemetryError
 
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 from wotlkbuddy.horde.resurrection_site import (
-    APPROACH_DISTANCE, acceptable_site, approach_path, alternate_approach_path, clearance,
+    APPROACH_DISTANCE, MAX_RECLAIM_THREATS, acceptable_site, approach_path, alternate_approach_path, clearance,
     in_reclaim_ring, local_reclaim_threats, plan_resurrection_sites,
     watch_reclaim_window)
 
@@ -246,7 +246,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
     # The measured position is already reachable; inspect it before asking
     # the navmesh to move us elsewhere. This is especially important when
     # a previous recovery stopped at a good spot while a patrol was nearby.
-    if in_reclaim_ring(position.position,corpse):
+    if in_reclaim_ring(position.position,corpse) and acceptable_site(position.position,corpse,tuple(read_hazards(state,corpse))):
         local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
         log(f'Current site: {len(local)} potential attackers; checking patrol opening')
         chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
@@ -326,7 +326,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
     if (not state.player.dead or not state.death_state.ghost or
             not state.death_state.retrieve_ready or
             not in_reclaim_ring(position.position,corpse) or
-            len(local_reclaim_threats(nav,corpse_map,position.position,final_hazards))>1):
+            len(local_reclaim_threats(nav,corpse_map,position.position,final_hazards))>MAX_RECLAIM_THREATS):
         raise LiveControlError('Final reclaim check failed; no resurrection input sent')
     chosen = position.position
     log(f'Resurrecting {chosen.distance_to(corpse):.1f}y from corpse with '
@@ -338,7 +338,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                 not state.death_state.retrieve_ready or
                 not in_reclaim_ring(position.position,corpse) or
                 len(local_reclaim_threats(nav,corpse_map,position.position,
-                    tuple(read_hazards(state,corpse))))>1):
+                    tuple(read_hazards(state,corpse))))>MAX_RECLAIM_THREATS):
             raise LiveControlError('Reclaim window changed during retreat planning; remaining ghost')
         chosen = position.position
     guard()
