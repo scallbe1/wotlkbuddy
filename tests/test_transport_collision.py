@@ -139,3 +139,39 @@ def test_resume_attached_moves_to_verified_upper_without_reboarding(monkeypatch)
     assert events[-1] == 'exited_upper'
     assert keys == [('down', route.RIGHT), ('up', route.RIGHT),
                     ('down', route.FORWARD), ('up', route.FORWARD)]
+
+
+def test_reverse_route_mirrors_steering_and_requires_lower_elevation():
+    deck = pos(2.8, 1.4, -.464, 3.14)
+    assert route.route_region(deck, 'upper') == 'deck'
+    assert route.route_region(deck, 'lower') == 'unknown'
+    assert route.next_key(deck, 'deck', source_floor='upper') == route.LEFT
+    assert route.next_key(pos(2.8, -1.4, -.464, 3.14), 'deck',
+                          source_floor='upper') == route.RIGHT
+    assert route.route_region(pos(1596.15, 303, -41.42, 1.57), 'upper') == 'lower'
+    assert route.route_region(pos(1596.15, 303, 30, 1.57), 'upper') == 'unknown'
+
+
+def test_reverse_attached_exit_clears_lower_door(monkeypatch):
+    deck = pos(2.8, 1.4, -.464, 3.14)
+    centred = pos(2.8, .5, -.464, 3.14)
+    lip = pos(1596.15, 301.3, -41.42, 1.57)
+    clear = pos(1596.15, 305.2, -41.42, 1.57)
+    samples = iter([deck, deck, centred, lip, clear])
+    events, keys = [], []
+    clock = [0.]
+    monkeypatch.setattr(route, 'time', SimpleNamespace(
+        monotonic=lambda: clock[0],
+        sleep=lambda dt: clock.__setitem__(0, clock[0]+dt)))
+    keyboard = SimpleNamespace(
+        emergency_stop_requested=lambda: False, wow_is_foreground=lambda: True,
+        key_down=lambda k: keys.append(('down', k)),
+        key_up=lambda k: keys.append(('up', k)))
+    route.traverse(keyboard=keyboard, read_position=lambda: next(samples),
+                   grab=lambda: (None, None, None, None), guard=lambda *_: None,
+                   owner='test', emit=lambda event, **_: events.append(event),
+                   seconds=60, resume_attached=True, source_floor='upper')
+    assert 'reached_lower' in events
+    assert events[-1] == 'exited_lower'
+    assert keys == [('down', route.LEFT), ('up', route.LEFT),
+                    ('down', route.FORWARD), ('up', route.FORWARD)]
