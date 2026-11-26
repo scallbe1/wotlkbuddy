@@ -34,6 +34,23 @@ def guard_defense(s: ClientTelemetry,guid,driver):
     # Death, invalid telemetry, focus and bounded fight limits still stop.
 
 
+def fresh_defense(before: ClientTelemetry, delay: float=.15, *, guard, sleep, capture, driver) -> ClientTelemetry:
+    guard(before)
+    sleep(delay)
+    for _ in range(10):
+        state=capture()
+        guard(state)
+        # Record observed deaths and combat-log events even if the
+        # target is cleared or another attacker is acquired next frame.
+        remember=getattr(driver,'remember_defeated',None)
+        if callable(remember):
+            remember(state)
+        if state.sequence != before.sequence:
+            return state
+        sleep(.08)
+    raise LiveControlError('Defensive combat telemetry stalled')
+
+
 def defend_against_aggro(
     *, initial: ClientTelemetry, capture: Callable[[], ClientTelemetry],
     driver, log: Callable[[str], None] = lambda _: None,
@@ -53,21 +70,8 @@ def defend_against_aggro(
 
     guard = lambda s: guard_defense(s,guid,driver)
 
-    def fresh(before: ClientTelemetry, delay: float=.15) -> ClientTelemetry:
-        guard(before)
-        sleep(delay)
-        for _ in range(10):
-            state=capture()
-            guard(state)
-            # Record observed deaths and combat-log events even if the
-            # target is cleared or another attacker is acquired next frame.
-            remember=getattr(driver,'remember_defeated',None)
-            if callable(remember):
-                remember(state)
-            if state.sequence != before.sequence:
-                return state
-            sleep(.08)
-        raise LiveControlError('Defensive combat telemetry stalled')
+    from functools import partial
+    fresh=partial(fresh_defense,guard=guard,sleep=sleep,capture=capture,driver=driver)
 
     state=initial
     guard(state)
