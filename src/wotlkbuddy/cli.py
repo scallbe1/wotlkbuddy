@@ -1321,6 +1321,8 @@ def _register_world_observation_commands(sub):
                        help='Permit one bounded forward boarding attempt; manual exit')
     board.add_argument('--ride-through', action='store_true',
                        help='After successful lower boarding, attempt one predicted upper exit')
+    board.add_argument('--collision-guided', action='store_true',
+                       help='Try direct coordinate-guided movement through lift doors (lower ride-through)')
     board.set_defaults(func=trial_board)
 
 
