@@ -95,3 +95,15 @@ def test_off_axis_combat_is_recoverable_at_session_boundary():
     from wotlkbuddy.horde.aggro_recovery import recoverable_aggro_error
     assert recoverable_aggro_error(LiveControlError('Combat began during off-axis navigation; refusing alternate routing'))
     assert not recoverable_aggro_error(LiveControlError('Cannot verify map/PID after interrupted navigation'))
+
+
+def test_loot_displacement_preserves_required_spawn_and_collision_budget():
+    from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+    routes=HuntRouteState(recently_visited={(1,2,3):1},navigation_mismatches=1)
+    args=failure_context(routes=routes)
+    with pytest.raises(EncounterRouteUnavailable,match='refreshing same objective'):
+        handle_spawn_failure(LiveControlError(
+            'Navigation stopped: Threat scan changed player position; fresh Detour replan is required'),**args)
+    assert not routes.failed_navigation
+    assert not routes.recently_visited
+    assert routes.navigation_mismatches==1
