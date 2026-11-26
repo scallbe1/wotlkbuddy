@@ -24,6 +24,7 @@ class HuntRouteState:
     staging_visited: list[Vec3] = field(default_factory=list)
     required_waits: int = 0
     structured_attempts: int = 0
+    tactical_retreats: int = 0
     terrain: HuntTerrain = field(default_factory=HuntTerrain)
 
 
@@ -204,7 +205,10 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
         clear_remaining_aggro(current)
         return None,True
     _,where=world_position(current)
-    for map_id,point in retreat_candidates(routes.terrain.anchors,current,where,driver,nav,log):
+    # Only a currently remembered hostile obstruction justifies this retreat.
+    retreat_options=(retreat_candidates(routes.terrain.anchors,current,where,driver,nav,log)
+                     if hazards and routes.tactical_retreats<2 else ())
+    for map_id,point in retreat_options:
         try:
             supervise()
             if map_id!=where.map_id or not 18<=where.position.distance_to(point)<=65:
@@ -214,10 +218,11 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             supervise()
             if not path_avoids_pack(path,hazards,radius=15):
                 continue
-            log(f'Changing approach: retreating {where.position.distance_to(point):.1f}y along a verified route')
             if any(point.distance_to(p)<5 for p in routes.staging_visited):
                 continue
+            log(f'Changing approach: retreating {where.position.distance_to(point):.1f}y along a verified route')
             routes.staging_visited.append(point)
+            routes.tactical_retreats+=1
             out=tactical_navigate(driver,navigate,capture(),point,path,'retreat')
             if out.player.in_combat:
                 clear_remaining_aggro(out)
@@ -285,7 +290,10 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
     staging = (goal.position if reference_only and remote_camp else
                Vec3(goal.x+dx/d*stand_off,goal.y+dy/d*stand_off,goal.z))
     hazards=[p for p,t in getattr(driver,'dangerous_hunt_positions',[]) if now()-t<90]
-    if hazards or routes.route_replans:
+    if not hazards and routes.route_replans:
+        log('No remembered enemy obstruction; resuming normal spawn navigation rather than retreating')
+        routes.route_replans=0
+    if hazards:
         from wotlkbuddy.horde.interaction import navigate_with_status
         alternative,handled=navigate_with_status(driver,'planning',lambda:find_hunt_alternative(
             s,routes=routes,world=world,staging=staging,
