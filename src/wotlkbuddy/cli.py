@@ -1291,6 +1291,16 @@ def _register_world_observation_commands(sub):
     transport.add_argument('--platforms', action='store_true',
                            help='Include raw transport GameObject candidate pose and state')
     transport.set_defaults(func=record_transport_trace)
+    from wotlkbuddy.live.transport_visual import capture_door_visual
+    visual = sub.add_parser('horde-transport-visual',
+                            help='Record timestamped elevator door images without movement')
+    visual.add_argument('--floor', choices=('upper', 'lower'), required=True)
+    visual.add_argument('--seconds', type=float, default=36)
+    visual.add_argument('--interval', type=float, default=.5)
+    visual.add_argument('--countdown', type=float, default=5)
+    visual.add_argument('--monitor', type=int, default=1)
+    visual.add_argument('--output', default='elevator-door-frames.zip')
+    visual.set_defaults(func=capture_door_visual)
 
 
 def main(argv: list[str] | None = None) -> int:
