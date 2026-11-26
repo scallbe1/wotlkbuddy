@@ -65,7 +65,7 @@ def select_spawn_goal(s, *, routes, nearby, spec, allowed_sources, expected,
 
 
 def handle_spawn_failure(exc, *, routes, key, allowed_sources, capture,
-                         guard, world_position, pid, world, log):
+                         guard, world_position, pid, world, log, clear_remaining_aggro=None):
     """Classify a failed approach only after re-verifying live state."""
     # The low-level world follower already released all movement keys
     # on a heading mismatch. Do NOT relax that collision/telemetry
@@ -85,9 +85,18 @@ def handle_spawn_failure(exc, *, routes, key, allowed_sources, capture,
     if current_pid != pid or current_world.map_id != world.map_id:
         raise LiveControlError('Cannot verify map/PID after interrupted navigation') from exc
     if s.player.in_combat:
-        raise LiveControlError(
-            'Combat began during off-axis navigation; refusing alternate routing'
-        ) from exc
+        if clear_remaining_aggro is None:
+            raise LiveControlError('Combat began during off-axis navigation; refusing alternate routing') from exc
+        log('Combat interrupted route planning; defending before resuming the same objective')
+        s=clear_remaining_aggro(s)
+        guard(s)
+        current_pid,current_world=world_position(s)
+        if current_pid!=pid or current_world.map_id!=world.map_id:
+            raise LiveControlError('Cannot verify map/PID after interrupted navigation') from exc
+        if s.player.in_combat:
+            raise LiveControlError('Aggro unresolved before starting quest phase') from exc
+        routes.recently_visited.pop(key,None)
+        return
     routes.recently_visited[key] = 0 if unsafe_encounter and len(allowed_sources)==1 else 2
     if unsafe_encounter:
         routes.route_replans+=1
@@ -166,7 +175,7 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
     except LiveControlError as exc:
         handle_spawn_failure(exc, routes=routes, key=key, allowed_sources=allowed_sources,
                              capture=capture, guard=guard, world_position=world_position,
-                             pid=pid, world=world, log=log)
+                             pid=pid, world=world, log=log, clear_remaining_aggro=clear_remaining_aggro)
         return
 
     if s.player.in_combat:
