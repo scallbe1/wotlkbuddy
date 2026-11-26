@@ -137,6 +137,35 @@ def can_close_range(state,*,origin,ahead,target_position,candidates,blocked_near
             distance_to_corridor(actual,origin,ahead)<=12)
 
 
+def credited(before, after):
+    from wotlkbuddy.horde.combat import objective_progress
+    old = {(q.quest_id, obj.index): objective_progress(obj.description)
+           for q in before for obj in q.objectives
+           if obj.kind == 'monster' and not obj.done}
+    for q in after:
+        for obj in q.objectives:
+            key = (q.quest_id, obj.index)
+            if key not in old or old[key] is None:
+                continue
+            nxt = objective_progress(obj.description)
+            if nxt is not None and nxt[1] == old[key][1] and (
+                    nxt[0] > old[key][0] or obj.done):
+                return True
+    return False
+
+
+def corridor_geometry_clear(check,origin,actual,guid,log):
+    if check is None:
+        return True
+    try:
+        if check(origin,actual):
+            return True
+        log(f'Scanned hostile {guid} is behind blocked cave geometry after reacquisition; deferring preemptive pull')
+    except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError) as exc:
+        log(f'Cannot verify direct approach for {guid} after reacquisition: {exc}; deferring pull')
+    return False
+
+
 def scan_and_clear_hostiles(
     *, initial: ClientTelemetry, player_position: WorldPosition,
     path_ahead: Sequence[Vec3],
@@ -389,23 +418,11 @@ def scan_and_clear_hostiles(
             driver.chat('/cleartarget')
             state=fresh(state)
         return finish(state)
-    if direct_path_clear is not None:
-        try:
-            if not direct_path_clear(player_position.position, actual):
-                log(f'Scanned hostile {chosen_guid} is behind blocked cave '
-                    'geometry after reacquisition; deferring preemptive pull')
-                if state.player.target_guid:
-                    driver.chat('/cleartarget')
-                    state=fresh(state)
-                return finish(state)
-        except (OSError, RuntimeError, ValueError, TimeoutError,
-                LiveControlError) as exc:
-            log(f'Cannot verify direct approach for {chosen_guid} after '
-                f'reacquisition: {exc}; deferring pull')
-            if state.player.target_guid:
-                driver.chat('/cleartarget')
-                state=fresh(state)
-            return finish(state)
+    if not corridor_geometry_clear(direct_path_clear,player_position.position,actual,chosen_guid,log):
+        if state.player.target_guid:
+            driver.chat('/cleartarget')
+            state=fresh(state)
+        return finish(state)
     if state.mage_buffs is None or state.mage_buffs.knows_fireball is not True:
         raise LiveControlError('Cannot preemptively fight without learned Fireball')
     log(f'Preemptive hostile {chosen_entry}, GUID {chosen_guid}, '
@@ -469,26 +486,6 @@ def scan_and_clear_hostiles(
     cast_delay=(min(2.5,max(.10,cast_ms/1000.+.02))
                 if cast_ms is not None else 2.1)
     state=fresh(mid,cast_delay)
-    # A killing projectile may remove the exact GUID before its target HP is
-    # sampled. Accept live progress as evidence of an attack's effect, never
-    # as proof that some unrelated selected target was killed.
-    from wotlkbuddy.horde.combat import objective_progress
-
-    def credited(before, after):
-        old = {(q.quest_id, obj.index): objective_progress(obj.description)
-               for q in before for obj in q.objectives
-               if obj.kind == 'monster' and not obj.done}
-        for q in after:
-            for obj in q.objectives:
-                key = (q.quest_id, obj.index)
-                if key not in old or old[key] is None:
-                    continue
-                nxt = objective_progress(obj.description)
-                if nxt is not None and nxt[1] == old[key][1] and (
-                        nxt[0] > old[key][0] or obj.done):
-                    return True
-        return False
-
     lost_target = False
     for _ in range(4):
         if state.player.in_combat:
