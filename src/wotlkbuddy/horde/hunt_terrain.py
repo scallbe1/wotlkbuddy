@@ -15,6 +15,7 @@ class HuntTerrain:
     anchors: list = field(default_factory=list)
     failures: int = 0
     retreats: int = 0
+    entrance: object | None = None
 
     def remember(self, where):
         if not self.anchors or self.anchors[-1][1].distance_to(where.position)>=5:
@@ -29,6 +30,11 @@ class HuntTerrain:
             self.remember(where)
 
     def retreat(self, state, *, routes, world_position, navigate, nav, driver, now, log):
+        from wotlkbuddy.horde.entrance_model import advance_entrance
+        advanced=advance_entrance(self,state,routes=routes,world_position=world_position,
+            navigate=navigate,nav=nav,driver=driver,log=log)
+        if advanced is not None:
+            return advanced
         if self.failures<3 or state.player.in_combat:
             return False
         _,where=world_position(state)
