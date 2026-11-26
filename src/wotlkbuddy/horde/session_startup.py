@@ -67,8 +67,10 @@ def prepare_phase(args, *, cap: Callable[[], ClientTelemetry], log: Callable[[st
     if args.only in ('all', 'objectives', 'collect', 'continuous'):
         from wotlkbuddy.combat.runtime import require_verified_combat_key
         require_verified_combat_key(first)
-        log('Combat ready: verified action-bar key; no typed /cast fallback')
+        log('Combat ready: verified damage action-bar key; learned Polymorph fallback available only if verified')
     pid, world = verified_live_position(first, pid=pid)
+    driver.combat_position=lambda s: verified_live_position(s,pid=pid)[1]
+    driver.control_range=lambda s: driver.combat_position(s).position.distance_to(verified_target_position(s,pid=pid))
     from wotlkbuddy.horde.sustain import maintain_mage_supplies
     from wotlkbuddy.horde.threat_scan import scan_and_clear_hostiles
     from wotlkbuddy.horde.encounter import survey_pull

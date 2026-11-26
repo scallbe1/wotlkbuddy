@@ -12,7 +12,7 @@ from typing import Callable
 from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
-from wotlkbuddy.combat.crowd_control import linked_focus, protected_control_target, fleeing_target, linked_target_authorized
+from wotlkbuddy.combat.crowd_control import linked_focus, protected_control_target, fleeing_target, linked_target_authorized, reactive_control
 
 
 def verified_attacker(snapshot):
@@ -34,6 +34,23 @@ def guard_defense(s: ClientTelemetry,guid,driver):
     # Death, invalid telemetry, focus and bounded fight limits still stop.
 
 
+def fresh_defense(before: ClientTelemetry, delay: float=.15, *, guard, sleep, capture, driver) -> ClientTelemetry:
+    guard(before)
+    sleep(delay)
+    for _ in range(10):
+        state=capture()
+        guard(state)
+        # Record observed deaths and combat-log events even if the
+        # target is cleared or another attacker is acquired next frame.
+        remember=getattr(driver,'remember_defeated',None)
+        if callable(remember):
+            remember(state)
+        if state.sequence != before.sequence:
+            return state
+        sleep(.08)
+    raise LiveControlError('Defensive combat telemetry stalled')
+
+
 def defend_against_aggro(
     *, initial: ClientTelemetry, capture: Callable[[], ClientTelemetry],
     driver, log: Callable[[str], None] = lambda _: None,
@@ -53,21 +70,8 @@ def defend_against_aggro(
 
     guard = lambda s: guard_defense(s,guid,driver)
 
-    def fresh(before: ClientTelemetry, delay: float=.15) -> ClientTelemetry:
-        guard(before)
-        sleep(delay)
-        for _ in range(10):
-            state=capture()
-            guard(state)
-            # Record observed deaths and combat-log events even if the
-            # target is cleared or another attacker is acquired next frame.
-            remember=getattr(driver,'remember_defeated',None)
-            if callable(remember):
-                remember(state)
-            if state.sequence != before.sequence:
-                return state
-            sleep(.08)
-        raise LiveControlError('Defensive combat telemetry stalled')
+    from functools import partial
+    fresh=partial(fresh_defense,guard=guard,sleep=sleep,capture=capture,driver=driver)
 
     state=initial
     guard(state)
@@ -104,6 +108,9 @@ def defend_against_aggro(
             target_entry = state.combat_target.entry_id
             no_damage = 0
             log(f'Defending against verified attacker {target_entry}, GUID {target_guid}')
+        state=reactive_control(state,driver=driver,fresh=fresh,log=log)
+        if state.player.target_guid!=target_guid or not state.player.in_combat:
+            continue
         face = getattr(driver, 'face_combat_target', None)
         if callable(face):
             state = face(state)

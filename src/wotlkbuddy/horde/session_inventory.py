@@ -60,6 +60,8 @@ def bind_encounter_loot(*, cap, location, driver, nav, pid, log):
                 memory, player_guid=state.player.guid, target_guid=corpse_guid)
 
     def drain_and_equip(state):
+        if getattr(getattr(driver,'hunt_terrain',None),'entrance',None) is not None and getattr(driver,'active_quest_entries',()) == (driver.hunt_terrain.entrance.entry,):
+            return loot_nearby(state)
         state = loot_encounter(initial=state, sample=location, driver=driver, nav=nav,
                                corpse_position=corpse_position, log=log)
         if not state.player.in_combat and state.bag_candidates:

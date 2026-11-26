@@ -78,6 +78,34 @@ def maintain_travel_buffs(*,state,capture,driver,log=lambda _:None,sleep=real_sl
     return state
 
 
+def take_prepared_reclaim_exit(state,where,*,driver,nav,hazards,sample,defend,log):
+    """Use the prevalidated escape immediately, before resting or buffing."""
+    path=getattr(driver,'reclaim_escape_path',())
+    driver.reclaim_escape_path=()
+    if not isinstance(path,(list,tuple)) or len(path)<2 or state.player.in_combat:
+        return
+    if path[0].distance_to(where.position)>1.5:
+        return
+    from wotlkbuddy.horde.resurrection_site import clearance
+    initial=local_reclaim_threats(nav,where.map_id,where.position,hazards)
+    if (local_reclaim_threats(nav,where.map_id,path[-1],hazards) or
+            any(h not in initial for p in path[1:]
+                for h in local_reclaim_threats(nav,where.map_id,p,hazards)) or
+            any(clearance(p,hazards)<clearance(where.position,hazards)-1 for p in path[1:])):
+        log('Prepared reclaim escape changed; replanning from current position')
+        return
+    log('Reclaim fallback: moving immediately along prepared escape before recovery')
+    report=follow_world_path(path,sample=sample,keyboard=driver.keyboard,
+        stop_requested=driver.emergency_stop_requested,expected_quest_id=None,
+        expected_map_id=where.map_id,max_seconds=90,progress=log,on_aggro=defend,
+        can_traverse=lambda a,b:nav.segment_clear(where.map_id,a,b))
+    if report.stopped_reason!='complete':
+        if any(x in report.stopped_reason for x in ('height/floor','No forward progress','Movement diverged','Measured movement disagrees')):
+            log('Prepared escape blocked; reassessing measured position')
+        else:
+            raise LiveControlError('Post-reclaim retreat interrupted: '+report.stopped_reason)
+
+
 def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
                      route_hints=(), log=lambda _:None, sleep=real_sleep):
     guid=initial.player.guid
@@ -99,6 +127,12 @@ def recover_and_buff(*, initial, sample, driver, nav, read_hazards,
     def defend(state):
         return defend_against_aggro(initial=state,capture=capture,
                                      driver=driver,log=log,sleep=sleep)
+    prepared=getattr(driver,'reclaim_escape_path',())
+    if isinstance(prepared,(list,tuple)) and prepared:
+        state,where=sample()
+        capture()
+        take_prepared_reclaim_exit(state,where,driver=driver,nav=nav,
+            hazards=tuple(read_hazards(state,where.position)),sample=sample,defend=defend,log=log)
     retreat_attempts=0
     supply_rounds=0
     buff_attempts={}

@@ -9,8 +9,9 @@ from wotlkbuddy.live.world_travel import validate_nav_path
 # drift, client/server range differences and Lua-derived corpse elevation.
 MIN_OFFSET = 18.0
 MAX_OFFSET = 37.0
-MIN_CLEARANCE = 20.0
-MAX_RECLAIM_THREATS = 1
+MIN_CLEARANCE = 26.0
+MAX_RECLAIM_THREATS = 0
+FALLBACK_CLEARANCE = 18.0
 APPROACH_DISTANCE = 42.0
 
 
@@ -64,13 +65,34 @@ def acceptable_site(point, corpse, hazards):
             len(nearby_threats(point,hazards)) <= MAX_RECLAIM_THREATS)
 
 
+def reclaim_window_ok(nav,map_id,point,hazards,*,fallback=False):
+    local=local_reclaim_threats(nav,map_id,point,hazards)
+    if not local:
+        return True
+    return (fallback and len(local)==1 and clearance(point,local)>=FALLBACK_CLEARANCE)
+
+
+def reclaim_escape_path(nav,map_id,point,hazards,*,route_hints=()):
+    """Only accept a fallback with a real outward route to zero threats."""
+    if not reclaim_window_ok(nav,map_id,point,hazards,fallback=True):
+        return None
+    if not local_reclaim_threats(nav,map_id,point,hazards):
+        return ()
+    path=plan_rest_site(nav,map_id,point,hazards,route_hints=route_hints)
+    if not path or local_reclaim_threats(nav,map_id,path[-1],hazards):
+        return None
+    if any(clearance(b,hazards)<clearance(point,hazards)-1 for b in path[1:]):
+        return None
+    return path
+
+
 def watch_reclaim_window(*, sample, read_hazards, corpse, nav, map_id,
                          sleep, now, log=lambda _:None,
-                         patrol_seconds=24, reclaim_seconds=180):
-    """Wait for a stable <=1-attacker opening without moving the ghost.
+                         patrol_seconds=24, reclaim_seconds=180, fallback=False):
+    """Wait for a stable zero-attacker opening without moving the ghost.
 
     Do not abandon a usable spot merely because a patrol passes once.
-    Require three consecutive observations before accepting the popup.
+    Require five consecutive safe observations (eight for a fallback).
     """
     state, pos = sample()
     if not in_reclaim_ring(pos.position,corpse):
@@ -92,13 +114,14 @@ def watch_reclaim_window(*, sample, read_hazards, corpse, nav, map_id,
             log(f'Reclaim watch: {count} nearby potential attackers'
                 + (f' ({distances})' if distances else ''))
             previous_count = count
-        if count <= MAX_RECLAIM_THREATS and state.death_state.retrieve_ready:
+        eligible=count==0 or (fallback and count==1 and clearance(pos.position,local)>=FALLBACK_CLEARANCE)
+        if eligible and state.death_state.retrieve_ready:
             stable += 1
-            if stable >= 3:
+            if stable >= (8 if fallback else 5):
                 return pos.position
         else:
             stable = 0
-        if count > MAX_RECLAIM_THREATS:
+        if not eligible:
             crowded += 1
             if crowded >= int(patrol_seconds/.5):
                 break

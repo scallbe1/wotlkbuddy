@@ -14,9 +14,9 @@ from wotlkbuddy.live.codec import TelemetryError
 
 from wotlkbuddy.live.world_travel import follow_world_path, validate_nav_path
 from wotlkbuddy.horde.resurrection_site import (
-    APPROACH_DISTANCE, acceptable_site, approach_path, alternate_approach_path, clearance,
+    APPROACH_DISTANCE, MAX_RECLAIM_THREATS, acceptable_site, approach_path, alternate_approach_path, clearance,
     in_reclaim_ring, local_reclaim_threats, plan_resurrection_sites,
-    watch_reclaim_window)
+    watch_reclaim_window, reclaim_window_ok, reclaim_escape_path)
 
 
 def _ghost_terrain_failure(reason):
@@ -61,6 +61,142 @@ def wait_death_transition(*, observe, guard, predicate, seconds, now, sleep, log
                 log('Death transition: telemetry restored and state verified')
             return state,position
     raise LiveControlError('Timed out waiting for verified death recovery transition; no further input sent')
+
+
+def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
+                       read_spawn_hints, scout_surroundings, sleep, now, log, breadcrumbs):
+    state,position=observe()
+    hints = tuple(read_spawn_hints(state,corpse)) if read_spawn_hints else ()
+    chosen = None
+    attempted = []
+    scouted = []
+    # The measured position is already reachable; inspect it before asking
+    # the navmesh to move us elsewhere. This is especially important when
+    # a previous recovery stopped at a good spot while a patrol was nearby.
+    if in_reclaim_ring(position.position,corpse) and acceptable_site(position.position,corpse,tuple(read_hazards(state,corpse))):
+        local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
+        log(f'Current site: {len(local)} potential attackers; checking patrol opening')
+        chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
+            corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
+            patrol_seconds=8 if len(local)>2 else 24)
+        attempted.append(position.position)
+        scouted.append(position.position)
+    for search in range(8):
+        if chosen is not None:
+            break
+        state, position = observe()
+        hazards = tuple(read_hazards(state,corpse))
+        route_points = ()
+        if position.position.distance_to(corpse)>2:
+            try:
+                route_points = validate_nav_path(
+                    nav.find_path(corpse_map,position.position,corpse),
+                    position.position,corpse,max_step=9)
+            except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
+                pass
+        # Static snapshots are ranking hints only. Assess a site with live
+        # local observations once the ghost actually arrives, including
+        # candidates that look crowded from across a cave wall.
+        sites = plan_resurrection_sites(nav,corpse_map,position.position,corpse,
+            hazards,spawn_hints=hints,route_points=route_points,scout=True)
+        # Compare actual terrain-aware local counts before moving to a site.
+        ranked = [(len(local_reclaim_threats(nav,corpse_map,point,hazards)),point,path)
+                  for point,path in sites]
+        ranked.sort(key=lambda item:(item[0],-clearance(item[1],hazards),position.position.distance_to(item[1])))
+        sites = [(point,path) for _,point,path in ranked]
+        log(f'Resurrection search {search+1}/8: {len(hazards)} mapped creatures, '
+            f'{len(sites)} reachable scouting candidates; ranked attacker counts '
+            f'{[n for n,_,_ in ranked]}')
+        moved = False
+        for point, _ in sites:
+            if any(point.distance_to(p)<2 for p in attempted):
+                continue
+            state, position = observe()
+            attempted.append(point)
+            local = local_reclaim_threats(nav,corpse_map,point,tuple(read_hazards(state,corpse)))
+            log(f'Checking offset site {point.distance_to(corpse):.1f}y from corpse; '
+                f'{len(local)} nearby potential attackers')
+            if position.position.distance_to(point)>1.5:
+                try:
+                    path = nav.find_path(corpse_map,position.position,point)
+                    if not path or path[-1].distance_to(point)>2:
+                        continue
+                    path = validate_nav_path(path,position.position,point,max_step=9)
+                except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
+                    continue
+                if not walk(path,'Ghost scouting'):
+                    continue
+            moved = True
+            if scout_surroundings is not None:
+                scout_surroundings()
+            state, position = observe()
+            scouted.append(position.position)
+            local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
+            log(f'Scouted site: {len(local)} potential attackers; watching for opening')
+            chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
+                corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
+                patrol_seconds=8 if len(local)>2 else 24)
+            if chosen is not None:
+                break
+            # Replan from the new vantage and refreshed positions.
+            break
+        if chosen is None and not moved:
+            # Do not permanently blacklist a site merely because a patrol
+            # crossed it; allow a fresh observation after surveying others.
+            attempted.clear()
+            state, position = observe()
+            if in_reclaim_ring(position.position,corpse):
+                chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
+                    corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log)
+    if chosen is not None:
+        return chosen,False
+    chosen=find_fallback_site(observe=observe,walk=walk,corpse=corpse,corpse_map=corpse_map,
+        nav=nav,read_hazards=read_hazards,scouted=scouted,scout_surroundings=scout_surroundings,
+        breadcrumbs=breadcrumbs,sleep=sleep,now=now,log=log)
+    return chosen,chosen is not None
+
+
+def find_fallback_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
+                       scouted, scout_surroundings, breadcrumbs, sleep, now, log):
+    """Only after the zero-threat search fails, revisit the best escape site."""
+    state,position=observe()
+    hazards=tuple(read_hazards(state,corpse))
+    candidates=sorted((p for p in scouted+[position.position] if in_reclaim_ring(p,corpse)),
+                      key=lambda p:(len(local_reclaim_threats(nav,corpse_map,p,hazards)),
+                                    -clearance(p,hazards),position.position.distance_to(p)))
+    checked=[]
+    for point in candidates:
+        if any(point.distance_to(p)<2 for p in checked):
+            continue
+        checked.append(point)
+        if len(checked)>8:
+            break
+        state,position=observe()
+        if position.position.distance_to(point)>1.5:
+            try:
+                raw=nav.find_path(corpse_map,position.position,point)
+                path=validate_nav_path(raw,position.position,point,max_step=9)
+                if not path or path[-1].distance_to(point)>2:
+                    continue
+            except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
+                continue
+            if not walk(path,'Ghost fallback scouting'):
+                continue
+        if scout_surroundings is not None:
+            scout_surroundings()
+        state,position=observe()
+        hazards=tuple(read_hazards(state,corpse))
+        if not in_reclaim_ring(position.position,corpse):
+            continue
+        if reclaim_escape_path(nav,corpse_map,position.position,hazards,route_hints=breadcrumbs) is None:
+            continue
+        log('Reclaim fallback: checking stable opening with at most one distant attacker and a verified escape route')
+        chosen=watch_reclaim_window(sample=observe,read_hazards=read_hazards,
+            corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
+            patrol_seconds=8,reclaim_seconds=30,fallback=True)
+        if chosen is not None:
+            return chosen
+    return None
 
 
 def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
@@ -240,85 +376,9 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
         log('Actively surveying all directions before ranking reclaim locations')
         scout_surroundings()
         state, position = observe()
-    hints = tuple(read_spawn_hints(state,corpse)) if read_spawn_hints else ()
-    chosen = None
-    attempted = []
-    # The measured position is already reachable; inspect it before asking
-    # the navmesh to move us elsewhere. This is especially important when
-    # a previous recovery stopped at a good spot while a patrol was nearby.
-    if in_reclaim_ring(position.position,corpse):
-        local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
-        log(f'Current site: {len(local)} potential attackers; checking patrol opening')
-        chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
-            corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
-            patrol_seconds=8 if len(local)>2 else 24)
-        attempted.append(position.position)
-    for search in range(8):
-        if chosen is not None:
-            break
-        state, position = observe()
-        hazards = tuple(read_hazards(state,corpse))
-        route_points = ()
-        if position.position.distance_to(corpse)>2:
-            try:
-                route_points = validate_nav_path(
-                    nav.find_path(corpse_map,position.position,corpse),
-                    position.position,corpse,max_step=9)
-            except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
-                pass
-        # Static snapshots are ranking hints only. Assess a site with live
-        # local observations once the ghost actually arrives, including
-        # candidates that look crowded from across a cave wall.
-        sites = plan_resurrection_sites(nav,corpse_map,position.position,corpse,
-            hazards,spawn_hints=hints,route_points=route_points,scout=True)
-        # Compare actual terrain-aware local counts before moving to a site.
-        ranked = [(len(local_reclaim_threats(nav,corpse_map,point,hazards)),point,path)
-                  for point,path in sites]
-        ranked.sort(key=lambda item:(item[0],position.position.distance_to(item[1])))
-        sites = [(point,path) for _,point,path in ranked]
-        log(f'Resurrection search {search+1}/8: {len(hazards)} mapped creatures, '
-            f'{len(sites)} reachable scouting candidates; ranked attacker counts '
-            f'{[n for n,_,_ in ranked]}')
-        moved = False
-        for point, _ in sites:
-            if any(point.distance_to(p)<2 for p in attempted):
-                continue
-            state, position = observe()
-            attempted.append(point)
-            local = local_reclaim_threats(nav,corpse_map,point,tuple(read_hazards(state,corpse)))
-            log(f'Checking offset site {point.distance_to(corpse):.1f}y from corpse; '
-                f'{len(local)} nearby potential attackers')
-            if position.position.distance_to(point)>1.5:
-                try:
-                    path = nav.find_path(corpse_map,position.position,point)
-                    if not path or path[-1].distance_to(point)>2:
-                        continue
-                    path = validate_nav_path(path,position.position,point,max_step=9)
-                except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
-                    continue
-                if not walk(path,'Ghost scouting'):
-                    continue
-            moved = True
-            if scout_surroundings is not None:
-                scout_surroundings()
-            state, position = observe()
-            local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
-            log(f'Scouted site: {len(local)} potential attackers; watching for opening')
-            chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
-                corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
-                patrol_seconds=8 if len(local)>2 else 24)
-            if chosen is not None:
-                break
-            # Replan from the new vantage and refreshed positions.
-            break
-        if chosen is None and not moved:
-            # Do not permanently blacklist a site merely because a patrol
-            # crossed it; allow a fresh observation after surveying others.
-            attempted.clear()
-            state, position = observe()
-            if in_reclaim_ring(position.position,corpse):
-                chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
-                    corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log)
+    chosen,fallback=scout_reclaim_site(observe=observe,walk=walk,corpse=corpse,
+        corpse_map=corpse_map,nav=nav,read_hazards=read_hazards,read_spawn_hints=read_spawn_hints,
+        scout_surroundings=scout_surroundings,sleep=sleep,now=now,log=log,breadcrumbs=breadcrumbs)
     if chosen is None:
         raise LiveControlError('Reached corpse vicinity but no safe reclaim site found; remaining a ghost nearby')
     state, position = observe()
@@ -326,7 +386,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
     if (not state.player.dead or not state.death_state.ghost or
             not state.death_state.retrieve_ready or
             not in_reclaim_ring(position.position,corpse) or
-            len(local_reclaim_threats(nav,corpse_map,position.position,final_hazards))>1):
+            not reclaim_window_ok(nav,corpse_map,position.position,final_hazards,fallback=fallback)):
         raise LiveControlError('Final reclaim check failed; no resurrection input sent')
     chosen = position.position
     log(f'Resurrecting {chosen.distance_to(corpse):.1f}y from corpse with '
@@ -337,10 +397,23 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
         if (not state.player.dead or not state.death_state.ghost or
                 not state.death_state.retrieve_ready or
                 not in_reclaim_ring(position.position,corpse) or
-                len(local_reclaim_threats(nav,corpse_map,position.position,
-                    tuple(read_hazards(state,corpse))))>1):
+                not reclaim_window_ok(nav,corpse_map,position.position,
+                    tuple(read_hazards(state,corpse)),fallback=fallback)):
             raise LiveControlError('Reclaim window changed during retreat planning; remaining ghost')
         chosen = position.position
+    if fallback:
+        escape=reclaim_escape_path(nav,corpse_map,position.position,
+            tuple(read_hazards(state,corpse)),route_hints=breadcrumbs)
+        if escape is None:
+            raise LiveControlError('Final reclaim check failed; escape route no longer verified')
+        driver.reclaim_escape_path=escape
+        state,position=observe()
+        if (not state.player.dead or not state.death_state.ghost or
+                not state.death_state.retrieve_ready or not in_reclaim_ring(position.position,corpse) or
+                (escape and position.position.distance_to(escape[0])>1.5) or
+                not reclaim_window_ok(nav,corpse_map,position.position,
+                    tuple(read_hazards(state,corpse)),fallback=True)):
+            raise LiveControlError('Final reclaim check failed; fallback window changed')
     guard()
     driver.chat('/run RetrieveCorpse()')
     state, position = wait_for(

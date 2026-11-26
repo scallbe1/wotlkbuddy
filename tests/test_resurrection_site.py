@@ -15,7 +15,7 @@ def test_selects_reachable_offset_away_from_hostile_spawns():
     for point,path in sites:
         assert acceptable_site(point,corpse,hazards)
         assert 18<=point.distance_to(corpse)<=37
-        assert len(nearby_threats(point,hazards))<=1
+        assert len(nearby_threats(point,hazards))==0
         assert path[-1].distance_to(point) <= 1e-9  # interpolation roundoff only
 
 
@@ -41,10 +41,11 @@ def test_ghost_approaches_even_if_static_spawns_cover_every_site():
     assert all(acceptable_site(p,corpse,()) for p,_ in sites)
 
 
-def test_single_enemy_allowed_but_two_are_not():
+def test_even_single_enemy_prevents_reclaim():
     corpse=Vec3(0,0,0)
     site=Vec3(32,0,0)
-    assert acceptable_site(site,corpse,(Vec3(34,0,0),))
+    assert acceptable_site(site,corpse,())
+    assert not acceptable_site(site,corpse,(Vec3(34,0,0),))
     assert not acceptable_site(site,corpse,(Vec3(34,0,0),Vec3(32,5,0)))
 
 
@@ -58,7 +59,7 @@ def test_zero_threat_sites_rank_before_one_threat_sites():
     assert sites and not nearby_threats(sites[0][0],hazards)
 
 
-def test_patrol_window_waits_at_current_position_until_one_enemy_remains():
+def test_patrol_window_waits_at_current_position_until_no_enemy_remains():
     from types import SimpleNamespace
     from wotlkbuddy.horde.resurrection_site import watch_reclaim_window
     corpse=Vec3(0,0,0)
@@ -74,12 +75,12 @@ def test_patrol_window_waits_at_current_position_until_one_enemy_remains():
     def sleep(s):
         t[0]+=s
     def hazards(*_):
-        return (fixed,patrol) if t[0]<4 else (fixed,Vec3(70,0,0))
+        return (fixed,patrol) if t[0]<4 else ((fixed,) if t[0]<8 else (Vec3(70,0,0),))
     result=watch_reclaim_window(sample=lambda:(state,position),
         read_hazards=hazards,corpse=corpse,nav=nav,map_id=0,
         sleep=sleep,now=lambda:t[0])
     assert result==site
-    assert t[0]>=5
+    assert t[0]>=10
 
 
 def test_two_stationary_enemies_never_authorize_reclaim():
