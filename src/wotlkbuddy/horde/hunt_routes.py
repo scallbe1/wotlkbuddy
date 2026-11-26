@@ -21,7 +21,8 @@ def recoverable_hunt_failure(reason):
         'fresh detour replan', 'fresh detour route required',
         'navmesh route does not reach the quest destination (partial path)',
         'navmesh returned no usable bounded waypoint path',
-        'no complete verified route to distant quest camp'))
+        'no complete verified route to distant quest camp',
+        'route requires unverified vertical transport'))
 
 
 def remember_pack(driver, positions, now):
