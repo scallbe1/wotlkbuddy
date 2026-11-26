@@ -104,16 +104,16 @@ def defend_against_aggro(
             target_entry = state.combat_target.entry_id
             no_damage = 0
             log(f'Defending against verified attacker {target_entry}, GUID {target_guid}')
-            face = getattr(driver, 'face_combat_target', None)
-            if callable(face):
-                state = face(state)
-                guard(state)
-                if not state.player.in_combat:
-                    return state
-                if state.player.target_guid != target_guid or not (verified_attacker(state) or
-                        fleeing_target(state,target_guid,target_entry) or linked_target_authorized(state,driver)):
-                    target_guid = None
-                    continue
+        face = getattr(driver, 'face_combat_target', None)
+        if callable(face):
+            state = face(state)
+            guard(state)
+            if not state.player.in_combat:
+                return state
+            if state.player.target_guid != target_guid or not (verified_attacker(state) or
+                    fleeing_target(state,target_guid,target_entry) or linked_target_authorized(state,driver)):
+                target_guid = None
+                continue
         if state.player.health/max(1,state.player.max_health) < .25 and not critical_logged:
             log('Critical health: continuing verified defensive combat; rest after combat')
             critical_logged = True
