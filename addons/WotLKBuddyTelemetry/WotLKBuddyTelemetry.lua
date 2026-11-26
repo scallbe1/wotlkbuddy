@@ -1363,7 +1363,11 @@ local function tickData()
                             saleScanComplete = 0
                         elseif (not isQuest and itemType ~= ITEM_CLASS_QUEST and itemType~='Quest'
                                 and itemType~='Container' and itemType~='Key' and id~=6948
-                                and (itemType~='Consumable' or id==3434)
+                                -- Sell ordinary white consumables too, except food/drink.
+                                -- Python independently protects healing/mana potions and supplies.
+                                and (itemType~='Consumable' or id==3434 or
+                                     (quality==1 and subtype~='Food & Drink' and subtype~='Food and Drink'
+                                      and subtype~='Bandage'))
                                 and not locked and price > 0 and
                                 -- Preserve Mage-compatible equipment we do not score yet.
                                 not (equipLoc=='INVTYPE_HOLDABLE' or equipLoc=='INVTYPE_FINGER' or
@@ -1372,10 +1376,7 @@ local function tickData()
                                        (weaponSkills[subtype] and equipLoc=='INVTYPE_WEAPONOFFHAND')))) and
                                 (quality == 0 or
                                  (quality <= 2 and equipTypes[equipLoc]) or
-                                 (quality == 1 and equipLoc=='' and (id==3434 or
-                                    itemType=='Trade Goods' or itemType=='Reagent' or
-                                    itemType=='Recipe' or itemType=='Projectile' or
-                                    (itemType=='Miscellaneous' and (subtype=='Junk' or subtype=='Other')))))) then
+                                 (quality == 1 and equipLoc==''))) then
                             table.insert(rows, table.concat({
                                 'D', tostring(bag), tostring(slot),
                                 tostring(id), tostring(qty), tostring(quality),
@@ -1517,19 +1518,31 @@ end)
 
 -- Explicit read-only audit of ALL occupied bag slots, including those
 -- intentionally omitted from the sale-candidate telemetry.
+local function auditVendorSlot(bag, slot)
+    local link = GetContainerItemLink(bag, slot)
+    if not link then return end
+    local _, qty, locked = GetContainerItemInfo(bag, slot)
+    local name, _, quality, _, _, itemType, subtype, _, equipLoc, _, price = GetItemInfo(link)
+    local quest = GetContainerItemQuestInfo and GetContainerItemQuestInfo(bag, slot)
+    -- Plain strings avoid client-specific formatting and hyperlink parsing.
+    local itemId = string.match(link, 'item:(%d+)') or '?'
+    local message = tostring(bag)..'/'..tostring(slot)..' '..tostring(name or 'Uncached item')
+        ..' (#'..itemId..') x'..tostring(qty or '?')
+        ..' | quality '..tostring(quality or '?')
+        ..' | '..tostring(itemType or '?')..'/'..tostring(subtype or '?')
+        ..' '..tostring(equipLoc or '')..' | '..tostring(price or '?')..'c each'
+        ..' | quest '..(quest and 'yes' or (GetContainerItemQuestInfo and 'no' or 'unknown'))
+        ..(locked and ' | locked' or '')
+    DEFAULT_CHAT_FRAME:AddMessage(message)
+end
+
 local function auditVendorBags()
-    DEFAULT_CHAT_FRAME:AddMessage('WotLKBuddy bag audit: bag/slot, item, count, quality, class, vendor price per item, quest status')
+    DEFAULT_CHAT_FRAME:AddMessage('WotLKBuddy bag audit: all occupied slots (read-only)')
     for bag=0,4 do
         for slot=1,(GetContainerNumSlots(bag) or 0) do
-            local link=GetContainerItemLink(bag,slot)
-            if link then
-                local _,qty,locked=GetContainerItemInfo(bag,slot)
-                local name,_,quality,_,_,itemType,subtype,_,equipLoc,_,price=GetItemInfo(link)
-                local quest=GetContainerItemQuestInfo and GetContainerItemQuestInfo(bag,slot)
-                DEFAULT_CHAT_FRAME:AddMessage(string.format('%d/%d %s x%d | quality %s | %s/%s %s | %sc | quest %s%s',
-                    bag,slot,link,qty or 0,tostring(quality or '?'),itemType or '?',subtype or '?',
-                    equipLoc or '',tostring(price or '?'),quest and 'yes' or (GetContainerItemQuestInfo and 'no' or 'unknown'),
-                    locked and ' | locked' or ''))
+            local ok, err = pcall(auditVendorSlot, bag, slot)
+            if not ok then
+                DEFAULT_CHAT_FRAME:AddMessage('Bag '..tostring(bag)..' slot '..tostring(slot)..': audit error '..tostring(err))
             end
         end
     end
