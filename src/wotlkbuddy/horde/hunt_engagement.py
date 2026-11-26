@@ -28,6 +28,14 @@ def prepare_engagement(s, expected, *, routes, allowed_sources, unhittable_guids
             corpse_xyz = target_xyz(s)
         except (OSError, ValueError, LiveControlError) as exc:
             log(f'Observed matching target but cannot resolve target XYZ: {exc}')
+        if getattr(driver,'awareness',None) is not None and corpse_xyz is not None:
+            _,where=world_position(s)
+            dz=corpse_xyz.z-where.z
+            if abs(dz)>4 and not s.player.in_combat:
+                log(f'Target skipped: {s.player.target_guid}; height difference {dz:+.1f}y exceeds 4y')
+                unhittable_guids.add(s.player.target_guid)
+                driver.chat('/cleartarget')
+                return fresh(s), expected, corpse_xyz, 'search'
         if t.fireball_in_range is not True:
             if s.player.in_combat:
                 raise LiveControlError('Aggro target out of Fireball range')
@@ -99,6 +107,19 @@ def prepare_engagement(s, expected, *, routes, allowed_sources, unhittable_guids
                         s.combat_target.fireball_in_range is not True):
                     log('Target moved during encounter survey; reacquiring')
                     return s, expected, corpse_xyz, 'retry'
+            if getattr(driver,'awareness',None) is not None and not s.player.in_combat:
+                try:
+                    latest=target_xyz(s)
+                    _,where=world_position(s)
+                except (OSError,ValueError,RuntimeError) as exc:
+                    log(f'Target skipped: cannot verify final firing position: {exc}')
+                    driver.chat('/cleartarget')
+                    return fresh(s), expected, corpse_xyz, 'search'
+                if abs(latest.z-where.z)>4:
+                    log(f'Target skipped before cast: height difference {latest.z-where.z:+.1f}y exceeds 4y')
+                    unhittable_guids.add(s.player.target_guid)
+                    driver.chat('/cleartarget')
+                    return fresh(s), expected, corpse_xyz, 'search'
             return s, expected, corpse_xyz, 'attack'
     return s, expected, None, 'search'
 
@@ -177,13 +198,13 @@ def execute_engagement(s, expected, corpse_xyz, *, blocked, unhittable_guids,
         unhittable_guids.add(exc.target_guid)
         if corpse_xyz is not None:
             unhittable_positions.append(corpse_xyz)
-        log(f'Cannot hit spider {exc.target_guid}; '
+        log(f'Cannot hit creature {exc.target_guid}; '
             f'excluding that GUID without kill credit '
             f'({blocked.count}/3), seeking another '
             'verified quest target')
         if blocked.count>=3:
             raise LiveControlError(
-                'Three verified spiders were unreachable '
+                'Three verified creatures were unreachable '
                 'after bounded Detour LOS recovery; '
                 'stop for manual LOS diagnosis') from exc
         if latest.player.target_guid == exc.target_guid:
