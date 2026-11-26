@@ -106,10 +106,12 @@ def tactical_status(driver,kind):
 
 
 def scan_with_tactical_status(driver,scan):
+    tactical_status(driver,'clear')
     try:
         return scan()
     finally:
-        tactical_status(driver,'clear')
+        if getattr(driver,'_tactical_activity',None)!='range':
+            tactical_status(driver,'clear')
 
 
 def can_close_range(state,*,origin,ahead,target_position,candidates,blocked_nearby):
@@ -122,6 +124,7 @@ def can_close_range(state,*,origin,ahead,target_position,candidates,blocked_near
         return False
     target=state.combat_target
     if (not target or target.dead or not target.attackable or
+            state.player.target_guid!=candidates[0][1] or target.entry_id!=candidates[0][2] or
             target.reaction not in (1,2,3) or target.fireball_in_range is not False):
         return False
     try:
@@ -362,6 +365,7 @@ def scan_and_clear_hostiles(
     target=state.combat_target
     if state.player.target_guid==chosen_guid and can_close_range(state,origin=player_position.position,
             ahead=path_ahead,target_position=target_position,candidates=candidates,blocked_nearby=blocked_nearby):
+        tactical_status(driver,'range')
         log(f'Isolated hostile {chosen_guid} moved out of Fireball range; continuing checked route to close distance')
         return finish(state)
     if (not target or target.entry_id!=chosen_entry or target.dead or
@@ -432,6 +436,7 @@ def scan_and_clear_hostiles(
         if (plan and len(plan.enemies)==1 and state.player.target_guid==chosen_guid and
                 can_close_range(state,origin=player_position.position,ahead=path_ahead,
                     target_position=target_position,candidates=candidates,blocked_nearby=blocked_nearby)):
+            tactical_status(driver,'range')
             log('Approved isolated target moved out of range; advancing along checked route')
             return finish(state)
         if (state.player.target_guid!=chosen_guid or not target or target.dead or
