@@ -140,7 +140,6 @@ def trial_board(args):
                 deadline = time.monotonic()+budget
                 last_snap = time.monotonic()
                 boarded = False
-                previous = pos
                 result = 'boarding_timeout'
                 keyboard.key_down(0x11)
                 try:
@@ -168,10 +167,10 @@ def trial_board(args):
                             if (pos.map_id != 0 or abs(pos.x-CENTER_X) > 1.3
                                     or abs(pos.z-z) > 1.1
                                     or heading_error(pos.facing_rad, facing) > .18
-                                    or not 280 <= pos.y <= 310):
+                                    or not (290 <= pos.y <= 310 if floor == 'lower'
+                                            else 274 <= pos.y <= 293)):
                                 result = 'unexpected_approach_position'
                                 break
-                        previous = pos
                         time.sleep(.035)
                 finally:
                     keyboard.key_up(0x11)
