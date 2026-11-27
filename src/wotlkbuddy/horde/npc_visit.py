@@ -184,6 +184,12 @@ def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patro
         fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=3. if patrol_watch in ('chase','chase_open') else 6.)
 
 
+def run_npc_leg(driver,npc_name,execute_visit,*,patrol_leg):
+    if patrol_leg:
+        return execute_visit()
+    return navigate_with_status(driver,'npc',execute_visit,target=npc_name)
+
+
 def visit_npc(
     *, npc_name: str, npc_id: int, pid: int, capture: Callable[[], ClientTelemetry],
     driver, nav, spawns, radius: float = 160,
@@ -357,10 +363,7 @@ def visit_npc(
                 if not raw or abs(raw[0].z-measured.z)>2.5:
                     raise EncounterRouteUnavailable('NPC replan does not start on measured floor')
                 route=verified_npc_route(raw,measured.position,dest,map_id=world.map_id)
-        if _waypoint is not None:
-            execute_visit()
-        else:
-            navigate_with_status(driver,'npc',execute_visit,target=npc_name)
+        run_npc_leg(driver,npc_name,execute_visit,patrol_leg=_waypoint is not None)
 
     after = capture()
     after_pid, at = world_position(after)

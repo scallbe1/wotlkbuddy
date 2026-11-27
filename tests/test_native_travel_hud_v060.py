@@ -134,6 +134,17 @@ def test_controller_uses_real_destination_status_only_during_detour():
                         and isinstance(node.func, ast.Name)
                         and node.func.id == name]
             if kind == 'npc' and target == 'npc_name':
+                # The patrol wrapper is covered by the behavioural test below.
+                # Inspect the stationary route wrapper separately, following
+                # its callback through run_npc_leg to the actual visit routine.
+                if isinstance(callback, ast.Name) and callback.id == 'acquire':
+                    continue
+                if isinstance(callback, ast.Name) and callback.id == 'execute_visit':
+                    delegations = [node for node in ast.walk(tree)
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == 'run_npc_leg']
+                    assert any(len(node.args)==3 and ast.unparse(node.args[2])=='execute_visit'
+                               for node in delegations)
                 delegated = calls_named(bodies, 'walk_npc_path')
                 assert delegated
                 assert any(kw.arg == 'travel' and ast.unparse(kw.value) == 'travel'
