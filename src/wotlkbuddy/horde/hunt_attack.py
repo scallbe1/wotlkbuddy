@@ -190,6 +190,11 @@ def reface_before_cast(state,driver,guard,guid,entry):
     return state if state.player.target_guid==guid and t and t.entry_id==entry else None
 
 
+def resolve_interrupted_target(state, *, recover, confirm):
+    """Defend active combat or verify the original target's death."""
+    return recover(state) if state.player.in_combat else confirm(state)
+
+
 def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
                   previous_credit: tuple[int, int] | None, *, driver, guard,
                   fresh, qlog, clear_remaining_aggro, approach_unhittable_target,
@@ -211,6 +216,9 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
                       target_guid=target_guid, expected=expected, driver=driver,
                       fresh=fresh, clear_remaining_aggro=clear_remaining_aggro,
                       credit_advanced=credit_advanced, record_kill=record_kill, log=log)
+    confirm = partial(confirm_lost_target, collect_items=collect_items,
+                      target_guid=target_guid, expected=expected, driver=driver,
+                      fresh=fresh, credit_advanced=credit_advanced, record_kill=record_kill, log=log)
     unchanged = 0
     landed_damage = False
     approach_attempts = 0
@@ -241,12 +249,7 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
             raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
         faced=reface_before_cast(s,driver,guard,target_guid,expected)
         if faced is None:
-            latest=fresh(s)
-            if latest.player.in_combat:
-                return recover(latest)
-            return confirm_lost_target(latest,collect_items=collect_items,target_guid=target_guid,
-                expected=expected,driver=driver,fresh=fresh,credit_advanced=credit_advanced,
-                record_kill=record_kill,log=log)
+            return resolve_interrupted_target(fresh(s), recover=recover, confirm=confirm)
         s=faced
         if s.combat_target.dead:
             continue
@@ -262,12 +265,7 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
         new = s.combat_target
         if (s.player.target_guid != target_guid or new is None
                 or new.entry_id != expected):
-            if s.player.in_combat:
-                return recover(s)
-            return confirm_lost_target(
-                s, collect_items=collect_items, target_guid=target_guid,
-                expected=expected, driver=driver, fresh=fresh,
-                credit_advanced=credit_advanced, record_kill=record_kill, log=log)
+            return resolve_interrupted_target(s, recover=recover, confirm=confirm)
         if not new.dead and new.health >= previous_health:
             # Once damage is established, overlap one projectile with the next
             # cast against the same verified living attacker. Keep the old
