@@ -1667,7 +1667,7 @@ local hudWorkKind, hudWorkDone, hudWorkTotal = '', 0, 0
 local hudWorkSince, hudWorkAt = 0, 0
 local workLabels = {
     routes='Searching alternate firing positions',
-    patrol='Waiting for patrol changes',
+    patrol='Waiting for patrol changes (8 sec)',
     reclaim='Evaluating resurrection sites',
     reclaimwait='Watching for safe resurrection',
     ghostroute='Searching alternate corpse routes'
@@ -1810,7 +1810,7 @@ statusFrame:SetScript('OnUpdate', function(_, elapsed)
     end
     goalText:SetText('Goal: ' .. string.sub(goal, 1, 65))
     local action = phaseLabels[hudPhase] or 'Standing by'
-    if hudWorkKind~='' then
+    if hudWorkKind~='' and not UnitAffectingCombat('player') then
         action=workLabels[hudWorkKind]
     elseif UnitIsDeadOrGhost('player') then
         action = (UnitIsGhost('player') and (travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) or 'Ghost: recovering corpse')) or 'Dead: awaiting spirit release'
