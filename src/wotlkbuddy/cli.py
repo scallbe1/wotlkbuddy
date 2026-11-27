@@ -1037,6 +1037,18 @@ def _live_watch(args: argparse.Namespace) -> None:
         raise RuntimeError('No valid WoW addon telemetry received. See docs/LIVE_CLIENT.md')
     print(f'Received {count} unique real-client telemetry frames (read-only).', file=sys.stderr)
 
+def _register_live_status(sub):
+    status = sub.add_parser('live-status', help='Read one live player/quest summary (no input)')
+    status.add_argument('--monitor', type=int, default=0,
+                        help='0 = all displays; 1 = primary')
+    status.add_argument('--countdown', type=float, default=5,
+                        help='Seconds to bring WoW to foreground before capture')
+    status.set_defaults(func=_live_status)
+    status.add_argument('--quest-audit',action='store_true',
+                        help='Compare selected profile against observed quest history')
+    status.add_argument('--profiles-root',default=str(Path.home() / 'Questing-profiles'))
+
+
 def _live_status(args: argparse.Namespace) -> None:
     """One readable quest-journal observation, no actions taken."""
     from wotlkbuddy.live.capture import capture_monitor
@@ -1046,7 +1058,18 @@ def _live_status(args: argparse.Namespace) -> None:
     if args.countdown:
         print(f'Switch to WoW now: reading in {args.countdown:g} seconds.', file=sys.stderr)
         time.sleep(args.countdown)
-    print(summarize_telemetry(capture_monitor(args.monitor)))
+    snapshot = capture_monitor(args.monitor)
+    print(summarize_telemetry(snapshot))
+    if getattr(args, 'quest_audit', False):
+        from wotlkbuddy.horde.profile import load_horde_profile, select_quest_profile
+        from wotlkbuddy.horde.quest_audit import audit_profile_quests, print_profile_audit
+        if snapshot.resources is None or snapshot.truncated:
+            raise ValueError('Complete live telemetry required for quest audit')
+        race=snapshot.resources.race_token
+        race='Undead' if race.casefold() in ('undead','scourge') else race
+        chosen=select_quest_profile(args.profiles_root,level=snapshot.player.level,
+                                    race=race,class_name=snapshot.resources.class_token.title())
+        print_profile_audit(audit_profile_quests(load_horde_profile(chosen),snapshot))
 
 
 def _live_probe(args: argparse.Namespace) -> None:
@@ -1507,12 +1530,7 @@ def main(argv: list[str] | None = None) -> int:
     watch.add_argument('--monitor', type=int, default=0,
                        help='0 = all displays; 1 = primary display')
     watch.set_defaults(func=_live_watch)
-    status = sub.add_parser('live-status', help='Read one live player/quest summary (no input)')
-    status.add_argument('--monitor', type=int, default=0,
-                        help='0 = all displays; 1 = primary')
-    status.add_argument('--countdown', type=float, default=5,
-                        help='Seconds to bring WoW to foreground before capture')
-    status.set_defaults(func=_live_status)
+    _register_live_status(sub)
     pulse = sub.add_parser('live-probe', help='ONE guarded WASD pulse to validate movement')
     pulse.add_argument('--enable-input', action='store_true',
                        help='Explicit approval to send a single short keyboard pulse')
