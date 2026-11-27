@@ -8,6 +8,7 @@ from wotlkbuddy.horde.training_goals import TrainingGoal, load_goal, save_goal
 from wotlkbuddy.horde.merchant import (
     estimated_vendor_copper, should_vendor_before_training, free_bag_space)
 from wotlkbuddy.horde.gear import equip_mage_upgrades
+from wotlkbuddy.horde.npc_catalog import nearby_service_npcs
 from wotlkbuddy.horde.service_travel import service_candidates, visit_service_npc
 from wotlkbuddy.horde.npc_visit import visit_npc, NpcTargetUnavailable
 from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
@@ -139,7 +140,7 @@ def visit_and_train(*, quest_profile, profiles_root, current, training_goal,
     trainers = service_candidates(
         profile=quest_profile, spawns=db,
         origin=current.position, map_id=current.map_id,
-        role='train', profiles_root=profiles_root)
+        role='train', profiles_root=profiles_root,catalog=nearby_service_npcs)
     if not trainers:
         raise EncounterRouteUnavailable(
             'No nearby Mage TrainClass vendor found in local Horde '
