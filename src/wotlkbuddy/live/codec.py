@@ -324,6 +324,42 @@ class MerchantItem:
 
 
 @dataclass(frozen=True)
+class TrainerAudit:
+    total: int
+    available: int
+    unavailable: int
+    used: int
+    headers: int
+    collapsed: int
+    unknown: int
+    filter_enabled: bool
+    complete: bool
+
+
+def parse_trainer_header(parts):
+    if len(parts) not in (3,12) or parts[1]!='1':
+        raise TelemetryError('Invalid trainer state')
+    try:
+        count=int(parts[2])
+        values=tuple(map(int,parts[3:]))
+    except ValueError as exc:
+        raise TelemetryError('Malformed trainer service count') from exc
+    if not 0<=count<=120:
+        raise TelemetryError('Trainer service count out of range')
+    if not values:
+        return count,None
+    total,available,unavailable,used,headers,collapsed,unknown,enabled,complete=values
+    if (not 0<=total<=10000 or any(not 0<=v<=120 for v in values[1:7])
+            or sum((available,unavailable,used,headers,unknown))!=min(total,120)
+            or collapsed>headers or count>available or enabled not in (0,1)
+            or complete not in (0,1) or (complete and
+            (total>120 or count!=available or collapsed or unknown or not enabled))):
+        raise TelemetryError('Inconsistent trainer service audit')
+    return count,TrainerAudit(total,available,unavailable,used,headers,collapsed,
+                              unknown,bool(enabled),bool(complete))
+
+
+@dataclass(frozen=True)
 class TrainerService:
     index: int
     name: str
@@ -359,6 +395,7 @@ class ClientTelemetry:
     inventory_sale_scan: bool = False
     trainer_open: bool = False
     trainer_services: tuple[TrainerService, ...] = ()
+    trainer_audit: TrainerAudit | None = None
     gossip_services: tuple[GossipServiceOption, ...] = ()
     gossip_services_complete: bool = False
     merchant_open: bool = False
@@ -482,7 +519,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     gear_scan_complete = False
     gear_scan_seen = False
     trainer_seen = False
-    trainer_count: int | None = None
+    trainer_count, trainer_audit = None, None
     trainer_services: dict[int, TrainerService] = {}
     gossip_service_total: int | None = None
     gossip_service_options: dict[int, GossipServiceOption] = {}
@@ -1061,14 +1098,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             gear_scan_seen = True
             gear_scan_complete = parts[1] == '1'
         elif parts[0] == 'N':
-            if len(parts) != 3 or parts[1] != '1' or trainer_seen:
+            if trainer_seen:
                 raise TelemetryError('Invalid or repeated trainer state')
-            try:
-                trainer_count = int(parts[2])
-            except ValueError as exc:
-                raise TelemetryError('Malformed trainer service count') from exc
-            if not 0 <= trainer_count <= 120:
-                raise TelemetryError('Trainer service count out of range')
+            trainer_count, trainer_audit = parse_trainer_header(parts)
             trainer_seen = True
         elif parts[0] == 'Y':
             if len(parts) != 6 or not trainer_seen:
@@ -1233,7 +1265,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            weapon_swap_safe=weapon_swap_safe,
                            inventory_sale_scan=inventory_sale_scan,
                            trainer_open=trainer_seen,
-                           trainer_services=tuple(trainer_services.values()),
+                           trainer_services=tuple(trainer_services.values()), trainer_audit=trainer_audit,
                            gossip_services=tuple(gossip_service_options[i]
                              for i in sorted(gossip_service_options)),
                            gossip_services_complete=gossip_service_total is not None,
