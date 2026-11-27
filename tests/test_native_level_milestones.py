@@ -64,6 +64,12 @@ def test_grinding_requires_exact_normal_isolated_target_with_safe_path():
     driver=NS(awareness=NS(read=lambda *_:rows,survey=lambda *a,**k:(s,(),())),
               direct_path_clear=lambda *_:True)
     assert eligible_grind_target(s,where,goal,driver)
+    # A nearby target on a different floor must still be rejected.
+    original=target.position
+    target.position=Vec3(original.x,original.y,original.z+5)
+    assert not eligible_grind_target(s,where,goal,driver)
+    target.position=original
+    assert eligible_grind_target(s,where,goal,driver)
     s.combat_target.classification='elite'
     assert not eligible_grind_target(s,where,goal,driver)
     s.combat_target.classification='normal'
