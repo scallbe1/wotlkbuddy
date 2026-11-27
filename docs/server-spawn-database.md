@@ -57,3 +57,30 @@ random template or temporarily absent NPC is currently active.
 This does not yet import quest definitions, trainer services, NPC vendor
 stock, or object spawn data. Those can use the same server-derived approach
 in later work.
+
+## Moving NPCs
+
+An optional `CreaturePatrols.tsv` beside the selected spawn database supplies
+server waypoint paths. The repository includes Gordo's 30 observed AzerothCore
+waypoints as the first route; other NPCs use their static behavior until data
+is supplied. Export the following read-only query (no header; tab-separated)
+for servers with the single `creature.id` schema:
+
+```sql
+SELECT c.id, c.map, c.guid, w.id, w.point,
+       w.position_x, w.position_y, w.position_z
+FROM creature c
+LEFT JOIN creature_addon ca ON ca.guid = c.guid
+LEFT JOIN creature_template_addon cta ON cta.entry = c.id
+JOIN waypoint_data w ON w.id = COALESCE(NULLIF(ca.path_id,0),
+                                       NULLIF(cta.path_id,0))
+WHERE c.MovementType = 2
+ORDER BY c.id,c.map,c.guid,w.id,w.point;
+```
+
+For id1/id2/id3 schemas adapt the entry join to the server schema. SmartAI
+scripted paths and random movement are not covered by this export. The lookup
+requires a unique route near the selected static spawn. Each move is planned
+through the existing Detour/encounter navigation. Live creature observations
+and exact target GUID must agree at interaction range. No guessed map
+percentage conversion is used.

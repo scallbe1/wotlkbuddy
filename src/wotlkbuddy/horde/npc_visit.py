@@ -26,6 +26,27 @@ from wotlkbuddy.horde.hunt_routes import (unsafe_route_encounter, detour_around_
                                          EncounterRouteUnavailable)
 
 
+def resolve_npc_spawn(spawns, world, npc_id, npc_name, radius, destination_hint):
+    matches = [spot for spot in spawns.find(npc_id, world.map_id, 100)
+               if distance_world(world.position, spot.position) <= radius]
+    if destination_hint is not None:
+        # The source profile's NPC position was independently matched against
+        # the spawn DB by the NPC catalog. Preserve that identity throughout
+        # navigation instead of silently picking a different nearby spawn.
+        matches = [spot for spot in matches
+                   if distance_world(destination_hint, spot.position) <= 10]
+    if not matches:
+        raise LiveControlError(f'No verified nearby spawn of {npc_name} ({npc_id})')
+    matches.sort(key=lambda spot: distance_world(
+        destination_hint if destination_hint is not None else world.position,
+        spot.position))
+    dest = matches[0].position
+    if any(distance_world(dest, other.position) > 10 for other in matches):
+        raise LiveControlError(
+            f'Multiple ambiguous locations for NPC {npc_name}; refusing to guess')
+    return dest
+
+
 class NpcTargetUnavailable(LiveControlError):
     """NPC could not be selected after a bounded verified visit."""
 
@@ -90,6 +111,7 @@ def visit_npc(
     world_position: Callable[[ClientTelemetry], tuple[int, object]] | None = None,
     travel: Callable[..., object] = follow_world_path,
     log: Callable[[str], None] = lambda _: None,
+    _waypoint=None, _travel_budget=450,
 ) -> ClientTelemetry:
     if not (npc_name and 0 < npc_id < 2**24 and 20 <= radius <= 600):
         raise ValueError('Invalid NPC identity/search radius')
@@ -115,23 +137,20 @@ def visit_npc(
         actual_pid, world = world_position(first)
         if actual_pid != pid:
             raise LiveControlError('Active WoW PID changed during UI cleanup')
-    matches = [spot for spot in spawns.find(npc_id, world.map_id, 100)
-               if distance_world(world.position, spot.position) <= radius]
-    if destination_hint is not None:
-        # The source profile's NPC position was independently matched against
-        # the spawn DB by the NPC catalog. Preserve that identity throughout
-        # navigation instead of silently picking a different nearby spawn.
-        matches = [spot for spot in matches
-                   if distance_world(destination_hint, spot.position) <= 10]
-    if not matches:
-        raise LiveControlError(f'No verified nearby spawn of {npc_name} ({npc_id})')
-    matches.sort(key=lambda spot: distance_world(
-        destination_hint if destination_hint is not None else world.position,
-        spot.position))
-    dest = matches[0].position
-    if any(distance_world(dest, other.position) > 10 for other in matches):
-        raise LiveControlError(
-            f'Multiple ambiguous locations for NPC {npc_name}; refusing to guess')
+    dest = _waypoint if _waypoint is not None else resolve_npc_spawn(
+        spawns, world, npc_id, npc_name, radius, destination_hint)
+    if _waypoint is None:
+        from wotlkbuddy.horde.npc_patrol import visit_patrolling_npc
+        lookup = getattr(spawns, 'patrol', None)
+        points = lookup(npc_id, world.map_id, dest) if callable(lookup) else ()
+        if points and getattr(driver, 'awareness', None) is not None:
+            return visit_patrolling_npc(points=points, npc_name=npc_name, npc_id=npc_id,
+                pid=pid, owner=player.guid, map_id=world.map_id, capture=capture,
+                world_position=world_position, driver=driver, sleep=sleep, now=now, log=log,
+                walk=lambda point, budget: visit_npc(npc_name=npc_name, npc_id=npc_id,
+                    pid=pid, capture=capture, driver=driver, nav=nav, spawns=spawns,
+                    sleep=sleep, now=now, world_position=world_position, travel=travel,
+                    log=log, _waypoint=point, _travel_budget=budget))
     if not nav.ping():
         raise LiveControlError('Navmesh helper not responding')
     if hypot(world.x-dest.x, world.y-dest.y) > 3 or abs(world.z-dest.z) > 5:
@@ -149,7 +168,7 @@ def visit_npc(
             return state, pos
         def execute_visit():
             route=path
-            deadline=now()+450
+            deadline=now()+_travel_budget
             encounter_replans=0
             height_recovery=HeightRecovery(world.position,dest)
             rejected=[]
@@ -275,13 +294,19 @@ def visit_npc(
             hypot(at.x-dest.x, at.y-dest.y) > 7 or
             abs(at.z-dest.z) > 5):
         raise LiveControlError('NPC arrival/character state not confirmed')
+    if _waypoint is not None:
+        return after
+    return target_npc(npc_name, npc_id, player.guid, capture, driver, sleep, now, log)
+
+
+def target_npc(npc_name, npc_id, owner, capture, driver, sleep, now, log):
     log(f'Targeting verified {npc_name} (entry {npc_id})')
     driver.chat('/targetexact ' + npc_name)
     deadline = now() + 7
     while now() < deadline:
         sleep(.5)
         s = capture()
-        if (s.truncated or s.player.guid != player.guid or s.player.dead or
+        if (s.truncated or s.player.guid != owner or s.player.dead or
                 s.player.in_combat or driver.emergency_stop_requested() or
                 not driver.wow_is_foreground()):
             raise LiveControlError('Unsafe player state while targeting NPC')
