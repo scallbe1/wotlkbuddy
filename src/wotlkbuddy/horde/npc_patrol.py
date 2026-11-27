@@ -167,6 +167,15 @@ def visit_patrolling_npc(*, points, npc_name, npc_id, pid, owner, map_id,
             if mob is None or chase_attempts >= CHASE_LIMIT:
                 break
             chase_attempts += 1
+            if open_window and mob.position.distance_to(where.position)>6.0:
+                try:
+                    walk_patrol_leg(mob.position,walk=chase_walk,observe=observe,deadline=deadline,
+                                    now=now,log=log,npc_name=npc_name)
+                except PatrolSighting:
+                    continue
+                except EncounterRouteUnavailable:
+                    break
+                continue
             try:
                 selected = state if state.player.target_guid.lower() == mob.guid.lower() else target_npc(
                     npc_name,npc_id,owner,capture,driver,sleep,now,log)

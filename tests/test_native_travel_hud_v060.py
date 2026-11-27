@@ -134,6 +134,17 @@ def test_controller_uses_real_destination_status_only_during_detour():
                         and isinstance(node.func, ast.Name)
                         and node.func.id == name]
             if kind == 'npc' and target == 'npc_name':
+                # The patrol wrapper is covered by the behavioural test below.
+                # Inspect the stationary route wrapper separately, following
+                # its callback through run_npc_leg to the actual visit routine.
+                if isinstance(callback, ast.Name) and callback.id == 'acquire':
+                    continue
+                if isinstance(callback, ast.Name) and callback.id == 'execute_visit':
+                    delegations = [node for node in ast.walk(tree)
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == 'run_npc_leg']
+                    assert any(len(node.args)==3 and ast.unparse(node.args[2])=='execute_visit'
+                               for node in delegations)
                 delegated = calls_named(bodies, 'walk_npc_path')
                 assert delegated
                 assert any(kw.arg == 'travel' and ast.unparse(kw.value) == 'travel'
@@ -242,3 +253,29 @@ def test_hunt_tactical_context_preserves_scoped_travel_wrapper(kind):
         return 'complete'
     assert navigate_with_status(d,'enemies',travel)=='complete'
     assert d.calls==[(kind,None),('clear',None)]
+
+
+def test_patrol_replans_do_not_emit_coordinate_chat():
+    from wotlkbuddy.horde.npc_visit import walk_npc_path,run_patrol_with_status
+    from wotlkbuddy.game.types import Vec3
+    d=DisplayDriver()
+    d.set_navigation_destination=Mock()
+    d.set_navigation_distance=Mock()
+    d.scan_hostiles=Mock()
+    calls=[]
+    def travel(path,**kwargs):
+        calls.append(kwargs)
+        assert kwargs['destination_status'] is None
+        assert kwargs['distance_status'] is None
+        return 'complete'
+    def acquire():
+        for mode in (True,'chase_open',False):
+            walk_npc_path([Vec3(0,0,0),Vec3(10,0,0)],90,travel=travel,
+                sample=Mock(),driver=d,nav=Mock(),map_id=0,log=Mock(),npc_id=10665,
+                patrol_watch=mode,patrol_leg=True)
+        assert d.calls==[('npc','Holland')]
+        return 'window'
+    assert run_patrol_with_status(d,'Holland',acquire)=='window'
+    assert d.calls==[('npc','Holland'),('clear',None)]
+    assert len(calls)==3
+    assert all(call['on_threat'] is not None for call in calls)
