@@ -157,3 +157,51 @@ def test_server_local_patrol_file_overrides_bundled_snapshot(tmp_path):
                          '2\t0\t2\t20\t1\t0\t0\t0\n2\t0\t2\t20\t2\t30\t0\t0\n')
         assert db.patrol(1,0,Vec3(0,0,0)) == (Vec3(0,0,0),Vec3(20,0,0))
         assert db.patrol(2,0,Vec3(0,0,0)) == (Vec3(0,0,0),Vec3(30,0,0))
+
+
+def test_chase_interrupts_when_live_npc_passes_or_goal_moves():
+    from wotlkbuddy.horde.npc_patrol import patrol_intercept_required
+    start=Vec3(0,0,0)
+    goal=Vec3(26,0,0)
+    where=NS(position=Vec3(12,0,0))
+    assert patrol_intercept_required(NS(position=Vec3(14,0,0)),where,goal,start,'chase')
+    assert patrol_intercept_required(NS(position=Vec3(34,0,0)),where,goal,start,'chase')
+    assert patrol_intercept_required(None,where,goal,start,'chase')
+    assert not patrol_intercept_required(NS(position=Vec3(28,0,0)),where,goal,start,'chase')
+
+
+def test_moving_npc_selected_before_chase_and_reacquired(monkeypatch):
+    import wotlkbuddy.horde.npc_patrol as patrol
+    import wotlkbuddy.horde.npc_visit as visit
+    points=(Vec3(0,0,0),Vec3(100,0,0))
+    player=NS(guid='owner',dead=False,in_combat=False,target_guid='')
+    state=NS(player=player,truncated=False)
+    position=[Vec3(0,0,0)]
+    mob=NS(entry=42,guid='mobile',health=10,position=Vec3(26,0,0))
+    driver=NS(emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True,
+              awareness=NS(read=lambda s,p:[mob]))
+    monkeypatch.setattr(patrol,'creature_entry_from_guid',lambda guid:42)
+    selected=[]
+    def select(*args):
+        selected.append(True)
+        player.target_guid='mobile'
+        return state
+    monkeypatch.setattr(visit,'target_npc',select)
+    goals=[]
+    def chase(point,budget):
+        assert player.target_guid=='mobile'
+        goals.append(point)
+        if len(goals)==1:
+            position[0]=Vec3(10,0,0)
+            mob.position=Vec3(36,0,0)
+        else:
+            position[0]=Vec3(30,0,0)
+            mob.position=Vec3(33,0,0)
+        raise patrol.PatrolSighting(patrol.SIGHTING_REASON)
+    assert visit_patrolling_npc(points=points,npc_name='Mobile quest giver',npc_id=42,pid=1,
+        owner='owner',map_id=0,capture=lambda:state,driver=driver,
+        world_position=lambda s:(1,NS(position=position[0],map_id=0)),
+        sleep=lambda _:None,now=lambda:0,log=lambda _:None,
+        walk=lambda *args:pytest.fail('should track the live NPC'),walk_chase=chase) is state
+    assert goals==[Vec3(26,0,0),Vec3(36,0,0)]
+    assert len(selected)==1

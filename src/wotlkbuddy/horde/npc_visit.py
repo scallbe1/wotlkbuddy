@@ -141,16 +141,26 @@ def visit_known_patrol(*,npc_name,npc_id,pid,capture,driver,nav,spawns,
     return visit_patrolling_npc(points=points,npc_name=npc_name,npc_id=npc_id,
         pid=pid,owner=owner,map_id=world.map_id,capture=capture,
         world_position=world_position,driver=driver,sleep=sleep,now=now,log=log,
-        walk=walk,walk_search=lambda point,budget:walk(point,budget,True))
+        walk=walk,walk_search=lambda point,budget:walk(point,budget,True),
+        walk_chase=lambda point,budget:walk(point,budget,'chase'))
 
 
 def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patrol_watch):
     scan=getattr(driver,'scan_hostiles',None)
     def patrol_scan(state,where,legs):
-        from wotlkbuddy.horde.npc_patrol import nearby_npc,SIGHTING_REASON
-        if nearby_npc(state,where,driver,npc_id) is not None:
+        from wotlkbuddy.horde.npc_patrol import nearby_npc,SIGHTING_REASON,patrol_intercept_required
+        mob=nearby_npc(state,where,driver,npc_id)
+        if patrol_intercept_required(mob,where,path[-1],path[0],patrol_watch):
             raise LiveControlError(SIGHTING_REASON)
-        return scan(state,where,legs) if callable(scan) else state
+        result=scan(state,where,legs) if callable(scan) else state
+        # Combat, loot and drinking can consume enough time for the NPC to
+        # leave the old destination. Read again before allowing further W.
+        if patrol_watch=='chase':
+            current,position=sample()
+            if not current.player.in_combat and patrol_intercept_required(
+                    nearby_npc(current,position,driver,npc_id),position,path[-1],path[0],patrol_watch):
+                raise LiveControlError(SIGHTING_REASON)
+        return result
     return travel(path,max_seconds=budget,sample=sample,
         keyboard=getattr(driver,'keyboard',driver),stop_requested=driver.emergency_stop_requested,
         expected_quest_id=None,expected_map_id=map_id,
@@ -161,7 +171,7 @@ def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patro
         progress=log,on_aggro=getattr(driver,'on_aggro',None),
         on_threat=patrol_scan if patrol_watch else scan,
         waypoint_spacing=18.,continuous_forward=True,
-        fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
+        fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=3. if patrol_watch=='chase' else 6.)
 
 
 def visit_npc(

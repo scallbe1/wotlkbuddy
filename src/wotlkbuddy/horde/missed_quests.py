@@ -31,6 +31,12 @@ class RecoveryOffer:
     quest_ids: frozenset[int]
 
 
+def offer_retry_due(memory, player, entry, now):
+    key=(player.guid,player.level,entry)
+    return (now-memory.get(key,float('-inf'))>=180 and
+            now-memory.get(('no_offer',*key),float('-inf'))>=1800)
+
+
 def recovery_offers(profile, state, current, db, memory, *, now):
     """Select earlier/easier NPC opportunities within supported travel bounds."""
     native = native_profiles_root() / 'Horde/Starter/Tirisfal-Glades-1-12.xml'
@@ -65,7 +71,7 @@ def recovery_offers(profile, state, current, db, memory, *, now):
                                map_id=0,active_quests=active,completed_quests=done)
                is not True for expr in step.conditions):
             continue
-        if now-memory.get((state.player.guid,level,step.entry),float('-inf'))<180:
+        if not offer_retry_due(memory,state.player,step.entry,now):
             continue
         position=_verified_spawn(db,entry=step.entry,map_id=0,
                                  origin=current.position,anchor=step.world_position,radius=600)
