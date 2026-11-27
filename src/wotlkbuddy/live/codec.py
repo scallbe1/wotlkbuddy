@@ -518,6 +518,23 @@ def parse_item_quest_starter(parts,rows):
     return rows
 
 
+def validate_action_identity_rows(raw_action_slots,actionbar_inspected,action_identity_audits,actionbar_page):
+    if raw_action_slots and not actionbar_inspected:
+        raise TelemetryError('Raw actionbar rows require inspected actionbar header')
+    if action_identity_audits:
+        visible = {
+            item.button:item for item in raw_action_slots.values()
+            if item.view == ('visible' if actionbar_page and
+                             actionbar_page > 1 else 'base')
+        }
+        for audit in action_identity_audits.values():
+            raw = visible.get(audit.button)
+            if (raw is None or raw.kind != 'spell' or
+                    raw.action_index != audit.action_index or
+                    raw.action_id != audit.raw_id):
+                raise TelemetryError('Action identity disagrees with raw action slot')
+
+
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     content = data.decode('utf-8', errors='replace')
     player = None
@@ -1177,20 +1194,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             (spellbook_probe is not None and
              spellbook_diagnostic.name != spellbook_probe.name)):
         raise TelemetryError('Spellbook diagnostic disagrees with spellbook probe')
-    if raw_action_slots and not actionbar_inspected:
-        raise TelemetryError('Raw actionbar rows require inspected actionbar header')
-    if action_identity_audits:
-        visible = {
-            item.button:item for item in raw_action_slots.values()
-            if item.view == ('visible' if actionbar_page and
-                             actionbar_page > 1 else 'base')
-        }
-        for audit in action_identity_audits.values():
-            raw = visible.get(audit.button)
-            if (raw is None or raw.kind != 'spell' or
-                    raw.action_index != audit.action_index or
-                    raw.action_id != audit.raw_id):
-                raise TelemetryError('Action identity disagrees with raw action slot')
+    validate_action_identity_rows(raw_action_slots,actionbar_inspected,action_identity_audits,actionbar_page)
     # On 3.3.5a the raw action number can be a spellbook INDEX, not
     # a spell database ID. A trusted AB/AS must agree with the separate
     # icon-matched AX evidence when both records are present. Never
