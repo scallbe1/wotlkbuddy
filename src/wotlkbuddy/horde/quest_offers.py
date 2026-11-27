@@ -51,6 +51,34 @@ def matching_direct_offer(profile, state, npc_id, npc_name, confirmed_completed=
     return next(iter(candidates.values())) if len(candidates)==1 else None
 
 
+def remaining_profile_pickups(profile, snapshot, npc_id, npc_name, confirmed_completed=()):
+    if profile is None:
+        return None  # Generic menu-only callers may still have offers.
+    active={q.quest_id for q in snapshot.quests}
+    done={qid for qid,complete in snapshot.quest_completions if complete} | set(confirmed_completed)
+    result=[]
+    for index,step in enumerate(profile.steps):
+        if (step.kind!='pickup' or not step.supported or step.entry!=npc_id or
+                step.npc_name not in ('',npc_name) or step.quest_id<=0 or
+                step.quest_id in active or step.quest_id in done):
+            continue
+        if any(prior.kind=='turnin' and prior.entry==npc_id and
+               (prior.quest_id not in done or prior.quest_id in active)
+               for prior in profile.steps[:index]):
+            continue
+        result.append(step.quest_id)
+    return result
+
+
+def filter_recovery_offers(visible, profile, npc_id, allowed_quest_ids):
+    """Limit catch-up to the requested native quest titles."""
+    if allowed_quest_ids is None:
+        return visible
+    titles={s.name for s in profile.steps if s.kind=='pickup' and
+            s.entry==npc_id and s.quest_id in allowed_quest_ids}
+    return [o for o in visible if o.title in titles]
+
+
 def accept_npc_offers(
     *, npc_name: str, npc_id: int, capture: Callable[[], ClientTelemetry],
     driver, max_quests: int = 4, profile: HordeProfile | None = None,
@@ -91,28 +119,10 @@ def accept_npc_offers(
             capture=capture, driver=driver, expected_guid=guid,
             sleep=sleep, now=now, log=log)
 
-    def remaining_profile_pickups(snapshot):
-        if profile is None:
-            return None  # Generic menu-only callers may still have offers.
-        active={q.quest_id for q in snapshot.quests}
-        done={qid for qid,complete in snapshot.quest_completions if complete} | set(confirmed_completed)
-        result=[]
-        for index,step in enumerate(profile.steps):
-            if (step.kind!='pickup' or not step.supported or step.entry!=npc_id or
-                    step.npc_name not in ('',npc_name) or step.quest_id<=0 or
-                    step.quest_id in active or step.quest_id in done):
-                continue
-            if any(prior.kind=='turnin' and prior.entry==npc_id and
-                   (prior.quest_id not in done or prior.quest_id in active)
-                   for prior in profile.steps[:index]):
-                continue
-            result.append(step.quest_id)
-        return result
-
     for _ in range(max_quests):
         # A confirmed acceptance is useful progress even if the NPC has no
         # more dialogue. Do not reopen a known exhausted profile giver.
-        if accepted and remaining_profile_pickups(state)==[]:
+        if accepted and remaining_profile_pickups(profile,state,npc_id,npc_name,confirmed_completed)==[]:
             log(f'{npc_name}: all current profile pickups handled; resuming quest progression')
             break
         opened_by_us = False
@@ -239,13 +249,10 @@ def accept_npc_offers(
             log(f'{npc_name}: no additional quest offers in verified {source} list')
             state = dismiss()
             break
-        if allowed_quest_ids is not None:
-            titles={s.name for s in profile.steps if s.kind=='pickup' and
-                    s.entry==npc_id and s.quest_id in allowed_quest_ids}
-            visible=[o for o in visible if o.title in titles]
-            if not visible:
-                state=dismiss()
-                break
+        visible=filter_recovery_offers(visible,profile,npc_id,allowed_quest_ids)
+        if not visible:
+            state=dismiss()
+            break
         visible.sort(key=lambda o: o.index)
         option = visible[0]
         if len([o for o in visible if o.title == option.title]) != 1:
