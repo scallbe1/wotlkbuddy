@@ -161,10 +161,18 @@ class QuestSession:
             self.accepted_ids.extend(ids)
             self.steps.append({'cycle':cycle,'action':'local_pickup','quest_ids':ids})
 
+    def record_item_offers(self,report,cycle):
+        ids=[qid for qid in report.get('item_accepted_quests',())
+             if isinstance(qid,int) and qid>0 and qid not in self.accepted_ids]
+        if ids:
+            self.accepted_ids.extend(ids)
+            self.steps.append({'cycle':cycle,'action':'item_pickup','quest_ids':ids})
+
     def handle_objectives(self, report: dict, cycle: int) -> bool:
         """Return whether quest offers should be checked in this cycle."""
         self.aggro_recoveries = 0
         self.record_local_offers(report,cycle)
+        self.record_item_offers(report,cycle)
         checked = report.get('training_checked_level')
         if isinstance(checked, int):
             self.train_level = checked
@@ -215,6 +223,7 @@ class QuestSession:
         return True
 
     def handle_offers(self, offers: dict, cycle: int) -> None:
+        self.record_item_offers(offers,cycle)
         if isinstance(offers.get('training_checked_level'), int):
             self.train_level = offers['training_checked_level']
         newly_accepted = sorted({
@@ -222,6 +231,8 @@ class QuestSession:
             for qid in ids if isinstance(qid, int) and qid > 0
         })
         if not newly_accepted:
+            if offers.get('item_accepted_quests'):
+                return
             milestone=offers.get('level_milestone')
             if milestone:
                 self.steps.append({'cycle':cycle,'action':'level_milestone',**milestone})

@@ -1431,6 +1431,26 @@ local function tickData()
     -- this 3.3.5 client. Never call UseContainerItem inside the addon.
     -- The Python controller verifies full frames twice, then right-clicks
     -- only one selected, verified slot and checks sale results.
+    -- Quest starters may not have the active quest-item flag.
+    if GetContainerItemQuestInfo and GetContainerItemLink then
+        for bag=0,4 do
+            for slot=1,(GetContainerNumSlots(bag) or 0) do
+                local link=GetContainerItemLink(bag,slot)
+                local id=link and tonumber(string.match(link,'item:(%d+)'))
+                if id then
+                    local _,questID,active=GetContainerItemQuestInfo(bag,slot)
+                    if tonumber(questID) and tonumber(questID)>0 then
+                        local _,_,locked=GetContainerItemInfo(bag,slot)
+                        local row=table.concat({'IQ',bag,slot,id,questID,
+                            active and 1 or 0,locked and 1 or 0},'\t')
+                        if payloadBytes+string.len(row)+1<=CAPACITY-20 then
+                            appendLine(row)
+                        end
+                    end
+                end
+            end
+        end
+    end
     -- BEGIN MERCHANT CANDIDATE BATCH
     do
         local merchantVisible = MerchantFrame and MerchantFrame:IsShown()
@@ -1461,7 +1481,7 @@ local function tickData()
                         local id = tonumber(string.match(link, 'item:(%d+)'))
                         local name, _, quality, _, _, itemType, subtype,
                             _, equipLoc, _, price = GetItemInfo(link)
-                        local isQuest = GetContainerItemQuestInfo(bag, slot)
+                        local isQuest, startsQuest = GetContainerItemQuestInfo(bag, slot)
                         -- Uncached item metadata must not authorize a sale.
                         if not (id and qty and quality and price and itemType
                                 and equipLoc and name) then
@@ -1469,7 +1489,7 @@ local function tickData()
                             -- Outside the merchant, require a full inventory scan
                             -- for resale estimates and training decisions.
                             if not merchantVisible then saleScanComplete = 0 end
-                        elseif (not isQuest and itemType ~= ITEM_CLASS_QUEST and itemType~='Quest'
+                        elseif (not isQuest and not (tonumber(startsQuest) and tonumber(startsQuest)>0) and itemType ~= ITEM_CLASS_QUEST and itemType~='Quest'
                                 and itemType~='Container' and itemType~='Key' and id~=6948
                                 -- Ordinary white food/drink may be sold too.
                                 -- Python independently protects healing/mana potions.
