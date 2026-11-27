@@ -63,6 +63,8 @@ def maintain_equipment(*,profile,profiles_root,location,cap,driver,pid,nav,db,
                        hud,set_native_status,log,memory=None,now=monotonic):
     """Use reachable verified repair vendors, avoiding repeated futile trips."""
     state,current=location()
+    if state.resources is None:
+        raise LiveControlError('Resource telemetry unavailable before equipment maintenance')
     durability=state.resources.durability_percent
     if durability<0 or durability>repair_threshold(profile):
         return None
