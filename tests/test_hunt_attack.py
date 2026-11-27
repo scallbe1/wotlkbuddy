@@ -43,7 +43,7 @@ def test_lost_kill_target_with_credit_records_once():
 
 
 def test_collection_rejects_wrong_corpse_even_if_dead():
-    before = NS(player=NS(target_guid=''))
+    before = NS(player=NS(target_guid='', in_combat=False))
     after = NS(player=NS(target_guid='other', in_combat=False),
                combat_target=NS(entry_id=123, dead=True))
     record = Mock()
@@ -87,3 +87,27 @@ def test_attack_rejects_unlearned_fireball_before_input():
                       approach_unhittable_target=Mock(), collect_items=False,
                       record_kill=Mock(), log=Mock())
     assert not driver.mock_calls
+
+
+def test_interrupted_target_dispatches_based_on_fresh_combat_state():
+    from wotlkbuddy.horde.hunt_attack import resolve_interrupted_target
+    recover, confirm = Mock(), Mock()
+    active = NS(player=NS(in_combat=True))
+    idle = NS(player=NS(in_combat=False))
+    assert resolve_interrupted_target(active,recover=recover,confirm=confirm) is recover.return_value
+    recover.assert_called_once_with(active)
+    confirm.assert_not_called()
+    assert resolve_interrupted_target(idle,recover=recover,confirm=confirm) is confirm.return_value
+    confirm.assert_called_once_with(idle)
+
+
+def test_collection_does_not_reselect_corpse_during_active_combat():
+    from wotlkbuddy.horde.hunt_attack import TargetReassessment
+    driver, fresh, record = Mock(), Mock(), Mock()
+    with pytest.raises(TargetReassessment, match='active item-collection combat'):
+        confirm_lost_target(NS(player=NS(target_guid='other',in_combat=True)),
+            collect_items=True,target_guid='mob',expected=123,driver=driver,
+            fresh=fresh,credit_advanced=Mock(),record_kill=record,log=Mock())
+    driver.chat.assert_not_called()
+    fresh.assert_not_called()
+    record.assert_not_called()
