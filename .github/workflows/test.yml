@@ -47,3 +47,5 @@ jobs:
         run: lua5.1 tests/lua_quest_vendor_thread.lua
       - name: Exercise verified equipment repair
         run: lua5.1 tests/lua_equipment_repair.lua
+      - name: Exercise trainer service observation and completeness
+        run: lua5.1 tests/lua_trainer_service_audit.lua

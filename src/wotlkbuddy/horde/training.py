@@ -14,16 +14,35 @@ def trainer_purchase_priority(service):
     return priority.get(service.name,3),service.cost,service.index
 
 
+def trainer_scan_complete(state):
+    audit=getattr(state,'trainer_audit',None)
+    return audit is None or audit.complete
+
+
+def log_trainer_observation(state,log,label):
+    audit=getattr(state,'trainer_audit',None)
+    if audit is not None:
+        log(f'Trainer {label}: total={audit.total}, available={audit.available}, '
+            f'unavailable={audit.unavailable}, learned={audit.used}, '
+            f'headers={audit.headers}, collapsed={audit.collapsed}, unknown={audit.unknown}, '
+            f'available filter={audit.filter_enabled}, complete={audit.complete}')
+    for service in getattr(state,'trainer_services',()):
+        log(f'  service {service.index}: {service.name} {service.rank}, '
+            f'cost={service.cost}c, required level={service.required_level}')
+
+
 def refresh_trainer_services(state, *, driver, fresh, log):
     """Do not equate a newly opened or filtered trainer list with no ranks."""
     show=getattr(driver,'show_available_trainer_services',None)
     if callable(show):
+        log_trainer_observation(state,log,'before refresh')
         show(state)
-        log('Trainer: enabled available-spells filter; refreshing live service list')
+        log('Trainer: enabled available-spells filter and expanded all categories; refreshing live service list')
         for _ in range(3):
             state=fresh(state)
             if not state.trainer_open:
                 raise LiveControlError('Trainer closed during service refresh')
+    log_trainer_observation(state,log,'after refresh')
     return state
 
 
@@ -144,6 +163,9 @@ def train_available_mage_spells(
         guard(s)
         if not s.trainer_open:
             raise LiveControlError('Trainer window closed before training completed')
+        if not trainer_scan_complete(s):
+            log('Trainer scan incomplete; no purchase or empty training budget inferred')
+            break
         available = [v for v in s.trainer_services if
                      v.cost <= s.resources.money_copper and
                      v.required_level <= s.player.level]
@@ -158,7 +180,7 @@ def train_available_mage_spells(
         available.sort(key=trainer_purchase_priority)
         choice = available[0]
         next_frame = fresh(s)
-        if (not next_frame.trainer_open or
+        if (not next_frame.trainer_open or not trainer_scan_complete(next_frame) or
                 choice not in next_frame.trainer_services or
                 next_frame.resources.money_copper < choice.cost):
             raise LiveControlError('Trainer service list changed before purchase')
@@ -170,7 +192,7 @@ def train_available_mage_spells(
         confirmed=None
         while now() < deadline:
             after=fresh(last)
-            if after.trainer_open and not any(
+            if after.trainer_open and trainer_scan_complete(after) and not any(
                     v.name == choice.name and v.rank == choice.rank
                     for v in after.trainer_services):
                 confirmed=after
@@ -190,8 +212,13 @@ def train_available_mage_spells(
     # Snapshot the real remaining trainer services before closing the window.
     pending=tuple((v.name,v.rank,v.cost) for v in s.trainer_services
                   if v.required_level<=s.player.level)
-    if on_budget is not None:
+    if on_budget is not None and trainer_scan_complete(s):
         on_budget(s,pending)
+    close_trainer(s,npc_name=npc_name,driver=driver,fresh=fresh,now=now,log=log)
+    return tuple(bought)
+
+
+def close_trainer(s,*,npc_name,driver,fresh,now,log):
     log(f'{npc_name}: closing class trainer window after training')
     driver.chat('/click ClassTrainerFrameCloseButton')
     deadline = now() + 6
@@ -206,4 +233,3 @@ def train_available_mage_spells(
         raise LiveControlError(
             f'{npc_name}: trainer frame still open after close button; '
             'cannot report clean NPC interaction completion')
-    return tuple(bought)

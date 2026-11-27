@@ -1,11 +1,12 @@
 """Regression for refreshing live trainer services."""
 from types import SimpleNamespace as NS
 from wotlkbuddy.horde.training import refresh_trainer_services
+from wotlkbuddy.live.codec import TrainerService
 
 
 def test_trainer_filter_refresh_reads_new_services():
     initial=NS(trainer_open=True,trainer_services=())
-    frost=NS(name='Frostbolt',rank='Rank 1',cost=100,required_level=4)
+    frost=TrainerService(2,'Frostbolt','Rank 1',100,4)
     ready=NS(trainer_open=True,trainer_services=(frost,))
     calls=[]
     driver=NS(show_available_trainer_services=lambda s:calls.append('filter'))

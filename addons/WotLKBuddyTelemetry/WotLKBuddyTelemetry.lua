@@ -566,6 +566,37 @@ killFrame:SetScript('OnEvent', function(_, event, ...)
     end
 end)
 
+-- BEGIN TRAINER SERVICE AUDIT
+local function trainerServiceRows()
+    local total = GetNumTrainerServices() or 0
+    local services = {}
+    local available, unavailable, used, headers, collapsed, unknown = 0,0,0,0,0,0
+    for i=1,math.min(total,120) do
+        local name, rank, category, expanded = GetTrainerServiceInfo(i)
+        if category == 'available' and name then
+            available = available + 1
+            local cost = GetTrainerServiceCost and GetTrainerServiceCost(i)
+            local required = GetTrainerServiceLevelReq and GetTrainerServiceLevelReq(i)
+            if type(cost)=='number' and cost>=0 and type(required)=='number' and required>=0 then
+                table.insert(services, table.concat({'Y', tostring(i), safe(name,55),
+                    safe(rank,25), tostring(cost), tostring(required)}, '\t'))
+            end
+        elseif category == 'unavailable' then unavailable = unavailable + 1
+        elseif category == 'used' then used = used + 1
+        elseif category == 'header' then
+            headers = headers + 1
+            if not expanded or expanded==0 then collapsed = collapsed + 1 end
+        else unknown = unknown + 1 end
+    end
+    local filter = GetTrainerServiceTypeFilter and GetTrainerServiceTypeFilter('available')
+    local enabled = (filter==true or filter==1) and 1 or 0
+    local complete = (total<=120 and unknown==0 and available==#services and
+                      collapsed==0 and enabled==1) and 1 or 0
+    local audit = {total,available,unavailable,used,headers,collapsed,unknown,enabled,complete}
+    return services, audit
+end
+-- END TRAINER SERVICE AUDIT
+
 local function tickData()
     if GetTime() < completionRefreshUntil then queryCompletions() end
     local lines = {}
@@ -1473,28 +1504,22 @@ local function tickData()
         end
     end
     -- END MERCHANT CANDIDATE BATCH
-    -- Class trainer services are read only. Expose *available* services, not
-    -- unavailable ranks, and require a complete frame before any purchase.
+    -- Distinguish an empty list from an incomplete/filtered trainer scan.
     if ClassTrainerFrame and ClassTrainerFrame:IsShown() and
             GetNumTrainerServices and GetTrainerServiceInfo then
-        local total = math.min(GetNumTrainerServices() or 0, 120)
-        local services = {}
-        for i = 1, total do
-            local name, rank, category = GetTrainerServiceInfo(i)
-            if category == 'available' and name then
-                local cost = GetTrainerServiceCost and GetTrainerServiceCost(i) or -1
-                local required = GetTrainerServiceLevelReq and
-                    GetTrainerServiceLevelReq(i) or -1
-                table.insert(services, table.concat({'Y', tostring(i),
-                    safe(name, 55), safe(rank, 25), tostring(cost or -1),
-                    tostring(required or -1)}, '\t'))
-            end
+        local services,audit = trainerServiceRows()
+        local function header(count)
+            return table.concat({'N','1',tostring(count),unpack(audit)}, '\t')
         end
-        local needed = 6
-        for _, row in ipairs(services) do needed = needed + string.len(row) + 1 end
-        if payloadBytes + needed <= CAPACITY - 20 then
-            appendLine(table.concat({'N','1',tostring(#services)}, '\t'))
+        local needed = string.len(header(#services))+1
+        for _, row in ipairs(services) do needed = needed+string.len(row)+1 end
+        if payloadBytes+needed <= CAPACITY-20 then
+            appendLine(header(#services))
             for _, row in ipairs(services) do appendLine(row) end
+        else
+            -- Keep window visibility and counts even when the rows don't fit.
+            audit[9]=0
+            appendLine(header(0))
         end
     end
     -- Optional talent/cast/aura records follow the priority quest data.

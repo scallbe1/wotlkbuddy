@@ -49,7 +49,7 @@ def test_actionbar_telemetry_exported_before_bulky_quest_and_gear_data():
     inventory = src.index("appendLine('AH")
     action = src.index("appendLine(table.concat({'AS'")
     quest = src.index("-- Inventory tracking is read only.")
-    trainer = src.index("-- Class trainer services are read only.")
+    trainer = src.index("local services,audit = trainerServiceRows()")
     optional = src.index("-- Optional talent/cast/aura records")
     truncation = src.index("if isTruncated then table.insert")
     assert bound < inventory < action < quest < trainer < optional < truncation
