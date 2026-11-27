@@ -116,6 +116,77 @@ def turnin_destination(profile: HordeProfile, db: CreatureSpawnDatabase,
     return step, close[0].position
 
 
+def finish_delivery(*,profile,step,quest_id,pid,capture,driver,world_position,player,
+                    map_id,destination,start_time,max_seconds,turnin,log,moving=False):
+    """Require live interaction range for a patrol; static arrival for others."""
+    arrival = capture()
+    arrival_pid, arrived = world_position(arrival)
+    if (arrival_pid != pid or arrived.map_id!=map_id or arrival.player.guid != player.guid
+            or arrival.truncated or arrival.player.dead
+            or arrival.player.in_combat
+            or not any(q.quest_id == quest_id and q.complete
+                       for q in arrival.quests)):
+        raise LiveControlError('Character or quest state changed before turn-in')
+    if moving:
+        from wotlkbuddy.horde.npc_patrol import nearby_npc
+        mob=nearby_npc(arrival,arrived,driver,step.entry)
+        if (mob is None or mob.guid.lower()!=arrival.player.target_guid.lower()
+                or mob.position.distance_to(arrived.position)>4.5):
+            from wotlkbuddy.horde.npc_visit import NpcTargetUnavailable
+            raise NpcTargetUnavailable(f'{step.npc_name}: live interaction range lost before turn-in')
+    elif (hypot(arrived.x-destination.x, arrived.y-destination.y) > 7
+            or abs(arrived.z-destination.z) > 5):
+        raise LiveControlError('Turn-in NPC position not reached closely enough')
+    if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+        raise LiveControlError('Escape or WoW focus lost before NPC interaction')
+    if monotonic() - start_time > max_seconds:
+        raise LiveControlError('Return-to-NPC time budget exhausted')
+    log(f'Arrived near {step.npc_name}; verifying quest dialogue and reward')
+    # The guarded quest-dialogue turn-in accepts identity/UI verification
+    # callbacks, not navigation combat callbacks. The latter belong only
+    # to follow_world_path above; passing them here caused a TypeError
+    # after successfully reaching the NPC.
+    result = turnin(
+        profile, quest_id=quest_id, capture=capture, driver=driver,
+        character=player.name, expected_guid=player.guid,
+        timeout=10, progress=log)
+    if result.status not in ('turned_in', 'already_turned_in'):
+        raise LiveControlError(
+            f'Quest {quest_id} turn-in not confirmed: {result.status}: '
+            f'{result.explanation}')
+    return result
+
+
+def patrol_delivery(*,profile,step,quest_id,pid,capture,driver,nav,spawns,world,
+                    world_position,player,destination,start_time,max_seconds,travel,turnin,log):
+    """Use the same acquisition service as quest pickups, trainers and vendors."""
+    from time import sleep
+    from wotlkbuddy.horde.npc_visit import visit_known_patrol
+
+    def completed_capture():
+        if monotonic()-start_time>=max_seconds:
+            raise EncounterRouteUnavailable('Moving quest receiver search time budget exhausted')
+        state=capture()
+        if (state.truncated or state.player.guid!=player.guid or state.player.dead
+                or driver.emergency_stop_requested() or not driver.wow_is_foreground()
+                or not any(q.quest_id==quest_id and q.complete for q in state.quests)):
+            raise LiveControlError('Completed quest or verified player state changed during patrol delivery')
+        return state
+
+    found=visit_known_patrol(npc_name=step.npc_name,npc_id=step.entry,pid=pid,
+        capture=completed_capture,driver=driver,nav=nav,spawns=spawns,
+        world=world,owner=player.guid,dest=destination,sleep=sleep,now=monotonic,
+        world_position=world_position,travel=travel,log=log)
+    if found is None:
+        return None
+    # Do not pass completed_capture into reward confirmation: the journal
+    # must disappear after a successful reward. Only acquisition requires it.
+    return finish_delivery(profile=profile,step=step,quest_id=quest_id,pid=pid,
+        capture=capture,driver=driver,world_position=world_position,player=player,
+        map_id=world.map_id,destination=destination,start_time=start_time,
+        max_seconds=max_seconds,turnin=turnin,log=log,moving=True)
+
+
 def return_and_turnin(
     *, profile: HordeProfile, quest_id: int, pid: int,
     capture: Callable[[], ClientTelemetry], driver, nav,
@@ -163,6 +234,12 @@ def return_and_turnin(
     log(f'Quest {quest_id} complete: returning to {step.npc_name} '
         f'(NPC {step.entry}) using Detour path')
     start_time = monotonic()
+    moving=patrol_delivery(profile=profile,step=step,quest_id=quest_id,pid=pid,
+        capture=capture,driver=driver,nav=nav,spawns=spawns,world=world,
+        world_position=world_position,player=player,destination=destination,
+        start_time=start_time,max_seconds=max_seconds,travel=travel,turnin=turnin,log=log)
+    if moving is not None:
+        return moving
     if hypot(world.x-destination.x, world.y-destination.y) > 3.0:
         path = nav.find_path(world.map_id, world.position, destination)
         waypoints = validate_nav_path(
@@ -287,32 +364,8 @@ def return_and_turnin(
 
         navigate_with_status(driver,'npc',execute_delivery,target=step.npc_name)
 
-    arrival = capture()
-    arrival_pid, arrived = world_position(arrival)
-    if (arrival_pid != pid or arrived.map_id!=world.map_id or arrival.player.guid != player.guid
-            or arrival.truncated or arrival.player.dead
-            or arrival.player.in_combat
-            or not any(q.quest_id == quest_id and q.complete
-                       for q in arrival.quests)):
-        raise LiveControlError('Character or quest state changed before turn-in')
-    if (hypot(arrived.x-destination.x, arrived.y-destination.y) > 7
-            or abs(arrived.z-destination.z) > 5):
-        raise LiveControlError('Turn-in NPC position not reached closely enough')
-    if driver.emergency_stop_requested() or not driver.wow_is_foreground():
-        raise LiveControlError('Escape or WoW focus lost before NPC interaction')
-    if monotonic() - start_time > max_seconds:
-        raise LiveControlError('Return-to-NPC time budget exhausted')
-    log(f'Arrived near {step.npc_name}; verifying quest dialogue and reward')
-    # The guarded quest-dialogue turn-in accepts identity/UI verification
-    # callbacks, not navigation combat callbacks. The latter belong only
-    # to follow_world_path above; passing them here caused a TypeError
-    # after successfully reaching the NPC.
-    result = turnin(
-        profile, quest_id=quest_id, capture=capture, driver=driver,
-        character=player.name, expected_guid=player.guid,
-        timeout=10, progress=log)
-    if result.status not in ('turned_in', 'already_turned_in'):
-        raise LiveControlError(
-            f'Quest {quest_id} turn-in not confirmed: {result.status}: '
-            f'{result.explanation}')
-    return result
+    return finish_delivery(profile=profile,step=step,quest_id=quest_id,pid=pid,
+        capture=capture,driver=driver,world_position=world_position,player=player,
+        map_id=world.map_id,destination=destination,start_time=start_time,
+        max_seconds=max_seconds,turnin=turnin,log=log)
+

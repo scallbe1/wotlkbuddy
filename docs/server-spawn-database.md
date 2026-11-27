@@ -98,3 +98,16 @@ an explicitly selected spawn database). This ignored local file takes precedence
 over the bundled example and survives normal Git updates without modifying
 tracked files. Stop the bot before replacing it. The eight-column format is
 unchanged; no new command-line flag is necessary.
+
+### Moving NPC interactions
+
+The shared patrol acquisition service identifies a uniquely matched server waypoint
+route by NPC entry, map and spawn anchor. It is used by quest pickups, quest
+receivers, vendors (including repair services), and class trainers through their
+existing visit paths. Quest delivery checks the patrol before static navigation,
+keeps the completed quest verified throughout acquisition, and requires live
+selected GUID and interaction range at handoff. Static NPCs retain their existing
+routes. A known patrol without live object awareness is unavailable rather than
+silently treated as stationary. The delivery caller's time budget remains in
+force. Random roaming, scripted movement and ambiguous multi-spawn paths are not
+inferred from this TSV.

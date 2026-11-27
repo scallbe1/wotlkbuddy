@@ -272,3 +272,55 @@ def test_npc_service_replans_after_loot_displacement():
         driver=Driver(),nav=Nav(),spawns=FakeDb(),world_position=position,travel=travel,sleep=lambda _:None)
     assert state['paths']==[(START,SARVIS),(displaced,SARVIS)]
     assert state['target']
+
+
+def test_moving_receiver_uses_shared_live_acquisition_not_static_spawn(monkeypatch):
+    from wotlkbuddy.horde import npc_patrol, npc_visit
+    from wotlkbuddy.horde.profile import OrderStep, QuestSpec
+    from types import SimpleNamespace as NS
+    import pytest
+
+    anchor=Vec3(2326.21,398.704,33.6667)
+    live=Vec3(2354.95,441.351,33.3308)
+    current=Vec3(live.x+2,live.y,live.z)
+    p=HordeProfile('Tirisfal','test.xml',(QuestSpec(5481,"Gordo's Task",()),),(),
+        (OrderStep('turnin',5481,"Gordo's Task",10665,
+                   world_position=anchor,npc_name='Junior Apothecary Holland'),),.2,2,())
+    base=snapshot()
+    quest=replace(base.quests[0],quest_id=5481,title="Gordo's Task")
+    player=replace(base.player,target_name='Junior Apothecary Holland',target_guid='holland')
+    frame=replace(base,player=player,quests=(quest,))
+    db=NS(patrol=lambda entry,map_id,dest:(anchor,live))
+    mob=NS(entry=10665,guid='holland',health=10,position=live)
+    driver=FakeDriver()
+    driver.awareness=NS(read=lambda *args:[mob])
+    monkeypatch.setattr(npc_patrol,'creature_entry_from_guid',lambda _:10665)
+    monkeypatch.setattr(npc_visit,'target_npc',lambda *a:pytest.fail('already verified target'))
+    def position(s):
+        return 77,NS(map_id=0,position=current,x=current.x,y=current.y,z=current.z)
+    calls=[]
+    def handin(*args,**kwargs):
+        calls.append(kwargs['quest_id'])
+        assert kwargs['capture']() is frame
+        return NS(status='turned_in')
+    result=return_and_turnin(profile=p,quest_id=5481,pid=77,capture=lambda:frame,
+        driver=driver,nav=FakeNav(),spawns=db,world_position=position,
+        travel=lambda *a,**k:pytest.fail('must not walk to static spawn'),turnin=handin)
+    assert result.status=='turned_in'
+    assert calls==[5481]
+
+
+def test_moving_receiver_search_refuses_disappearing_completed_quest(monkeypatch):
+    from wotlkbuddy.horde import npc_visit
+    import pytest
+    frames=iter((snapshot(),snapshot(complete=False)))
+    def acquire(**kwargs):
+        kwargs['capture']()
+        pytest.fail('must reject missing completion before any patrol input')
+    monkeypatch.setattr(npc_visit,'visit_known_patrol',acquire)
+    def position(s):
+        return 77,SimpleNamespace(map_id=0,position=START,x=START.x,y=START.y,z=START.z)
+    with pytest.raises(LiveControlError,match='Completed quest or verified player state changed'):
+        return_and_turnin(profile=profile(),quest_id=364,pid=77,
+            capture=lambda:next(frames),driver=FakeDriver(),nav=FakeNav(),spawns=FakeDb(),
+            world_position=position,turnin=lambda *a,**k:pytest.fail('no reward input'))
