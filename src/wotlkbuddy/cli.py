@@ -1038,6 +1038,7 @@ def _live_watch(args: argparse.Namespace) -> None:
     print(f'Received {count} unique real-client telemetry frames (read-only).', file=sys.stderr)
 
 def _register_live_status(sub):
+    from pathlib import Path
     status = sub.add_parser('live-status', help='Read one live player/quest summary (no input)')
     status.add_argument('--monitor', type=int, default=0,
                         help='0 = all displays; 1 = primary')
