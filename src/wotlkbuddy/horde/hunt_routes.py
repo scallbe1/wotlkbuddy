@@ -67,9 +67,12 @@ def path_avoids_pack(path, hazards, radius=15):
     return True
 
 
-def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,excluded_staging=(),guard=lambda:None):
+def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,excluded_staging=(),guard=lambda:None,progress=lambda done,total:None):
     """Rank reachable ranged staging positions, not the closest spawn alone."""
     ranked=[]
+    checked=0
+    total=24*len(spawns)
+    progress(0,total)
     for spawn in spawns:
         guard()
         center=spawn.position
@@ -82,6 +85,8 @@ def alternate_hunt_routes(nav,map_id,origin,spawns,hazards,visited,*,limit=16,ex
                 angle=heading+offset
                 desired=Vec3(center.x+radius*cos(angle),center.y+radius*sin(angle),center.z)
                 guard()
+                checked+=1
+                progress(checked,total)
                 try:
                     point=nav.nearest_point(map_id,desired)
                     guard()
