@@ -140,3 +140,20 @@ def test_mid_leg_sighting_reacquires_live_position(monkeypatch):
         owner='owner',map_id=0,capture=lambda:state,driver=driver,
         world_position=lambda s:(1,NS(position=position[0],map_id=0)),
         sleep=lambda _:None,now=lambda:0,log=lambda _:None,walk=chase,walk_search=search) is state
+
+
+def test_server_local_patrol_file_overrides_bundled_snapshot(tmp_path):
+    import sqlite3
+    from wotlkbuddy.horde.worlddata import CreatureSpawnDatabase
+    db_path = tmp_path / 'CreatureSpawns.db'
+    with sqlite3.connect(db_path) as conn:
+        conn.execute('CREATE TABLE spawns(entry INTEGER,map_id INTEGER,x REAL,y REAL,z REAL)')
+    bundled = tmp_path / 'CreaturePatrols.tsv'
+    bundled.write_text('1\t0\t1\t10\t1\t0\t0\t0\n1\t0\t1\t10\t2\t10\t0\t0\n')
+    local = tmp_path / 'CreaturePatrols.local.tsv'
+    with CreatureSpawnDatabase(db_path) as db:
+        assert db.patrol(1,0,Vec3(0,0,0)) == (Vec3(0,0,0),Vec3(10,0,0))
+        local.write_text('1\t0\t1\t10\t1\t0\t0\t0\n1\t0\t1\t10\t2\t20\t0\t0\n'
+                         '2\t0\t2\t20\t1\t0\t0\t0\n2\t0\t2\t20\t2\t30\t0\t0\n')
+        assert db.patrol(1,0,Vec3(0,0,0)) == (Vec3(0,0,0),Vec3(20,0,0))
+        assert db.patrol(2,0,Vec3(0,0,0)) == (Vec3(0,0,0),Vec3(30,0,0))
