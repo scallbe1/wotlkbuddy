@@ -86,7 +86,11 @@ def decisive_weaker_pull(state, plan, chosen, driver, quest_entries):
 
 
 def assess_linked_pull(state, plan, chosen, driver, awareness, quest_entries, log):
-    from wotlkbuddy.combat.crowd_control import prepare_linked_pull, exact_hostile
+    from wotlkbuddy.combat.crowd_control import prepare_linked_pull, exact_hostile, is_healer
+    # Healing capability overrides a raw level/HP-only damage budget.
+    if any(is_healer(e) for e in plan.enemies):
+        return prepare_linked_pull(state,plan,chosen,driver=driver,awareness=awareness,
+                                   quest_entries=quest_entries,log=log)
     # Prefer crowd control, but do not discard an independently approved
     # weaker pack solely because the escort cannot be sheeped.
     if decisive_weaker_pull(state,plan,chosen,driver,quest_entries):
