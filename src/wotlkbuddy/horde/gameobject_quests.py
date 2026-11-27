@@ -7,7 +7,7 @@ arbitrary Lua or guessed screen coordinates can authorize a right-click.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import hypot
+from math import hypot, atan2, cos, sin, pi, isfinite
 from time import monotonic, sleep as real_sleep
 from typing import Callable
 
@@ -143,14 +143,48 @@ def recover_object_encounter(driver,nav,map_id,world,destination,*,sample,guard,
     hazards=recent_object_hazards(driver)
     if not hazards:
         raise EncounterRouteUnavailable('GameObject encounter unavailable; refreshing on next continuous cycle')
-    def supervise():
-        state,_=sample()
-        guard(state)
+    supervise=object_planning_guard(driver,sample,guard)
     route=detour_around_encounters(nav,map_id,world.position,destination,hazards,
-        max_distance=6000,guard=supervise,log=log)
+        max_distance=6000,guard=supervise,log=log,candidate_limit=12)
     if not route:
         raise EncounterRouteUnavailable('No safe GameObject detour; refreshing on next continuous cycle')
     return route
+
+
+def object_planning_guard(driver,sample,guard):
+    # A route query sends no game input. Check focus on every query but
+    # avoid a slow full screenshot for every nearest/path pair.
+    checked=-float('inf')
+    def supervise():
+        nonlocal checked
+        if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+            raise LiveControlError('Escape or focus lost during GameObject detour')
+        if monotonic()-checked>=.5:
+            state,_=sample()
+            guard(state)
+            checked=monotonic()
+    return supervise
+
+
+def escape_candidates(nav,map_id,origin,hazards,supervise):
+    """Find retreat ground even after restarting with no recorded breadcrumbs."""
+    nearest=getattr(nav,'nearest_point',None)
+    if not callable(nearest):
+        return
+    closest=min(hazards,key=origin.distance_to)
+    away=atan2(origin.y-closest.y,origin.x-closest.x)
+    for radius in (30.,45.,65.):
+        for offset in (0.,pi/4,-pi/4,pi/2,-pi/2,3*pi/4,-3*pi/4,pi):
+            supervise()
+            desired=Vec3(origin.x+radius*cos(away+offset),
+                         origin.y+radius*sin(away+offset),origin.z)
+            try:
+                point=nearest(map_id,desired)
+            except (OSError,ValueError,RuntimeError,TimeoutError):
+                continue
+            if (point is not None and all(isfinite(v) for v in (point.x,point.y,point.z))
+                    and point.distance_to(desired)<=6):
+                yield point
 
 
 def object_retreat_route(driver,nav,map_id,origin,anchors,*,sample,guard,log):
@@ -158,11 +192,12 @@ def object_retreat_route(driver,nav,map_id,origin,anchors,*,sample,guard,log):
     hazards=recent_object_hazards(driver)
     if not hazards:
         return None
-    for point in reversed(anchors):
+    from itertools import chain
+    supervise=object_planning_guard(driver,sample,guard)
+    for point in chain(reversed(anchors),escape_candidates(nav,map_id,origin,hazards,supervise)):
         if not 18<=origin.distance_to(point)<=90:
             continue
-        state,_=sample()
-        guard(state)
+        supervise()
         if min(point.distance_to(h) for h in hazards)<24:
             continue
         try:
@@ -173,7 +208,7 @@ def object_retreat_route(driver,nav,map_id,origin,anchors,*,sample,guard,log):
         except (OSError,ValueError,RuntimeError,TimeoutError):
             continue
         if path_avoids_pack(route,hazards,radius=20):
-            log(f'Blocked GameObject corridor: turning back {origin.distance_to(point):.1f}y to previously measured ground')
+            log(f'Blocked GameObject corridor: turning back {origin.distance_to(point):.1f}y to verified escape ground')
             return route
     return None
 
@@ -237,7 +272,7 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
             return s
         remaining=max_seconds-(now()-started)
         if remaining<15:
-            raise LiveControlError('GameObject navigation time budget exhausted')
+            raise EncounterRouteUnavailable('GameObject navigation time budget exhausted; refresh next cycle')
         raw=alternate or nav.find_path(map_id,world.position,destination)
         alternate=None
         endpoint=raw[-1] if retreating and raw else destination
@@ -274,7 +309,7 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
             raise LiveControlError('GameObject navigation stopped: '+reason)
         s,world=sample()
         guard(s)
-        if blocked or encounter_route_failure(reason):
+        if blocked or retreating or encounter_route_failure(reason):
             encounter_replans+=1
             if encounter_replans>12:
                 raise EncounterRouteUnavailable('GameObject encounter replan budget exhausted')
@@ -282,6 +317,8 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
             if blocked or retreating:
                 retreating=False
                 try:
+                    if retreats==0 and len(anchors)==1 and any(world.position.distance_to(h)<20 for h in recent_object_hazards(driver)):
+                        raise EncounterRouteUnavailable('Starting inside hostile clearance; retreat first')
                     alternate=recover_object_encounter(driver,nav,map_id,world,destination,
                         sample=sample,guard=guard,log=log)
                 except EncounterRouteUnavailable:
@@ -314,6 +351,19 @@ def mark_exhausted_hotspots(goal,visible_now,visited_guids,visited_hotspots):
         if any(loaded.guid in visited_guids and loaded.entry==goal.object_id
                and loaded.position.distance_to(hotspot)<=12 for loaded in visible_now):
             visited_hotspots.add(i)
+
+
+def guard_object_quest(s, *, driver, guid, goal, now, started, max_seconds):
+    if (driver.emergency_stop_requested() or not driver.wow_is_foreground()
+            or s.truncated or s.player.guid!=guid or s.player.dead
+            or s.resources is None or s.resources.class_token.upper()!='MAGE'):
+        raise LiveControlError('GameObject quest changed character/focus or player died')
+    if s.player.in_combat:
+        raise LiveControlError('Aggro/combat detected during encounter detour')
+    if now()-started>max_seconds:
+        raise EncounterRouteUnavailable('GameObject objective time budget exhausted; refresh next cycle')
+    if not any(q.quest_id==goal.quest_id for q in s.quests):
+        raise LiveControlError('GameObject quest disappeared from journal')
 
 
 def execute_gameobject_quest(
@@ -356,15 +406,8 @@ def execute_gameobject_quest(
     no_progress=0
 
     def guard(s):
-        if (driver.emergency_stop_requested() or not driver.wow_is_foreground()
-                or now()-started>max_seconds or s.truncated
-                or s.player.guid!=guid or s.player.dead or s.player.in_combat
-                or s.resources is None
-                or s.resources.class_token.upper()!='MAGE'):
-            raise LiveControlError('GameObject quest changed character/focus, '
-                                   'entered combat, or exceeded time budget')
-        if not any(q.quest_id==goal.quest_id for q in s.quests):
-            raise LiveControlError('GameObject quest disappeared from journal')
+        guard_object_quest(s,driver=driver,guid=guid,goal=goal,now=now,
+                           started=started,max_seconds=max_seconds)
 
     def fresh(s,delay=.58):
         guard(s)

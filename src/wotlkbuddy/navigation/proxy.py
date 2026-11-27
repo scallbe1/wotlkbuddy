@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from math import isfinite
 import subprocess
 from pathlib import Path
 
@@ -69,7 +70,9 @@ class NavigationProxy:
     def nearest_point(self, map_id: int, position: Vec3) -> Vec3 | None:
         data = self._request({"op": "nearest", "map_id": map_id,
                               "point": [position.x, position.y, position.z]})
-        return Vec3(*data) if data is not None else None
+        if data is None or len(data)!=3 or not all(isfinite(v) and abs(v)<=100000 for v in data):
+            return None
+        return Vec3(*data)
 
     def segment_clear(self, map_id: int, start: Vec3, end: Vec3) -> bool:
         """Short on-mesh clearance check delegated to the x86 Detour worker."""

@@ -1,5 +1,5 @@
 """Choose alternate quest hunting approaches around recently observed packs."""
-from math import atan2, cos, sin, pi, hypot
+from math import atan2, cos, sin, pi, hypot, isfinite
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import validate_nav_path
@@ -198,7 +198,8 @@ def detour_around_encounters(nav,map_id,origin,destination,hazards,*,
                     with planning_status(f'navmesh nearest point {xyz(desired)}',log):
                         point=nav.nearest_point(map_id,desired)
                     guard()
-                    if point is None or point.distance_to(desired)>6 or point.distance_to(origin)<5:
+                    if (point is None or not all(isfinite(v) for v in (point.x,point.y,point.z))
+                            or point.distance_to(desired)>6 or point.distance_to(origin)<5):
                         diagnostics.reject('staging point not reachable or too close')
                         continue
                     first=route(origin,point)
