@@ -128,12 +128,11 @@ def finish_delivery(*,profile,step,quest_id,pid,capture,driver,world_position,pl
                        for q in arrival.quests)):
         raise LiveControlError('Character or quest state changed before turn-in')
     if moving:
-        from wotlkbuddy.horde.npc_patrol import nearby_npc
-        mob=nearby_npc(arrival,arrived,driver,step.entry)
-        if (mob is None or mob.guid.lower()!=arrival.player.target_guid.lower()
-                or mob.position.distance_to(arrived.position)>4.5):
+        from wotlkbuddy.horde.npc_patrol import npc_window_open,creature_entry_from_guid
+        if (not npc_window_open(arrival) or arrival.player.target_name!=step.npc_name
+                or creature_entry_from_guid(arrival.player.target_guid)!=step.entry):
             from wotlkbuddy.horde.npc_visit import NpcTargetUnavailable
-            raise NpcTargetUnavailable(f'{step.npc_name}: live interaction range lost before turn-in')
+            raise NpcTargetUnavailable(f'{step.npc_name}: verified NPC dialogue lost before turn-in')
     elif (hypot(arrived.x-destination.x, arrived.y-destination.y) > 7
             or abs(arrived.z-destination.z) > 5):
         raise LiveControlError('Turn-in NPC position not reached closely enough')

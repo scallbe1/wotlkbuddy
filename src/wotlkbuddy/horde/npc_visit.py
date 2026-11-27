@@ -127,7 +127,7 @@ def _wait_for_patrol_route(*, driver, nav, map_id, dest, rejected, guard_retry,
 
 
 def visit_known_patrol(*,npc_name,npc_id,pid,capture,driver,nav,spawns,
-                       world,owner,dest,sleep,now,world_position,travel,log):
+                       world,owner,dest,sleep,now,world_position,travel,log,open_window=True):
     from wotlkbuddy.horde.npc_patrol import visit_patrolling_npc
     lookup=getattr(spawns,'patrol',None)
     points=lookup(npc_id,world.map_id,dest) if callable(lookup) else ()
@@ -145,7 +145,8 @@ def visit_known_patrol(*,npc_name,npc_id,pid,capture,driver,nav,spawns,
         pid=pid,owner=owner,map_id=world.map_id,capture=capture,
         world_position=world_position,driver=driver,sleep=sleep,now=now,log=log,
         walk=walk,walk_search=lambda point,budget:walk(point,budget,True),
-        walk_chase=lambda point,budget:walk(point,budget,'chase'))
+        walk_chase=lambda point,budget:walk(point,budget,'chase_open' if open_window else 'chase'),
+        open_window=open_window)
 
 
 def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patrol_watch):
@@ -158,7 +159,7 @@ def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patro
         result=scan(state,where,legs) if callable(scan) else state
         # Combat, loot and drinking can consume enough time for the NPC to
         # leave the old destination. Read again before allowing further W.
-        if patrol_watch=='chase':
+        if patrol_watch in ('chase','chase_open'):
             current,position=sample()
             if not current.player.in_combat and patrol_intercept_required(
                     nearby_npc(current,position,driver,npc_id),position,path[-1],path[0],patrol_watch):
@@ -174,7 +175,7 @@ def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patro
         progress=log,on_aggro=getattr(driver,'on_aggro',None),
         on_threat=patrol_scan if patrol_watch else scan,
         waypoint_spacing=18.,continuous_forward=True,
-        fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=3. if patrol_watch=='chase' else 6.)
+        fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=3. if patrol_watch in ('chase','chase_open') else 6.)
 
 
 def visit_npc(
@@ -222,7 +223,7 @@ def visit_npc(
             return found
     if not nav.ping():
         raise LiveControlError('Navmesh helper not responding')
-    if hypot(world.x-dest.x, world.y-dest.y) > 3 or abs(world.z-dest.z) > 5:
+    if hypot(world.x-dest.x, world.y-dest.y) > (1.0 if _patrol_watch=='chase_open' else 3) or abs(world.z-dest.z) > 5:
         path = verified_npc_route(
             nav.find_path(world.map_id, world.position, dest),
             world.position, dest, map_id=world.map_id)

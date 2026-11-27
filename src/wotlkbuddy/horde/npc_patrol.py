@@ -59,15 +59,44 @@ class PatrolTravelTimeout(LiveControlError):
 
 SIGHTING_REASON = 'Verified patrol NPC sighting; stop and reacquire'
 CHASE_LIMIT = 48
+INTERACTION_YARDS = 2.5
+
+
+def npc_window_open(state):
+    return bool(getattr(state,'merchant_open',False) or getattr(state,'trainer_open',False)
+                or (getattr(state,'dialog',None) and state.dialog.kind!='none'))
+
+
+def open_patrol_window(state, *, observe, driver, npc_name, target_guid, sleep, now, log):
+    """Interact immediately while close; wait for fresh UI, not another range check."""
+    if npc_window_open(state):
+        raise LiveControlError('Unexpected pre-existing NPC window during patrol acquisition')
+    driver.interact()
+    deadline=now()+2.5
+    for _ in range(12):
+        sleep(.2)
+        latest,_=observe()
+        if latest.player.target_guid.lower()!=target_guid.lower():
+            if npc_window_open(latest):
+                raise LiveControlError('NPC target changed while dialogue opened')
+            return None
+        if latest.sequence!=state.sequence and npc_window_open(latest):
+            log(f'{npc_name}: live interaction window opened and verified')
+            return latest
+        if now()>=deadline:
+            break
+    log(f'{npc_name}: interaction not confirmed; reacquiring moving NPC')
+    return None
+
 
 
 def patrol_intercept_required(mob, where, destination, start, mode):
     """During a chase, stop in range or when a moving destination goes stale."""
-    if mode != 'chase':
+    if mode not in ('chase','chase_open'):
         return mob is not None
     if mob is None:
         return True  # Never continue chasing an unobserved stale location.
-    if mob.position.distance_to(where.position) <= 4.5:
+    if mob.position.distance_to(where.position) <= (INTERACTION_YARDS if mode=='chase_open' else 4.5):
         return True
     shift = mob.position.distance_to(destination)
     return shift >= 12 or (shift >= 5 and where.position.distance_to(start) >= 3)
@@ -103,7 +132,7 @@ def walk_patrol_leg(point, *, walk, observe, deadline, now, log, npc_name):
 
 def visit_patrolling_npc(*, points, npc_name, npc_id, pid, owner, map_id,
                          capture, world_position, driver, sleep, now, log, walk,
-                         walk_search=None, walk_chase=None):
+                         walk_search=None, walk_chase=None, open_window=False):
     """Separate initial approach from a full, distance-budgeted patrol sweep."""
     from wotlkbuddy.horde.npc_visit import NpcTargetUnavailable, target_npc
     from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
@@ -148,9 +177,15 @@ def visit_patrolling_npc(*, points, npc_name, npc_id, pid, owner, map_id,
             if (current is None or current.guid.lower()!=selected.player.target_guid.lower()
                     or state.player.target_guid.lower()!=current.guid.lower()):
                 break
-            if current.position.distance_to(where.position)<=4.5:
+            if current.position.distance_to(where.position)<=(INTERACTION_YARDS if open_window else 4.5):
                 log(f'{npc_name}: live target verified within interaction range')
-                return state
+                if not open_window:
+                    return state
+                opened=open_patrol_window(state,observe=observe,driver=driver,npc_name=npc_name,
+                    target_guid=current.guid,sleep=sleep,now=now,log=log)
+                if opened is not None:
+                    return opened
+                continue
             log(f'{npc_name}: tracking live target {current.position.distance_to(where.position):.1f}y away')
             try:
                 walk_patrol_leg(current.position,walk=chase_walk,observe=observe,deadline=deadline,

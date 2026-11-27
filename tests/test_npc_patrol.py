@@ -205,3 +205,38 @@ def test_moving_npc_selected_before_chase_and_reacquired(monkeypatch):
         walk=lambda *args:pytest.fail('should track the live NPC'),walk_chase=chase) is state
     assert goals==[Vec3(26,0,0),Vec3(36,0,0)]
     assert len(selected)==1
+
+
+@pytest.mark.parametrize('kind',['gossip','merchant','trainer'])
+def test_moving_npc_opens_window_before_return_and_retries(kind,monkeypatch):
+    import wotlkbuddy.horde.npc_patrol as patrol
+    player=NS(guid='owner',dead=False,in_combat=False,target_guid='mobile')
+    state=NS(player=player,truncated=False,sequence=1,dialog=NS(kind='none'),
+             merchant_open=False,trainer_open=False)
+    pos=Vec3(0,0,0)
+    mob=NS(entry=42,guid='mobile',health=10,position=Vec3(2,0,0))
+    clock=[0.]
+    attempts=[]
+    def sleep(seconds):
+        clock[0]+=seconds
+    def interact():
+        attempts.append(True)
+        if len(attempts)==2:
+            state.sequence+=1
+            if kind=='gossip':
+                state.dialog=NS(kind='gossip')
+            else:
+                setattr(state,kind+'_open',True)
+            mob.position=Vec3(20,0,0)
+    driver=NS(emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True,
+              awareness=NS(read=lambda *a:[mob]),interact=interact)
+    monkeypatch.setattr(patrol,'creature_entry_from_guid',lambda _:42)
+    def capture():
+        return NS(**vars(state))
+    result=visit_patrolling_npc(points=(pos,Vec3(50,0,0)),npc_name='Mobile NPC',
+        npc_id=42,pid=1,owner='owner',map_id=0,capture=capture,driver=driver,
+        world_position=lambda s:(1,NS(position=pos,map_id=0)),
+        sleep=sleep,now=lambda:clock[0],log=lambda _:None,
+        walk=lambda *a:pytest.fail('no movement needed'),open_window=True)
+    assert patrol.npc_window_open(result)
+    assert len(attempts)==2

@@ -44,7 +44,7 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
         hud.set(goal=f'Accept quests from {giver.name}',action='Navigating to quest giver')
         log(f'Profile quest giver: {giver.name} ({giver.entry}) from {giver.source}')
         try:
-            visit_npc(npc_name=giver.name,npc_id=giver.entry,pid=pid,capture=cap,
+            visited=visit_npc(npc_name=giver.name,npc_id=giver.entry,pid=pid,capture=cap,
                 driver=driver,nav=nav,spawns=db,radius=600 if recovery else 240,
                 destination_hint=giver.position,log=log)
         except (NpcTargetUnavailable,EncounterRouteUnavailable) as exc:
@@ -62,6 +62,7 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
             if slots:
                 accepted[giver.name]=accept_npc_offers(npc_name=giver.name,npc_id=giver.entry,
                     capture=cap,driver=driver,max_quests=min(4,slots),profile=profile,log=log,
+                    accept_existing_detail=bool(visited and getattr(visited,'dialog',None) and visited.dialog.kind=='detail'),
                     **({'allowed_quest_ids':recovery.quest_ids} if recovery else {}))
         if local:
             key=(before.player.guid,before.player.level,giver.entry)
