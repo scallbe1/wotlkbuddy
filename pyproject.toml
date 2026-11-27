@@ -28,6 +28,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "wotlkbuddy.horde" = ["verified_vendor_services.tsv"]
+"wotlkbuddy.profiles" = ["Horde/Starter/*.xml", "Horde/Classic/*.xml", "Alliance/Starter/*.xml", "Alliance/Classic/*.xml", "schema/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
