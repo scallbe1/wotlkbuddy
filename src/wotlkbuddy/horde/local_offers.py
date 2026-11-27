@@ -5,6 +5,7 @@ from wotlkbuddy.horde.npc_visit import visit_npc, NpcTargetUnavailable
 from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.horde.quest_offers import accept_npc_offers
+from wotlkbuddy.horde.missed_quests import offer_retry_due
 
 
 def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
@@ -20,8 +21,7 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
     if local:
         # Avoid a vendor/quest ping-pong loop; retry after a cooldown or level gain.
         givers=sorted(givers,key=lambda g:g.distance)
-        givers=[g for g in givers if now()-memory.get(
-            (state.player.guid,state.player.level,g.entry),float('-inf'))>=180]
+        givers=[g for g in givers if offer_retry_due(memory,state.player,g.entry,now())]
     recovery=None
     if local:
         from wotlkbuddy.horde.missed_quests import recovery_offers
@@ -64,7 +64,11 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
                     capture=cap,driver=driver,max_quests=min(4,slots),profile=profile,log=log,
                     **({'allowed_quest_ids':recovery.quest_ids} if recovery else {}))
         if local:
-            memory[(before.player.guid,before.player.level,giver.entry)]=now()
+            key=(before.player.guid,before.player.level,giver.entry)
+            memory[key]=now()
+            if giver.name in accepted and not accepted[giver.name]:
+                memory[('no_offer',*key)]=now()
+                log(f'{giver.name}: no matching quest accepted; deferring this NPC for 30 minutes or until level changes')
     return accepted
 
 def run_offer_phase(args, *, profile, location, cap, driver, nav, db, pid,

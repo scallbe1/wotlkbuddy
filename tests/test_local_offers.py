@@ -50,3 +50,13 @@ def test_journal_reserve_prevents_more_local_pickups(monkeypatch):
         cap=None,driver=None,nav=None,db=None,pid=1,hud=Mock(),set_native_status=Mock(),
         log=Mock(),memory={})=={}
     discovery.assert_not_called()
+
+
+def test_empty_offer_has_longer_cooldown():
+    from wotlkbuddy.horde.missed_quests import offer_retry_due
+    player=NS(guid='p',level=11)
+    memory={('p',11,10666):100.,('no_offer','p',11,10666):100.}
+    assert not offer_retry_due(memory,player,10666,400.)
+    assert offer_retry_due(memory,player,10666,1900.)
+    player.level=12
+    assert offer_retry_due(memory,player,10666,400.)
