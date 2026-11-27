@@ -67,10 +67,31 @@ def assess_encounter(player, resources, position, chosen, enemies, quest_entries
     return PullPlan(False,pack,'linked group exceeds conservative Mage combat budget')
 
 
+def decisive_weaker_pull(state, plan, chosen, driver, quest_entries):
+    """Skip unnecessary target cycling for a clearly weaker, required pair."""
+    from wotlkbuddy.combat.crowd_control import exact_hostile
+    player, resources = state.player, state.resources
+    required = (chosen.entry in quest_entries or
+                getattr(driver,'assessing_travel_corridor',False) is True or
+                isinstance(getattr(driver,'entrance_approach_guid',None),str))
+    return bool(required and plan.allowed and len(plan.enemies)==2
+        and not player.dead and not player.in_combat and resources is not None
+        and exact_hostile(state,chosen)
+        and not getattr(state,'current_cast_remaining_ms',0)
+        and player.health>=.95*player.max_health
+        and resources.mana>=.90*resources.max_mana
+        and all(e.classification=='normal' and e.level is not None
+                and 0<e.level<=player.level-3 and e.health>0 for e in plan.enemies)
+        and sum(e.health for e in plan.enemies)<=2.5*player.max_health)
+
+
 def assess_linked_pull(state, plan, chosen, driver, awareness, quest_entries, log):
     from wotlkbuddy.combat.crowd_control import prepare_linked_pull, exact_hostile
     # Prefer crowd control, but do not discard an independently approved
     # weaker pack solely because the escort cannot be sheeped.
+    if decisive_weaker_pull(state,plan,chosen,driver,quest_entries):
+        log('Linked encounter: PULL: clearly weaker verified pair; no crowd control needed')
+        return state,plan
     baseline=plan
     state,plan=prepare_linked_pull(state,plan,chosen,driver=driver,
         awareness=awareness,quest_entries=quest_entries,log=log)
