@@ -376,7 +376,8 @@ def reactive_healer_pull(state,primary,candidates,rules,*,driver,fresh,log):
                 if control_action(state,primary,rule,driver) is not None and state.combat_target.attacks_player is True:
                     log(f'Reactive healer priority: control {primary.guid}; kill {damage.guid}')
                     return reactive_cast(state,damage,primary,rule,driver=driver,fresh=fresh,log=log)
-            return select_exact(state,damage,driver=driver,fresh=fresh,max_tabs=3)
+            log('Healer control unavailable; focus the uncontrolled healer')
+            return select_exact(state,primary,driver=driver,fresh=fresh,max_tabs=3)
         return select_exact(state,primary,driver=driver,fresh=fresh,max_tabs=3)
     for healer in (e for e in candidates if is_healer(e)):
         state=select_exact(state,healer,driver=driver,fresh=fresh,max_tabs=3)
