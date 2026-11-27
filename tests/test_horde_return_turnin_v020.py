@@ -290,10 +290,16 @@ def test_moving_receiver_uses_shared_live_acquisition_not_static_spawn(monkeypat
     quest=replace(base.quests[0],quest_id=5481,title="Gordo's Task")
     player=replace(base.player,target_name='Junior Apothecary Holland',target_guid='holland')
     frame=replace(base,player=player,quests=(quest,))
+    opened=replace(frame,sequence=frame.sequence+1,dialog=NS(kind='gossip'))
+    active=[frame]
     db=NS(patrol=lambda entry,map_id,dest:(anchor,live))
     mob=NS(entry=10665,guid='holland',health=10,position=live)
     driver=FakeDriver()
     driver.awareness=NS(read=lambda *args:[mob])
+    def interact():
+        active[0]=opened
+        mob.position=Vec3(live.x+20,live.y,live.z)
+    driver.interact=interact
     monkeypatch.setattr(npc_patrol,'creature_entry_from_guid',lambda _:10665)
     monkeypatch.setattr(npc_visit,'target_npc',lambda *a:pytest.fail('already verified target'))
     def position(s):
@@ -301,9 +307,9 @@ def test_moving_receiver_uses_shared_live_acquisition_not_static_spawn(monkeypat
     calls=[]
     def handin(*args,**kwargs):
         calls.append(kwargs['quest_id'])
-        assert kwargs['capture']() is frame
+        assert kwargs['capture']() is opened
         return NS(status='turned_in')
-    result=return_and_turnin(profile=p,quest_id=5481,pid=77,capture=lambda:frame,
+    result=return_and_turnin(profile=p,quest_id=5481,pid=77,capture=lambda:active[0],
         driver=driver,nav=FakeNav(),spawns=db,world_position=position,
         travel=lambda *a,**k:pytest.fail('must not walk to static spawn'),turnin=handin)
     assert result.status=='turned_in'
