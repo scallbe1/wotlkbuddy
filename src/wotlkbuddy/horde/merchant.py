@@ -85,7 +85,7 @@ def safe_sale_candidates(
             state.resources is None or state.truncated):
         raise LiveControlError('Complete live merchant inventory scan unavailable')
     allowed = []
-    retain=set()
+    retain={row[2] for row in getattr(state,'item_quest_starters',())}
     protect_upgrades=protect_upgrades or state.inventory_sale_scan
     if protect_upgrades:
         worn={a.inventory_slot:a for a in state.equipped_armor}

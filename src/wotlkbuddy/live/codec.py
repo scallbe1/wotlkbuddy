@@ -444,6 +444,7 @@ class ClientTelemetry:
     bag_slots: tuple[tuple[int,int,int,int], ...] = ()  # bag index, item ID, capacity, family
     bag_candidates: tuple[tuple[int,int,int,int], ...] = ()  # source bag, slot, item ID, capacity
     bag_scan_complete: bool = False
+    item_quest_starters: tuple[tuple[int,int,int,int,int,int], ...] = ()  # bag, slot, item, quest, active, locked
 
 
 def _parse_mage_supplies(parts, supplies):
@@ -502,6 +503,38 @@ def _parse_combat_target(parts, target):
         raise TelemetryError('Malformed combat target') from exc
 
 
+def parse_item_quest_starter(parts,rows):
+    try:
+        values=tuple(map(int,parts[1:]))
+    except ValueError as exc:
+        raise TelemetryError('Malformed item quest starter') from exc
+    if len(values)!=6:
+        raise TelemetryError('Invalid item quest starter')
+    bag,slot,item,quest,active,locked=values
+    if not (0<=bag<=4 and 1<=slot<=36 and 0<item<2**31 and
+            0<quest<2**31 and active in (0,1) and locked in (0,1)) or (bag,slot) in rows:
+        raise TelemetryError('Invalid or duplicate item quest starter')
+    rows[(bag,slot)]=values
+    return rows
+
+
+def validate_action_identity_rows(raw_action_slots,actionbar_inspected,action_identity_audits,actionbar_page):
+    if raw_action_slots and not actionbar_inspected:
+        raise TelemetryError('Raw actionbar rows require inspected actionbar header')
+    if action_identity_audits:
+        visible = {
+            item.button:item for item in raw_action_slots.values()
+            if item.view == ('visible' if actionbar_page and
+                             actionbar_page > 1 else 'base')
+        }
+        for audit in action_identity_audits.values():
+            raw = visible.get(audit.button)
+            if (raw is None or raw.kind != 'spell' or
+                    raw.action_index != audit.action_index or
+                    raw.action_id != audit.raw_id):
+                raise TelemetryError('Action identity disagrees with raw action slot')
+
+
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     content = data.decode('utf-8', errors='replace')
     player = None
@@ -515,6 +548,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     visible_hotbar = {}
     bag_slots = {}
     bag_candidates = {}
+    item_quest_starters = {}
     bag_candidate_count = None
     resources = None
     dialog = None
@@ -1076,6 +1110,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                         not 1<=capacity<=36 or (bag,slot) in bag_candidates):
                     raise TelemetryError('Invalid or repeated bag candidate')
                 bag_candidates[(bag,slot)]=values
+        elif parts[0] == 'IQ':
+            parse_item_quest_starter(parts,item_quest_starters)
         elif parts[0] == 'U':
             if len(parts) != 10:
                 raise TelemetryError('Invalid bag armor record')
@@ -1158,20 +1194,7 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             (spellbook_probe is not None and
              spellbook_diagnostic.name != spellbook_probe.name)):
         raise TelemetryError('Spellbook diagnostic disagrees with spellbook probe')
-    if raw_action_slots and not actionbar_inspected:
-        raise TelemetryError('Raw actionbar rows require inspected actionbar header')
-    if action_identity_audits:
-        visible = {
-            item.button:item for item in raw_action_slots.values()
-            if item.view == ('visible' if actionbar_page and
-                             actionbar_page > 1 else 'base')
-        }
-        for audit in action_identity_audits.values():
-            raw = visible.get(audit.button)
-            if (raw is None or raw.kind != 'spell' or
-                    raw.action_index != audit.action_index or
-                    raw.action_id != audit.raw_id):
-                raise TelemetryError('Action identity disagrees with raw action slot')
+    validate_action_identity_rows(raw_action_slots,actionbar_inspected,action_identity_audits,actionbar_page)
     # On 3.3.5a the raw action number can be a spellbook INDEX, not
     # a spell database ID. A trusted AB/AS must agree with the separate
     # icon-matched AX evidence when both records are present. Never
@@ -1308,4 +1331,5 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            visible_hotbar=tuple(visible_hotbar[i] for i in sorted(visible_hotbar)),
                            bag_slots=tuple(bag_slots[i] for i in sorted(bag_slots)),
                            bag_candidates=tuple(bag_candidates[i] for i in sorted(bag_candidates)),
-                           bag_scan_complete=bag_candidate_count is not None)
+                           bag_scan_complete=bag_candidate_count is not None,
+                           item_quest_starters=tuple(item_quest_starters.values()))

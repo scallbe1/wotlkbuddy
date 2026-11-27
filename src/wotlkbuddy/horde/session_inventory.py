@@ -46,12 +46,23 @@ class SessionInventory:
             profile=quest_profile, profiles_root=profiles_root,
             pid=pid, capture=cap, driver=driver, nav=nav, spawns=db,
             min_free_slots=minimum, force_sale=force_sale, log=log)
-        return self.record_sale(sold)
+        result=self.record_sale(sold)
+        if sold is not None:
+            self.discover_item_quests(cap=cap,driver=driver,log=log)
+        return result
 
+
+    def discover_item_quests(self, *, cap, driver, log):
+        from wotlkbuddy.horde.item_quests import accept_item_quests
+        accepted=accept_item_quests(capture=cap,driver=driver,log=log)
+        if accepted:
+            self.report['item_accepted_quests']=tuple(dict.fromkeys(
+                (*self.report.get('item_accepted_quests',()),*accepted)))
 
     def prepare_services(self, args, *, quest_profile, profiles_root, pid, cap,
                          driver, nav, db, location, hud, set_native_status, log):
         """Handle bag pressure and repairs before quest or trainer travel."""
+        self.discover_item_quests(cap=cap,driver=driver,log=log)
         if args.only in ('all', 'vendor', 'objectives', 'collect', 'objects', 'turnin'):
             self.ensure_reward_space(
                 quest_profile=quest_profile, profiles_root=profiles_root,
