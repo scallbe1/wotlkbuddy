@@ -115,6 +115,7 @@ class CreatureSpawnDatabase:
         path = Path(path).expanduser().resolve()
         if not path.is_file():
             raise FileNotFoundError(f'Creature spawn database missing: {path}')
+        self.path = path
         # URI is read-only, including on Windows. Parameterized SQL queries only.
         url = 'file:' + quote(path.as_posix(), safe='/:') + '?mode=ro'
         self._conn = sqlite3.connect(url, uri=True)
@@ -155,6 +156,10 @@ class CreatureSpawnDatabase:
             raise ValueError('Spawn DB contains non-finite world coordinates')
         return tuple(Spawn(entry, map_id, *map(float, r)) for r in rows)
 
+
+    def patrol(self, entry: int, map_id: int, anchor: Vec3) -> tuple[Vec3, ...]:
+        from wotlkbuddy.horde.npc_patrol import load_patrol
+        return load_patrol(self.path.with_name('CreaturePatrols.tsv'), entry, map_id, anchor)
 
     def nearby(self, map_id: int, center: Vec3, radius: float = 80) -> tuple[Spawn, ...]:
         """Conservative local creature-density evidence; not a live hostility list."""
