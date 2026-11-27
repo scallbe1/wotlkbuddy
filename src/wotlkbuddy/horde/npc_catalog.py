@@ -36,7 +36,14 @@ def _verified_spawn(spawns, *, entry: int, map_id: int, origin: Vec3,
         close = [point for point in points
                  if distance_world(point, anchor) <= 40]
         if not close:
-            return None
+            # A server snapshot is authoritative over a stale profile hint.
+            # Only relocate to a unique spawn cluster on the requested map.
+            if getattr(spawns,'server_snapshot',False) is not True or not points:
+                return None
+            chosen=min(points,key=lambda p:distance_world(p,anchor))
+            if any(distance_world(chosen,p)>10 for p in points):
+                return None
+            return chosen if distance_world(chosen,origin)<=radius else None
         chosen = min(close, key=lambda p: distance_world(p, anchor))
         return chosen if distance_world(chosen, origin) <= radius else None
     nearby = [point for point in points
