@@ -67,6 +67,21 @@ def assess_encounter(player, resources, position, chosen, enemies, quest_entries
     return PullPlan(False,pack,'linked group exceeds conservative Mage combat budget')
 
 
+def weaker_pack_budget(player,resources,enemies):
+    """Strong level advantage permits a bounded group of ordinary enemies.
+
+    Descriptor-only classification is a risk estimate, not cast authorization.
+    Unknown ranks need a larger level advantage; never permit known elites.
+    """
+    return bool(resources is not None and 1<=len(enemies)<=3
+        and not getattr(player,'dead',False) and player.health>=.90*player.max_health
+        and resources.mana>=.85*resources.max_mana
+        and all(m.classification in ('normal','unknown') and m.level is not None
+                and 0<m.level<=player.level-(4 if m.classification=='unknown' else 3)
+                and m.health>0 for m in enemies)
+        and sum(m.health for m in enemies)<=2.5*player.max_health)
+
+
 def decisive_weaker_pull(state, plan, chosen, driver, quest_entries):
     """Skip unnecessary target cycling for a clearly weaker, required pair."""
     from wotlkbuddy.combat.crowd_control import exact_hostile
@@ -94,6 +109,13 @@ def assess_linked_pull(state, plan, chosen, driver, awareness, quest_entries, lo
     # weaker pack solely because the escort cannot be sheeped.
     if decisive_weaker_pull(state,plan,chosen,driver,quest_entries):
         log('Linked encounter: PULL: clearly weaker verified pair; no crowd control needed')
+        return state,plan
+    if (getattr(driver,'assessing_travel_corridor',False) is True
+            and len(plan.enemies)==3 and plan.allowed
+            and weaker_pack_budget(state.player,state.resources,plan.enemies)
+            and chosen.classification=='normal' and exact_hostile(state,chosen)
+            and not state.player.in_combat and not getattr(state,'current_cast_remaining_ms',0)):
+        log('Linked encounter: PULL: three substantially weaker enemies; engage now, control verified adds reactively')
         return state,plan
     baseline=plan
     state,plan=prepare_linked_pull(state,plan,chosen,driver=driver,

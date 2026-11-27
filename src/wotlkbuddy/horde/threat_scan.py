@@ -166,6 +166,49 @@ def corridor_geometry_clear(check,origin,actual,guid,log):
     return False
 
 
+def corridor_relevant(mob,origin,path_ahead):
+    return (abs(mob.position.z-origin.z)<=8 and
+            (mob.position.distance_to(origin)<=20 or
+             distance_to_corridor(mob.position,origin,path_ahead)<=18))
+
+
+def approaching_unknown(mob,origin,path_ahead):
+    distance=mob.position.distance_to(origin)
+    corridor=distance_to_corridor(mob.position,origin,path_ahead)
+    moving_away=(corridor>=hypot(mob.position.x-origin.x,mob.position.y-origin.y)-1
+                 and path_ahead[0].distance_to(mob.position)>distance+1)
+    return distance<=26 and corridor<=18 and not moving_away
+
+
+def verified_ranged_target(target,entry):
+    return bool(target and target.entry_id==entry and not target.dead and target.attackable
+                and target.reaction is not None and 1<=target.reaction<=3
+                and target.fireball_in_range is True)
+
+
+def weaker_corridor(state,enemies,unknown,pack_positions):
+    """Use live levels and HP rather than geometry alone to assess a small pack."""
+    from wotlkbuddy.horde.encounter import weaker_pack_budget
+    from wotlkbuddy.combat.crowd_control import is_healer
+    pack=tuple(e for e in enemies if e.position in pack_positions)
+    # Do not ignore other observed enemies or unknown units in the corridor.
+    return (not unknown and len(pack)==len(enemies) and not any(is_healer(e) for e in pack)
+            and weaker_pack_budget(state.player,state.resources,pack))
+
+
+def acquire_travel_target(state,candidates,*,awareness,driver,fresh,max_targets,pack_positions,log,weak):
+    distance,guid,entry=candidates[0]
+    try:
+        return acquire_corridor_target(state,guid,entry,awareness=awareness,candidates=candidates,
+            driver=driver,fresh=fresh,max_targets=max_targets,pack_positions=pack_positions,log=log)
+    except LiveControlError as exc:
+        if not weak or str(exc)!='Unsafe encounter: could not acquire exact discovered hostile GUID':
+            raise
+        current=fresh(state)
+        log('Weaker corridor pack: target not yet acquired; advancing on verified route for closer acquisition or defensive combat')
+        return current,None,None
+
+
 def scan_and_clear_hostiles(
     *, initial: ClientTelemetry, player_position: WorldPosition,
     path_ahead: Sequence[Vec3],
@@ -254,24 +297,11 @@ def scan_and_clear_hostiles(
     awareness=getattr(driver,'awareness',None)
     if awareness is not None:
         origin=player_position.position
-        def relevant(mob):
-            return (abs(mob.position.z-origin.z)<=8 and
-                    (mob.position.distance_to(origin)<=20 or
-                     distance_to_corridor(mob.position,origin,path_ahead)<=18))
-        state,enemies,unknown=awareness.survey(state,player_position,relevant)
+        state,enemies,unknown=awareness.survey(state,player_position,
+            lambda mob:corridor_relevant(mob,origin,path_ahead))
         if state.player.in_combat:
             return defend(state)
-        # Unknown hostility is never permission to attack or walk directly
-        # into a potentially dangerous, unclassified creature.
-        def approaching_unknown(mob):
-            # A nearby object behind us is not a reason to forbid retreat.
-            # Keep the stop for paths that actually approach an unknown.
-            distance=mob.position.distance_to(origin)
-            corridor=distance_to_corridor(mob.position,origin,path_ahead)
-            moving_away=(corridor>=hypot(mob.position.x-origin.x,mob.position.y-origin.y)-1
-                         and path_ahead[0].distance_to(mob.position)>distance+1)
-            return distance<=26 and corridor<=18 and not moving_away
-        urgent=[m for m in unknown if approaching_unknown(m)]
+        urgent=[m for m in unknown if approaching_unknown(m,origin,path_ahead)]
         if urgent:
             remember_pack(driver,[m.position for m in urgent],monotonic())
             raise LiveControlError('Unsafe encounter: unclassified nearby object(s) on route: '+
@@ -355,6 +385,7 @@ def scan_and_clear_hostiles(
             candidates.append((distance,current_guid,target.entry_id))
             if len(candidates)>max(crowd_limit,3):
                 break
+    weak=awareness is not None and weaker_corridor(state,enemies,unknown,pack_positions)
     assess=getattr(driver,'assess_pull',None)
     corridor_count=len(candidates)+sum(d<=18 for d,_ in blocked_nearby)
     # A known three-pack should reach the strength assessment rather than
@@ -366,10 +397,12 @@ def scan_and_clear_hostiles(
             f'{len(candidates)} verified hostile mobs within '
             f'{detection_yards:g}y of travel corridor; possible pack, '
             'stopping before pulling into group')
-    if (awareness is not None or not candidates) and sum(distance <= (24 if awareness is not None else 18) for distance, _ in blocked_nearby) >= 2:
+    if not weak and (awareness is not None or not candidates) and sum(distance <= (24 if awareness is not None else 18) for distance, _ in blocked_nearby) >= 2:
         remember_pack(driver,pack_positions,monotonic())
         raise LiveControlError('Possible pack behind cave bend; holding position rather than walking into multiple hostiles')
     if not candidates:
+        if weak and blocked_nearby:
+            log('Weaker corridor pack behind geometry: advancing on verified route; defense armed')
         # Restore a neutral target state, so subsequent quest drivers always
         # reacquire their own exact GUID. The scan never attacks a neutral mob.
         if state.player.target_guid:
@@ -386,8 +419,10 @@ def scan_and_clear_hostiles(
         raise LiveControlError('Mage lacks minimum mana to clear hostile travel path')
     # Prefer a ranged opening, not the nearest melee-range enemy.
     candidates.sort(key=(lambda row: (0,row[0]) if row[0]<=20 else (1,abs(row[0]-32))) if awareness is not None else None)
-    distance, chosen_guid, chosen_entry=candidates[0]
-    state,chosen_guid,chosen_entry=acquire_corridor_target(state,chosen_guid,chosen_entry,awareness=awareness,candidates=candidates,driver=driver,fresh=fresh,max_targets=max_targets,pack_positions=pack_positions,log=log)
+    state,chosen_guid,chosen_entry=acquire_travel_target(state,candidates,awareness=awareness,driver=driver,
+        fresh=fresh,max_targets=max_targets,pack_positions=pack_positions,log=log,weak=weak)
+    if chosen_guid is None:
+        return finish(state)
     if state.player.in_combat:
         return defend(state)
     tactical_status(driver,'assess')
@@ -397,9 +432,10 @@ def scan_and_clear_hostiles(
         tactical_status(driver,'range')
         log(f'Isolated hostile {chosen_guid} moved out of Fireball range; continuing checked route to close distance')
         return finish(state)
-    if (not target or target.entry_id!=chosen_entry or target.dead or
-            not target.attackable or target.reaction is None or
-            not 1<=target.reaction<=3 or target.fireball_in_range is not True):
+    if not verified_ranged_target(target,chosen_entry):
+        if weak:
+            log('Weaker corridor pack: no verified cast yet; advancing with reactive defense')
+            return finish(state)
         raise LiveControlError('Preemptive target lost exact hostility/range verification')
     actual=target_position(state)
     measured=player_position.position.distance_to(actual)
