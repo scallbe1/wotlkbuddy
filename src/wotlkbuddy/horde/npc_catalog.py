@@ -160,7 +160,7 @@ def nearby_service_npcs(
     the available catalogs. The spawn DB
     confirms location; it never invents trainer/vendor identities.
     """
-    if not 30 <= radius <= 600:
+    if not 30 <= radius <= 1800:
         raise ValueError('Service search radius out of bounds')
 
     def candidates(vendors: tuple[VendorSpec, ...], source: str):
