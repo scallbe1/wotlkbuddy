@@ -82,3 +82,60 @@ def test_weaker_pack_behind_geometry_can_advance_only_with_accounted_units():
     assert weaker_corridor(state,enemies,(),positions)
     assert not weaker_corridor(state,enemies,(object(),),positions)
     assert not weaker_corridor(state,enemies,(),positions[:1])
+
+
+def test_neutral_duskbat_is_authorized_only_for_active_quest_source():
+    from types import SimpleNamespace as NS
+    from wotlkbuddy.horde.encounter import survey_pull
+    guid='0xF130000611000601'
+    p=NS(guid='player',target_guid=guid,target_name='Greater Duskbat',level=11,
+         health=192,max_health=192,in_combat=False)
+    r=NS(mana=520,max_mana=520)
+    target=NS(entry_id=1553,attackable=True,dead=False,health=75,reaction=4,
+              level=6,classification='normal')
+    s=NS(player=p,resources=r,combat_target=target)
+    where=NS(position=Vec3(0,0,0),z=0)
+    awareness=NS(survey=lambda *a,**k:(s,(),()),acquire=lambda *a:s)
+    args=dict(initial=s,capture=lambda:s,driver=NS(awareness=awareness),
+        player_position=lambda _:where,target_position=lambda _:Vec3(28,0,0))
+    _,plan=survey_pull(**args,quest_entries=(1553,1554))
+    assert plan.allowed and plan.enemies[0].guid==guid
+    _,plan=survey_pull(**args,quest_entries=())
+    assert not plan.allowed
+    target.reaction=5
+    _,plan=survey_pull(**args,quest_entries=(1553,1554))
+    assert not plan.allowed
+
+
+def test_neutral_objective_still_assesses_nearby_hostile_pack():
+    from types import SimpleNamespace as NS
+    from wotlkbuddy.horde.encounter import survey_pull
+    guid='0xF130000611000601'
+    p=NS(guid='player',target_guid=guid,target_name='Greater Duskbat',level=11,
+         health=192,max_health=192,in_combat=False)
+    s=NS(player=p,resources=NS(mana=520,max_mana=520),
+         combat_target=NS(entry_id=1553,attackable=True,dead=False,health=75,
+                          reaction=4,level=6,classification='normal'))
+    where=NS(position=Vec3(0,0,0),z=0)
+    awareness=NS(survey=lambda *a,**k:(s,(mob('elite',29,kind='elite'),),()),
+                 acquire=lambda *a:s)
+    _,plan=survey_pull(initial=s,capture=lambda:s,driver=NS(awareness=awareness),
+        player_position=lambda _:where,target_position=lambda _:Vec3(28,0,0),
+        quest_entries=(1553,1554))
+    assert not plan.allowed and 'elite' in plan.reason
+
+
+def test_neutral_quest_rotation_requires_exact_source_permission():
+    from dataclasses import replace
+    from wotlkbuddy.combat.runtime import selected_action
+    from test_horde_combat_v019 import snap
+    from types import SimpleNamespace as NS
+    s=snap()
+    s=replace(s,player=replace(s.player,target_guid='0xF130000611000601'),
+        combat_target=replace(s.combat_target,entry_id=1553,reaction=4,
+            health=75,max_health=75,attackable=True,dead=False),
+        action_spells=(NS(spell_id=143,name='Fireball',key='2',cooldown_ms=0,usable=True,in_range=True),),
+        current_cast_remaining_ms=0)
+    assert selected_action(s) is None
+    assert selected_action(s,quest_entry=1554) is None
+    assert selected_action(s,quest_entry=1553).name=='Fireball'

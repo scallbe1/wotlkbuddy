@@ -139,6 +139,14 @@ def assess_linked_pull(state, plan, chosen, driver, awareness, quest_entries, lo
     return state,plan
 
 
+def neutral_quest_target(state,quest_entries):
+    """A yellow creature may be pulled only as an exact authorized quest source."""
+    target=state.combat_target
+    return bool(target and target.entry_id in quest_entries and target.attackable
+                and not target.dead and target.health>0 and target.reaction==4
+                and creature_entry_from_guid(state.player.target_guid)==target.entry_id)
+
+
 def survey_pull(*,initial,capture,driver,player_position,target_position,quest_entries=(),
                 log=lambda _:None,sleep=real_sleep):
     """Survey red targets around the current firing position; restore exact GUID."""
@@ -153,13 +161,23 @@ def survey_pull(*,initial,capture,driver,player_position,target_position,quest_e
             return state,None
         chosen=next((m for m in enemies if m.guid==chosen_guid),None)
         if chosen is None:
-            return state,PullPlan(False,(),'selected enemy absent from verified spatial census')
+            if state.player.target_guid==chosen_guid and neutral_quest_target(state,quest_entries):
+                target=state.combat_target
+                try:
+                    chosen=Enemy(chosen_guid,target.entry_id,state.player.target_name,
+                        target_position(state),target.level,target.classification,target.health)
+                except (OSError,ValueError,RuntimeError):
+                    return state,PullPlan(False,(),'neutral quest target position unavailable')
+                log('Encounter: exact neutral quest source; assessing nearby hostile adds')
+            else:
+                return state,PullPlan(False,(),'selected enemy absent from verified spatial census')
         state=awareness.acquire(state,chosen.guid,chosen.entry)
         if state.player.in_combat:
             return state,None
         t=state.combat_target
         if (state.player.target_guid!=chosen_guid or not t or t.dead or
-                not t.attackable or t.reaction is None or not 1<=t.reaction<=3):
+                not t.attackable or t.reaction is None or
+                not (1<=t.reaction<=3 or neutral_quest_target(state,quest_entries))):
             return state,PullPlan(False,(),'could not verify exact hostile after spatial survey')
         try:
             chosen=Enemy(chosen.guid,chosen.entry,chosen.name,target_position(state),
@@ -169,13 +187,18 @@ def survey_pull(*,initial,capture,driver,player_position,target_position,quest_e
         plan=assess_encounter(state.player,state.resources,position.position,chosen,enemies,quest_entries)
         # Unknown creatures near player or any likely linked mob are risk,
         # not silent omissions. Mage prefers isolated pulls.
-        uncertain=[m for m in unknown if abs(m.position.z-position.z)<=8 and
+        uncertain=[m for m in unknown if m.guid!=chosen_guid and abs(m.position.z-position.z)<=8 and
                    (m.position.distance_to(position.position)<=18 or
                     any(m.position.distance_to(e.position)<=16 for e in plan.enemies))]
         if uncertain:
             plan=PullPlan(False,plan.enemies,'unclassified creature near potential pull: '+
                           ', '.join(str(m.entry) for m in uncertain))
         elif len(plan.enemies)>1:
+            if neutral_quest_target(state,quest_entries):
+                # The exact neutral quest target is not a red escort. Use the
+                # ordinary strength budget; never authorize neutral adds.
+                log(f'Neutral quest encounter: {"PULL" if plan.allowed else "AVOID"}: {plan.reason}')
+                return state,plan
             return assess_linked_pull(state,plan,chosen,driver,awareness,quest_entries,log)
         log(f'Object encounter: {len(enemies)} red, {len(unknown)} unknown, '
             f'{len(plan.enemies)} linked; {"PULL" if plan.allowed else "AVOID"}: {plan.reason}')

@@ -15,7 +15,7 @@ from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 
 
-def selected_action(snapshot: ClientTelemetry, *, opening: bool = False) -> Ability | None:
+def selected_action(snapshot: ClientTelemetry, *, opening: bool = False, quest_entry: int | None = None) -> Ability | None:
     """Select a ready, ranged, class-appropriate spell from live action slots."""
     if (snapshot.truncated or snapshot.player.dead or
             snapshot.resources is None or snapshot.combat_target is None):
@@ -30,6 +30,8 @@ def selected_action(snapshot: ClientTelemetry, *, opening: bool = False) -> Abil
         cooldown_ms=spell.cooldown_ms, usable=spell.usable,
         in_range=spell.in_range)
         for spell in snapshot.action_spells)
+    from wotlkbuddy.horde.encounter import neutral_quest_target
+    authorized_neutral=quest_entry is not None and neutral_quest_target(snapshot,(quest_entry,))
     ctx = CombatContext(
         class_token=cls,
         health_fraction=snapshot.player.health/max(1,snapshot.player.max_health),
@@ -37,7 +39,7 @@ def selected_action(snapshot: ClientTelemetry, *, opening: bool = False) -> Abil
         mana_fraction=snapshot.resources.mana/max(1,snapshot.resources.max_mana),
         target_health_fraction=target.health/max(1,target.max_health),
         target_is_hostile=target.attackable and
-            target.reaction is not None and 1 <= target.reaction <= 3,
+            target.reaction is not None and (1 <= target.reaction <= 3 or authorized_neutral),
         target_alive=not target.dead and target.health>0,
         player_alive=not snapshot.player.dead,
         is_casting=(snapshot.current_cast_remaining_ms is not None and
