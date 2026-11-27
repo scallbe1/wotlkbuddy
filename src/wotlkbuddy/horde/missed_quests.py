@@ -34,7 +34,7 @@ class RecoveryOffer:
 def recovery_offers(profile, state, current, db, memory, *, now):
     """Select earlier/easier NPC opportunities within supported travel bounds."""
     native = native_profiles_root() / 'Horde/Starter/Tirisfal-Glades-1-12.xml'
-    if (Path(profile.source_path).resolve()!=native.resolve() or current.map_id!=0
+    if (Path(getattr(profile,'source_path','')).resolve()!=native.resolve() or current.map_id!=0
             or state.truncated or state.player.dead or state.player.in_combat
             or not state.player.guid or len(state.quests)>=23
             or any(q.complete for q in state.quests)
