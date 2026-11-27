@@ -105,11 +105,19 @@ def next_collect_objective(
     if (not quest_spec.objectives or
             len(quest_spec.objectives) != len(journal.objectives)):
         raise LiveControlError('CollectItem XML/journal objective count mismatch')
-    if any(obj.kind != 'CollectItem' for obj in quest_spec.objectives):
+    item_specs = tuple(obj for obj in quest_spec.objectives if obj.kind == 'CollectItem')
+    item_rows = tuple(obj for obj in journal.objectives if obj.kind.lower() == 'item')
+    other_specs = tuple(obj for obj in quest_spec.objectives if obj.kind != 'CollectItem')
+    other_rows = tuple(obj for obj in journal.objectives if obj.kind.lower() != 'item')
+    if (not item_specs or len(item_specs) != len(item_rows)
+            or len(other_specs) != len(other_rows)
+            or any(obj.kind != 'KillMob' for obj in other_specs)
+            or any(not row.done or row.kind.lower() not in ('monster','killmob','kill','')
+                   for row in other_rows)):
         raise LiveControlError(
             'Mixed non-collection quest objectives require a separate executor')
-    counts = {obj.count for obj in quest_spec.objectives}
-    for observed in journal.objectives:
+    counts = {obj.count for obj in item_specs}
+    for observed in item_rows:
         parsed = objective_progress(observed.description)
         if (observed.kind.lower() != 'item' or parsed is None
                 or parsed[1] not in counts or
@@ -117,8 +125,8 @@ def next_collect_objective(
             raise LiveControlError(
                 'Live item journal objective type/count conflicts with XML')
 
-    by_id = {obj.entry: obj for obj in quest_spec.objectives}
-    if len(by_id) != len(quest_spec.objectives):
+    by_id = {obj.entry: obj for obj in item_specs}
+    if len(by_id) != len(item_specs):
         raise LiveControlError('Duplicate item IDs in XML quest spec')
     ordered = tuple(dict.fromkeys(
         step.entry for step in profile.steps
@@ -134,7 +142,7 @@ def next_collect_objective(
         spec = by_id[item_id]
         item_name = names.get(item_id)
         if item_name:
-            matched = [obj for obj in journal.objectives
+            matched = [obj for obj in item_rows
                        if obj.description.rpartition(':')[0].strip().casefold()
                        == item_name.strip().casefold()]
             if len(matched) != 1:
@@ -150,7 +158,7 @@ def next_collect_objective(
             return spec, observed
         # Item is not yet name-bound. This candidate only authorizes
         # /wbttrack <ItemId>; the caller must rebind before any combat.
-        candidate = next((obj for obj in journal.objectives
+        candidate = next((obj for obj in item_rows
                           if not obj.done and
                           objective_progress(obj.description)[1] == spec.count),
                          None)
