@@ -214,6 +214,11 @@ def train_available_mage_spells(
                   if v.required_level<=s.player.level)
     if on_budget is not None and trainer_scan_complete(s):
         on_budget(s,pending)
+    close_trainer(s,npc_name=npc_name,driver=driver,fresh=fresh,now=now,log=log)
+    return tuple(bought)
+
+
+def close_trainer(s,*,npc_name,driver,fresh,now,log):
     log(f'{npc_name}: closing class trainer window after training')
     driver.chat('/click ClassTrainerFrameCloseButton')
     deadline = now() + 6
@@ -228,4 +233,3 @@ def train_available_mage_spells(
         raise LiveControlError(
             f'{npc_name}: trainer frame still open after close button; '
             'cannot report clean NPC interaction completion')
-    return tuple(bought)
