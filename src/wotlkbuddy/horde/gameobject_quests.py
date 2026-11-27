@@ -13,7 +13,7 @@ from typing import Callable
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.combat import objective_progress
-from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable, unsafe_route_encounter, detour_around_encounters
+from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable, unsafe_route_encounter, detour_around_encounters, path_avoids_pack
 from wotlkbuddy.horde.profile import HordeProfile, condition_value
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
@@ -134,9 +134,13 @@ def next_object_hotspot(hotspots,visited,origin):
     return min(candidates,key=lambda pair:pair[1].distance_to(origin),default=None)
 
 
+def recent_object_hazards(driver):
+    return [p for p,at in getattr(driver,'dangerous_hunt_positions',[]) if monotonic()-at<90]
+
+
 def recover_object_encounter(driver,nav,map_id,world,destination,*,sample,guard,log):
     """Use remembered verified pack locations rather than walking into the same pull."""
-    hazards=[p for p,at in getattr(driver,'dangerous_hunt_positions',[]) if monotonic()-at<90]
+    hazards=recent_object_hazards(driver)
     if not hazards:
         raise EncounterRouteUnavailable('GameObject encounter unavailable; refreshing on next continuous cycle')
     def supervise():
@@ -147,6 +151,49 @@ def recover_object_encounter(driver,nav,map_id,world,destination,*,sample,guard,
     if not route:
         raise EncounterRouteUnavailable('No safe GameObject detour; refreshing on next continuous cycle')
     return route
+
+
+def object_retreat_route(driver,nav,map_id,origin,anchors,*,sample,guard,log):
+    """Back out to measured ground, with a complete route away from the pack."""
+    hazards=recent_object_hazards(driver)
+    if not hazards:
+        return None
+    for point in reversed(anchors):
+        if not 18<=origin.distance_to(point)<=90:
+            continue
+        state,_=sample()
+        guard(state)
+        if min(point.distance_to(h) for h in hazards)<24:
+            continue
+        try:
+            raw=nav.find_path(map_id,origin,point)
+            if not raw or abs(raw[0].z-origin.z)>2.5:
+                continue
+            route=validate_nav_path(raw,origin,point,max_step=18.,max_distance=140)
+        except (OSError,ValueError,RuntimeError,TimeoutError):
+            continue
+        if path_avoids_pack(route,hazards,radius=20):
+            log(f'Blocked GameObject corridor: turning back {origin.distance_to(point):.1f}y to previously measured ground')
+            return route
+    return None
+
+
+def travel_object_segment(waypoints,*,destination,world,driver,nav,travel,sample,
+                          goal,map_id,remaining,sleep,now,log):
+    status=getattr(driver,'set_navigation_distance',None)
+    if callable(status):
+        status(destination,world.position)
+    return travel(waypoints,sample=sample,keyboard=getattr(driver,'keyboard',driver),
+        stop_requested=driver.emergency_stop_requested,
+        expected_quest_id=goal.quest_id,expected_map_id=map_id,
+        max_seconds=min(600,remaining),
+        can_traverse=lambda a,b:nav.segment_clear(map_id,a,b),
+        progress=log,on_aggro=getattr(driver,'on_aggro',None),
+        on_threat=getattr(driver,'scan_hostiles',None),
+        waypoint_spacing=18.,continuous_forward=True,threat_check_yards=14.,
+        passive_route_scan=True,
+        fast_observe=getattr(driver,'fast_travel_observe',None),
+        replan_path=lambda a,b:nav.find_path(map_id,a,b),sleep=sleep,now=now)
 
 
 def navigate_object_destination(s,destination,*,pid,world_position,capture,guard,
@@ -163,6 +210,9 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
     height=HeightRecovery(world.position,destination)
     encounter_replans=0
     alternate=None
+    retreating=False
+    retreats=0
+    anchors=[world.position]
 
     def sample():
         snap=capture()
@@ -176,6 +226,9 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
         opid,wp=world_position(snap)
         if opid!=pid or wp.map_id!=map_id:
             raise LiveControlError('WoW PID/map changed on GameObject route')
+        if not snap.player.in_combat and anchors[-1].distance_to(wp.position)>=5:
+            anchors.append(wp.position)
+            del anchors[:-48]
         return snap,wp
 
     for _ in range(24):
@@ -187,28 +240,27 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
             raise LiveControlError('GameObject navigation time budget exhausted')
         raw=alternate or nav.find_path(map_id,world.position,destination)
         alternate=None
+        endpoint=raw[-1] if retreating and raw else destination
         if not raw or abs(raw[0].z-world.z)>2.5:
             raise LiveControlError('GameObject Detour route does not start on measured floor')
-        route=validate_nav_path(raw,world.position,destination,max_step=18.,max_distance=6000)
+        route=validate_nav_path(raw,world.position,endpoint,max_step=18.,max_distance=6000)
         waypoints=delivery_legs(route)[0]
         log(f'GameObject Detour: {len(waypoints)-1} verified legs; '
             f'{world.position.distance_to(destination):.1f}y to objective hotspot')
-        status=getattr(driver,'set_navigation_distance',None)
-        if callable(status):
-            status(destination,world.position)  # Already stationary at segment boundary.
-        report=travel(waypoints,sample=sample,keyboard=getattr(driver,'keyboard',driver),
-            stop_requested=driver.emergency_stop_requested,
-            expected_quest_id=goal.quest_id,expected_map_id=map_id,
-            max_seconds=min(600,remaining),
-            can_traverse=lambda a,b:nav.segment_clear(map_id,a,b),
-            progress=log,on_aggro=getattr(driver,'on_aggro',None),
-            on_threat=getattr(driver,'scan_hostiles',None),
-            waypoint_spacing=18.,continuous_forward=True,threat_check_yards=14.,
-            passive_route_scan=True,
-            fast_observe=getattr(driver,'fast_travel_observe',None),
-            replan_path=lambda a,b:nav.find_path(map_id,a,b),sleep=sleep,now=now)
+        report=travel_object_segment(waypoints,destination=destination,world=world,
+            driver=driver,nav=nav,travel=travel,sample=sample,goal=goal,map_id=map_id,
+            remaining=remaining,sleep=sleep,now=now,log=log)
         reason=report.stopped_reason
         if reason=='complete':
+            if retreating:
+                s,world=sample()
+                guard(s)
+                if world.position.distance_to(endpoint)>7:
+                    raise EncounterRouteUnavailable('GameObject retreat endpoint not confirmed')
+                retreating=False
+                alternate=recover_object_encounter(driver,nav,map_id,world,destination,
+                    sample=sample,guard=guard,log=log)
+                continue
             if waypoints[-1]==route[-1]:
                 return fresh(s)
             s,world=sample()
@@ -227,13 +279,41 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
             if encounter_replans>12:
                 raise EncounterRouteUnavailable('GameObject encounter replan budget exhausted')
             log(f'GameObject encounter recovery {encounter_replans}/12; retaining objective destination')
-            if blocked:
-                alternate=recover_object_encounter(driver,nav,map_id,world,destination,
-                    sample=sample,guard=guard,log=log)
+            if blocked or retreating:
+                retreating=False
+                try:
+                    alternate=recover_object_encounter(driver,nav,map_id,world,destination,
+                        sample=sample,guard=guard,log=log)
+                except EncounterRouteUnavailable:
+                    if retreats>=2:
+                        raise
+                    alternate=object_retreat_route(driver,nav,map_id,world.position,anchors,
+                        sample=sample,guard=guard,log=log)
+                    if alternate is None:
+                        raise
+                    retreating=True
+                    retreats+=1
         elif not height.record(world.position):
             raise LiveControlError('GameObject height recovery stalled')
         log(f'Replanning GameObject route from live XYZ ({world.x:.2f},{world.y:.2f},{world.z:.2f})')
     raise LiveControlError('GameObject route replan budget exhausted')
+
+
+def eligible_objects(goal,state,world,observe_objects,visited_guids,preferred_guid):
+    options=(o for o in observe_objects(state,goal.object_id)
+             if o.entry==goal.object_id
+             and min(o.position.distance_to(h) for h in goal.hotspots)<40
+             and o.position.distance_to(world.position)<175 and o.guid not in visited_guids)
+    return tuple(sorted(options,key=lambda o:(o.guid!=preferred_guid,
+                                               o.position.distance_to(world.position))))
+
+
+def mark_exhausted_hotspots(goal,visible_now,visited_guids,visited_hotspots):
+    """Avoid revisiting hotspots containing only an exhausted live instance."""
+    for i,hotspot in enumerate(goal.hotspots):
+        if any(loaded.guid in visited_guids and loaded.entry==goal.object_id
+               and loaded.position.distance_to(hotspot)<=12 for loaded in visible_now):
+            visited_hotspots.add(i)
 
 
 def execute_gameobject_quest(
@@ -267,6 +347,7 @@ def execute_gameobject_quest(
     interacted=0
     visited_guids: set[int]=set()
     visited_hotspots: set[int]=set()
+    blocked_hotspots: set[int]=set()
     # Failed clicks are not successful interactions. Keep the exact GO GUID
     # selected for at most two shorter, measured local approaches before
     # abandoning that instance. Do not walk to another box immediately.
@@ -496,44 +577,32 @@ def execute_gameobject_quest(
         opid,world=world_position(state)
         if opid!=pid:
             raise LiveControlError('WoW process changed during object selection')
-        options=tuple(
-            o for o in observe_objects(state,goal.object_id)
-            if (o.entry==goal.object_id and
-                min(o.position.distance_to(h) for h in goal.hotspots)<40 and
-                o.position.distance_to(world.position)<175 and
-                o.guid not in visited_guids))
-        # After a failed interaction, prefer the same exact GO GUID instead
-        # of starting a long navigation route toward another box.
-        options=tuple(sorted(
-            options,key=lambda o:(o.guid!=preferred_guid,
-                                  o.position.distance_to(world.position))))
+        options=eligible_objects(goal,state,world,observe_objects,visited_guids,preferred_guid)
         if preferred_guid is not None and not any(
                 o.guid==preferred_guid for o in options):
             log('Previously selected box is no longer loaded; '
                 'choosing another profile-confirmed object')
             preferred_guid=None
         if not options:
-            # A hotspot that already contains a GUID we just exhausted is
-            # not a fresh search destination. Otherwise a failed click can
-            # cause a useless long detour BACK to that same box, matching
-            # the obstruction loop in Aarr's log. Distinct GOs in one
-            # hotspot remain eligible because they are selected above.
-            visible_now=observe_objects(state,goal.object_id)
-            for i,hotspot in enumerate(goal.hotspots):
-                if any((loaded.guid in visited_guids and
-                        loaded.entry==goal.object_id and
-                        loaded.position.distance_to(hotspot)<=12)
-                       for loaded in visible_now):
-                    visited_hotspots.add(i)
-            unexplored=next_object_hotspot(goal.hotspots,visited_hotspots,world.position)
+            mark_exhausted_hotspots(goal,observe_objects(state,goal.object_id),visited_guids,visited_hotspots)
+            unexplored=next_object_hotspot(goal.hotspots,visited_hotspots|blocked_hotspots,world.position)
             if unexplored is None:
+                if blocked_hotspots:
+                    raise EncounterRouteUnavailable('All remaining GameObject hotspots blocked; retrying next continuous cycle')
                 raise LiveControlError(
                     f'No currently observed GameObject {goal.object_id} '
                     'and no unvisited verified XML hotspots within 4000y')
             i,spot=unexplored
             log(f'No loaded GameObject yet; travelling to XML hotspot '
                 f'{i+1}/{len(goal.hotspots)}')
-            state=navigate(state,spot)
+            try:
+                state=navigate(state,spot)
+            except EncounterRouteUnavailable as exc:
+                blocked_hotspots.add(i)
+                log(f'Hotspot {i+1} temporarily blocked: {exc}; selecting another verified hotspot')
+                state=capture()
+                guard(state)
+                continue
             visited_hotspots.add(i)
             continue
         obj=options[0]
@@ -543,7 +612,13 @@ def execute_gameobject_quest(
             dy=(world.y-obj.position.y)/distance
             staging=Vec3(obj.position.x+dx*2.5,
                          obj.position.y+dy*2.5,obj.position.z)
-            state=navigate(state,staging)
+            try:
+                state=navigate(state,staging)
+            except EncounterRouteUnavailable as exc:
+                visited_guids.add(obj.guid)
+                log(f'Object approach blocked: {exc}; selecting another verified object')
+                state=capture()
+                guard(state)
             continue
         # Memory candidate must STILL be present/near before probing mouse.
         loaded=observe_objects(state,goal.object_id)
