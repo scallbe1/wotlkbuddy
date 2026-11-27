@@ -44,7 +44,7 @@
 	<Mailboxes />
 
 	<Quest Id="364" Name="The Mindless Ones">
-		<Objective Type="KillMob" MobId="1501" KillCount="5">
+		<Objective Type="KillMob" MobId="1501" KillCount="8">
 			<Hotspots>
 				<Hotspot X="1946.66" Y="1470.27" Z="76.76" />
 				<Hotspot X="1969" Y="1611.12" Z="88.2" />
@@ -53,7 +53,7 @@
 				<Hotspot X="1905.06" Y="1462.11" Z="82.17" />
 			</Hotspots>
 		</Objective>
-		<Objective Type="KillMob" MobId="1502" KillCount="5">
+		<Objective Type="KillMob" MobId="1502" KillCount="8">
 			<Hotspots>
 				<Hotspot X="1853.81" Y="1487.77" Z="91.11" />
 				<Hotspot X="1976.31" Y="1515.04" Z="86.82" />
@@ -64,7 +64,7 @@
 		</Objective>
 	</Quest>
 	<Quest Id="3901" Name="Rattling the Rattlecages">
-		<Objective Type="KillMob" MobId="1890" KillCount="8">
+		<Objective Type="KillMob" MobId="1890" KillCount="12">
 			<Hotspots>
 				<Hotspot X="1898.19" Y="1467.73" Z="83.6" />
 				<Hotspot X="1889.25" Y="1488.25" Z="88.01" />
@@ -116,7 +116,7 @@
 		</Objective>
 	</Quest>
 	<Quest Id="380" Name="Night Web's Hollow">
-		<Objective Type="KillMob" MobId="1504" KillCount="8">
+		<Objective Type="KillMob" MobId="1504" KillCount="10">
 			<Hotspots>
 				<Hotspot X="2121.06" Y="1779.07" Z="93.37" />
 				<Hotspot X="2136.25" Y="1651.92" Z="78.86" />
@@ -125,7 +125,7 @@
 				<Hotspot X="2117.58" Y="1758.96" Z="85.01" />
 			</Hotspots>
 		</Objective>
-		<Objective Type="KillMob" MobId="1505" KillCount="5">
+		<Objective Type="KillMob" MobId="1505" KillCount="8">
 			<Hotspots>
 				<Hotspot X="2011.61" Y="1950.18" Z="102.78" />
 				<Hotspot X="2031.67" Y="1982.41" Z="99.5" />
@@ -594,8 +594,8 @@
 		<PickUp QuestName="Rude Awakening" QuestId="363" GiverName="Undertaker Mordo" GiverId="1568" X="1671.89" Y="1678.29" Z="120.802" />
 		<TurnIn QuestName="Rude Awakening" QuestId="363" TurnInName="Shadow Priest Sarvis" TurnInId="1569" X="1843.32" Y="1639.9" Z="97.8113" />
 		<PickUp QuestName="The Mindless Ones" QuestId="364" GiverName="Shadow Priest Sarvis" GiverId="1569" X="1843.32" Y="1639.9" Z="97.8113" />
-		<Objective QuestName="The Mindless Ones" QuestId="364" Type="KillMob" MobId="1501" KillCount="5" />
-		<Objective QuestName="The Mindless Ones" QuestId="364" Type="KillMob" MobId="1502" KillCount="5" />
+		<Objective QuestName="The Mindless Ones" QuestId="364" Type="KillMob" MobId="1501" KillCount="8" />
+		<Objective QuestName="The Mindless Ones" QuestId="364" Type="KillMob" MobId="1502" KillCount="8" />
 		<If Condition="Me.Level &lt; 2">
 			<SetGrindArea>
 				<GrindArea>
@@ -654,7 +654,7 @@
 			<TurnIn QuestName="Glyphic Scroll" QuestId="3098" TurnInName="Isabella" TurnInId="2124" X="1847.39" Y="1635.52" Z="97.0169" />
 		</If>
 
-		<Objective QuestName="Rattling the Rattlecages" QuestId="3901" Type="KillMob" MobId="1890" KillCount="8" />
+		<Objective QuestName="Rattling the Rattlecages" QuestId="3901" Type="KillMob" MobId="1890" KillCount="12" />
 		<If Condition="Me.Level &lt; 3">
 			<SetGrindArea>
 				<GrindArea>
@@ -694,8 +694,8 @@
 		<PickUp QuestName="Scavenging Deathknell" QuestId="3902" GiverName="Deathguard Saltain" GiverId="1740" X="1861.17" Y="1605.02" Z="94.9238" />
 		<Objective QuestName="Scavenging Deathknell" QuestId="3902" Type="CollectItem" ItemId="11127" CollectCount="6" />
 		<TurnIn QuestName="Scavenging Deathknell" QuestId="3902" TurnInName="Deathguard Saltain" TurnInId="1740" X="1861.17" Y="1605.02" Z="94.9238" />
-		<Objective QuestName="Night Web's Hollow" QuestId="380" Type="KillMob" MobId="1504" KillCount="8" />
-		<Objective QuestName="Night Web's Hollow" QuestId="380" Type="KillMob" MobId="1505" KillCount="5" />
+		<Objective QuestName="Night Web's Hollow" QuestId="380" Type="KillMob" MobId="1504" KillCount="10" />
+		<Objective QuestName="Night Web's Hollow" QuestId="380" Type="KillMob" MobId="1505" KillCount="8" />
 		<If Condition="Me.Level &lt; 5">
 			<SetGrindArea>
 				<GrindArea>
