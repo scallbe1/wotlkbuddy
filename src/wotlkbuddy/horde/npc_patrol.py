@@ -49,9 +49,48 @@ def nearby_npc(state, where, driver, npc_id):
     return min(rows, key=lambda m: m.position.distance_to(where.position), default=None)
 
 
+class PatrolSighting(LiveControlError):
+    """A verified live sighting interrupts a sweep, not the quest session."""
+
+
+class PatrolTravelTimeout(LiveControlError):
+    """A patrol movement slice expired; re-observe before deciding to retry."""
+
+
+SIGHTING_REASON = 'Verified patrol NPC sighting; stop and reacquire'
+
+
+def patrol_sweep_budget(points):
+    """Allow for walking, steering, combat interruptions and a full loop."""
+    length = sum(a.distance_to(b) for a,b in zip(points, points[1:]+points[:1]))
+    return min(1800., max(600., 180.+length/1.0))
+
+
+def walk_patrol_leg(point, *, walk, observe, deadline, now, log, npc_name):
+    """Retry a timed-out leg only if verified distance to its goal improved."""
+    from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+    for _ in range(4):
+        _, before = observe()
+        remaining = deadline-now()
+        if remaining < 15:
+            raise EncounterRouteUnavailable('Patrol travel budget exhausted')
+        distance = before.position.distance_to(point)
+        budget = min(remaining,450.,max(90.,60.+distance/1.0))
+        try:
+            return walk(point,budget)
+        except PatrolTravelTimeout:
+            _, after = observe()
+            improvement = distance-after.position.distance_to(point)
+            if improvement < 5:
+                raise EncounterRouteUnavailable('Patrol travel timed out without meaningful progress')
+            log(f'{npc_name}: patrol leg timed out after {improvement:.1f}y progress; replanning from live position')
+    raise EncounterRouteUnavailable('Patrol leg retry budget exhausted')
+
+
 def visit_patrolling_npc(*, points, npc_name, npc_id, pid, owner, map_id,
-                         capture, world_position, driver, sleep, now, log, walk):
-    """Sweep the actual patrol and chase fresh sightings before exact selection."""
+                         capture, world_position, driver, sleep, now, log, walk,
+                         walk_search=None):
+    """Separate initial approach from a full, distance-budgeted patrol sweep."""
     from wotlkbuddy.horde.npc_visit import NpcTargetUnavailable, target_npc
     from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
 
@@ -67,18 +106,23 @@ def visit_patrolling_npc(*, points, npc_name, npc_id, pid, owner, map_id,
 
     _, origin = observe()
     ordered = patrol_order(points, origin.position)
-    deadline = now() + 360
-    log(f'{npc_name}: searching server patrol ({len(points)} waypoints)')
+    approach_deadline = now() + min(900., max(450., 120.+origin.position.distance_to(ordered[0])/1.0))
+    deadline = approach_deadline
+    sweep_started = False
+    search_walk = walk_search or walk
+    log(f'{npc_name}: searching server patrol ({len(points)} waypoints); separate approach and sweep budgets')
     chase_attempts = 0
-    for point in (*ordered, None):
+    checked = 0
+    index=0
+    interruptions=0
+    while index<=len(ordered):
+        point=ordered[index] if index<len(ordered) else None
         while now() < deadline - 15:
             state, where = observe()
             mob = nearby_npc(state, where, driver, npc_id)
-            if mob is None:
+            if mob is None or chase_attempts >= 12:
                 break
             chase_attempts += 1
-            if chase_attempts > 12:
-                break
             if mob.position.distance_to(where.position) <= 4.5:
                 try:
                     selected = target_npc(npc_name, npc_id, owner, capture, driver, sleep, now, log)
@@ -93,17 +137,33 @@ def visit_patrolling_npc(*, points, npc_name, npc_id, pid, owner, map_id,
                 continue
             log(f'{npc_name}: live patrol sighting {mob.position.distance_to(where.position):.1f}y away')
             try:
-                walk(mob.position, min(90, deadline-now()))
+                walk_patrol_leg(mob.position,walk=walk,observe=observe,deadline=deadline,
+                                now=now,log=log,npc_name=npc_name)
             except EncounterRouteUnavailable:
                 break
         if point is None or now() >= deadline - 15:
             break
         _, where = observe()
-        if point.distance_to(where.position) <= 3:
-            continue
-        log(f'{npc_name}: checking server waypoint {points.index(point)+1}/{len(points)}')
-        try:
-            walk(point, min(90, deadline-now()))
-        except EncounterRouteUnavailable as exc:
-            log(f'{npc_name}: patrol waypoint unavailable: {exc}')
-    raise NpcTargetUnavailable(f'{npc_name} entry {npc_id} not verified along server patrol')
+        reached = point.distance_to(where.position) <= 3
+        if not reached:
+            log(f'{npc_name}: checking server waypoint {points.index(point)+1}/{len(points)}')
+            try:
+                walk_patrol_leg(point,walk=search_walk if interruptions<3 and chase_attempts<12 else walk,
+                                observe=observe,deadline=deadline,
+                                now=now,log=log,npc_name=npc_name)
+                reached = True
+            except PatrolSighting:
+                interruptions+=1
+                log(f'{npc_name}: live sighting interrupted patrol travel; reacquiring before resuming same waypoint')
+                continue
+            except EncounterRouteUnavailable as exc:
+                log(f'{npc_name}: patrol waypoint unavailable: {exc}')
+        index+=1
+        interruptions=0
+        if reached:
+            checked += 1
+            if not sweep_started:
+                deadline=now()+patrol_sweep_budget(points)
+                sweep_started=True
+                log(f'{npc_name}: patrol reached; starting {deadline-now():.0f}s sweep budget')
+    raise NpcTargetUnavailable(f'{npc_name} entry {npc_id} not verified; checked {checked}/{len(points)} patrol waypoints')

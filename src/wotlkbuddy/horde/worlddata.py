@@ -159,7 +159,9 @@ class CreatureSpawnDatabase:
 
     def patrol(self, entry: int, map_id: int, anchor: Vec3) -> tuple[Vec3, ...]:
         from wotlkbuddy.horde.npc_patrol import load_patrol
-        return load_patrol(self.path.with_name('CreaturePatrols.tsv'), entry, map_id, anchor)
+        local = self.path.with_name('CreaturePatrols.local.tsv')
+        source = local if local.is_file() else self.path.with_name('CreaturePatrols.tsv')
+        return load_patrol(source, entry, map_id, anchor)
 
     def nearby(self, map_id: int, center: Vec3, radius: float = 80) -> tuple[Spawn, ...]:
         """Conservative local creature-density evidence; not a live hostility list."""

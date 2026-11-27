@@ -126,6 +126,44 @@ def _wait_for_patrol_route(*, driver, nav, map_id, dest, rejected, guard_retry,
     return raw
 
 
+def visit_known_patrol(*,npc_name,npc_id,pid,capture,driver,nav,spawns,
+                       world,owner,dest,sleep,now,world_position,travel,log):
+    from wotlkbuddy.horde.npc_patrol import visit_patrolling_npc
+    lookup=getattr(spawns,'patrol',None)
+    points=lookup(npc_id,world.map_id,dest) if callable(lookup) else ()
+    if not points or getattr(driver,'awareness',None) is None:
+        return None
+    def walk(point,budget,watch=False):
+        return visit_npc(npc_name=npc_name,npc_id=npc_id,pid=pid,capture=capture,
+            driver=driver,nav=nav,spawns=spawns,sleep=sleep,now=now,
+            world_position=world_position,travel=travel,log=log,
+            _waypoint=point,_travel_budget=budget,_patrol_watch=watch)
+    return visit_patrolling_npc(points=points,npc_name=npc_name,npc_id=npc_id,
+        pid=pid,owner=owner,map_id=world.map_id,capture=capture,
+        world_position=world_position,driver=driver,sleep=sleep,now=now,log=log,
+        walk=walk,walk_search=lambda point,budget:walk(point,budget,True))
+
+
+def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patrol_watch):
+    scan=getattr(driver,'scan_hostiles',None)
+    def patrol_scan(state,where,legs):
+        from wotlkbuddy.horde.npc_patrol import nearby_npc,SIGHTING_REASON
+        if nearby_npc(state,where,driver,npc_id) is not None:
+            raise LiveControlError(SIGHTING_REASON)
+        return scan(state,where,legs) if callable(scan) else state
+    return travel(path,max_seconds=budget,sample=sample,
+        keyboard=getattr(driver,'keyboard',driver),stop_requested=driver.emergency_stop_requested,
+        expected_quest_id=None,expected_map_id=map_id,
+        can_traverse=lambda a,b:nav.segment_clear(map_id,a,b),
+        replan_path=lambda a,b:nav.find_path(map_id,a,b),
+        destination_status=getattr(driver,'set_navigation_destination',None),
+        distance_status=getattr(driver,'set_navigation_distance',None),
+        progress=log,on_aggro=getattr(driver,'on_aggro',None),
+        on_threat=patrol_scan if patrol_watch else scan,
+        waypoint_spacing=18.,continuous_forward=True,
+        fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
+
+
 def visit_npc(
     *, npc_name: str, npc_id: int, pid: int, capture: Callable[[], ClientTelemetry],
     driver, nav, spawns, radius: float = 160,
@@ -135,7 +173,7 @@ def visit_npc(
     world_position: Callable[[ClientTelemetry], tuple[int, object]] | None = None,
     travel: Callable[..., object] = follow_world_path,
     log: Callable[[str], None] = lambda _: None,
-    _waypoint=None, _travel_budget=450,
+    _waypoint=None, _travel_budget=450, _patrol_watch=False,
 ) -> ClientTelemetry:
     if not (npc_name and 0 < npc_id < 2**24 and 20 <= radius <= 600):
         raise ValueError('Invalid NPC identity/search radius')
@@ -164,17 +202,11 @@ def visit_npc(
     dest = _waypoint if _waypoint is not None else resolve_npc_spawn(
         spawns, world, npc_id, npc_name, radius, destination_hint)
     if _waypoint is None:
-        from wotlkbuddy.horde.npc_patrol import visit_patrolling_npc
-        lookup = getattr(spawns, 'patrol', None)
-        points = lookup(npc_id, world.map_id, dest) if callable(lookup) else ()
-        if points and getattr(driver, 'awareness', None) is not None:
-            return visit_patrolling_npc(points=points, npc_name=npc_name, npc_id=npc_id,
-                pid=pid, owner=player.guid, map_id=world.map_id, capture=capture,
-                world_position=world_position, driver=driver, sleep=sleep, now=now, log=log,
-                walk=lambda point, budget: visit_npc(npc_name=npc_name, npc_id=npc_id,
-                    pid=pid, capture=capture, driver=driver, nav=nav, spawns=spawns,
-                    sleep=sleep, now=now, world_position=world_position, travel=travel,
-                    log=log, _waypoint=point, _travel_budget=budget))
+        found = visit_known_patrol(npc_name=npc_name,npc_id=npc_id,pid=pid,capture=capture,
+            driver=driver,nav=nav,spawns=spawns,world=world,owner=player.guid,dest=dest,
+            sleep=sleep,now=now,world_position=world_position,travel=travel,log=log)
+        if found is not None:
+            return found
     if not nav.ping():
         raise LiveControlError('Navmesh helper not responding')
     if hypot(world.x-dest.x, world.y-dest.y) > 3 or abs(world.z-dest.z) > 5:
@@ -232,19 +264,9 @@ def visit_npc(
                 except RouteCombatInterrupted:
                     route=defend_and_replan()
                     continue
-                def walk(p, t):
-                    return travel(p, max_seconds=t,
-                        sample=sample, keyboard=getattr(driver,'keyboard',driver),
-                        stop_requested=driver.emergency_stop_requested,
-                        expected_quest_id=None, expected_map_id=world.map_id,
-                        can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
-                        replan_path=lambda a,b:nav.find_path(world.map_id,a,b),
-                        destination_status=getattr(driver,'set_navigation_destination',None),
-                        distance_status=getattr(driver,'set_navigation_distance',None),
-                        progress=log,on_aggro=getattr(driver,'on_aggro',None),
-                        on_threat=getattr(driver,'scan_hostiles',None),
-                        waypoint_spacing=18.,continuous_forward=True,
-                        fast_observe=getattr(driver,'fast_travel_observe',None),threat_check_yards=6.)
+                def walk(p,t):
+                    return walk_npc_path(p,t,travel=travel,sample=sample,driver=driver,nav=nav,
+                        map_id=world.map_id,log=log,npc_id=npc_id,patrol_watch=_patrol_watch)
                 result=walk_with_elevator(
                     route, sample=sample, walk=walk,
                     nav=nav, destination=dest, map_id=world.map_id,
@@ -253,6 +275,12 @@ def visit_npc(
                 reason=result.stopped_reason
                 if reason=='complete':
                     return result
+                if _waypoint is not None:
+                    from wotlkbuddy.horde.npc_patrol import PatrolSighting, PatrolTravelTimeout, SIGHTING_REASON
+                    if reason == SIGHTING_REASON and _patrol_watch:
+                        raise PatrolSighting(reason)
+                    if reason == 'World navigation time limit reached':
+                        raise PatrolTravelTimeout(reason)
                 blocked=unsafe_route_encounter(reason)
                 encounter=blocked or encounter_route_failure(reason) or (encounter_replans == 0 and bounded_position_jump(reason))
                 if not encounter and not height_route_failure(reason):

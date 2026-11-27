@@ -14,3 +14,4 @@ logs/
 mmaps/
 private/
 .env
+CreaturePatrols.local.tsv

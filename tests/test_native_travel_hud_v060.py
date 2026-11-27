@@ -126,10 +126,23 @@ def test_controller_uses_real_destination_status_only_during_detour():
                           and node.name == callback.id]
             else:
                 bodies = [callback]
-            assert any(isinstance(node, ast.Call)
-                       and isinstance(node.func, ast.Name)
-                       and node.func.id == 'travel'
-                       for body in bodies for node in ast.walk(body))
+            # Follow the NPC wrapper's explicit travel delegation, rather
+            # than requiring the injected travel call to be lexically nested.
+            def calls_named(nodes, name):
+                return [node for body in nodes for node in ast.walk(body)
+                        if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id == name]
+            if kind == 'npc' and target == 'npc_name':
+                delegated = calls_named(bodies, 'walk_npc_path')
+                assert delegated
+                assert any(kw.arg == 'travel' and ast.unparse(kw.value) == 'travel'
+                           for node in delegated for kw in node.keywords)
+                bodies = [node for node in tree.body
+                          if isinstance(node, ast.FunctionDef)
+                          and node.name == 'walk_npc_path']
+                assert len(bodies) == 1
+            assert calls_named(bodies, 'travel')
             return
         pytest.fail(f'No navigation status wrapper for {kind}: {target}')
 
