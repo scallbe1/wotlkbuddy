@@ -156,6 +156,23 @@ def verified_uncontrolled_pair(state,plan,chosen,escort,escort_snapshot):
     return PullPlan(True,verified,'verified normal weaker pair; high resources')
 
 
+def verify_healer_pack(state,enemies,*,driver,fresh):
+    """Resolve provisional classifications by observing each exact living GUID."""
+    from dataclasses import replace
+    verified=[]
+    for enemy in enemies:
+        if enemy.classification=='unknown':
+            state=select_exact(state,enemy,driver=driver,fresh=fresh,max_tabs=3)
+            if state.player.in_combat or state.player.dead or not exact_hostile(state,enemy):
+                return state,None
+            t=state.combat_target
+            if t.classification!='normal' or t.level is None or not 0<t.level<=state.player.level+1:
+                return state,None
+            enemy=replace(enemy,classification=t.classification,level=t.level,health=t.health)
+        verified.append(enemy)
+    return state,tuple(verified)
+
+
 def prepare_healer_pull(state,plan,chosen,*,driver,awareness,quest_entries,log):
     """Allow a verified controlled pair/triple; never authorize an unsheeped healer pack."""
     from wotlkbuddy.horde.encounter import PullPlan
@@ -168,16 +185,24 @@ def prepare_healer_pull(state,plan,chosen,*,driver,awareness,quest_entries,log):
     if (ordered is None or not context or player.dead or player.in_combat
             or resources is None or player.health<.95*player.max_health
             or resources.mana<.90*resources.max_mana
-            or any(e.classification!='normal' or e.level is None or
+            or any(e.classification not in ('normal','unknown') or e.level is None or
                    not 0<e.level<=player.level+1 or e.health<=0 for e in plan.enemies)):
-        return state,denied
-    primary,escort,remaining=ordered
-    if sum(e.health for e in (primary,*remaining))>2.5*player.max_health:
         return state,denied
     rules=CONTROL_RULES.get(resources.class_token.upper(),())
     if not rules or awareness is None:
         return state,denied
     fresh=awareness._fresh
+    state,verified=verify_healer_pack(state,plan.enemies,driver=driver,fresh=fresh)
+    if state.player.in_combat:
+        return state,None
+    if verified is None or state.player.dead:
+        return state,denied
+    plan=PullPlan(plan.allowed,verified,plan.reason)
+    primary,escort,remaining=healer_order(verified,chosen)
+    if (state.player.health<.95*state.player.max_health
+            or state.resources.mana<.90*state.resources.max_mana
+            or sum(e.health for e in (primary,*remaining))>2.5*state.player.max_health):
+        return state,denied
     state=select_exact(state,escort,driver=driver,fresh=fresh)
     if state.player.in_combat:
         return state,None
@@ -346,7 +371,7 @@ def reactive_healer_control(state,primary,enemies,origin,rules,*,driver,fresh,lo
             and e.position.distance_to(primary.position)<=13]
     if len(linked) not in (2,3) or not any(is_healer(e) for e in linked):
         return None
-    if any(e.classification!='normal' or e.level is None or
+    if any(e.classification not in ('normal','unknown') or e.level is None or
            not 0<e.level<=state.player.level+1 for e in linked):
         return None
     ordered=healer_order(linked,primary)
@@ -355,7 +380,8 @@ def reactive_healer_control(state,primary,enemies,origin,rules,*,driver,fresh,lo
     priority,escort,remaining=ordered
     state=select_exact(state,priority,driver=driver,fresh=fresh,max_tabs=3)
     if (not state.player.in_combat or not exact_hostile(state,priority)
-            or state.combat_target.attacks_player is not True):
+            or state.combat_target.attacks_player is not True
+            or state.combat_target.classification!='normal'):
         return select_exact(state,primary,driver=driver,fresh=fresh,max_tabs=3)
     state=select_exact(state,escort,driver=driver,fresh=fresh,max_tabs=3)
     if not state.player.in_combat:
