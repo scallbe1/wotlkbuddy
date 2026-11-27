@@ -216,6 +216,41 @@ def find_fallback_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
     return None
 
 
+def approach_and_scout(*, observe, walk, corpse, corpse_map, nav, read_hazards,
+                       read_spawn_hints, scout_surroundings, sleep, now, log,
+                       breadcrumbs, work):
+    """Report stationary planning separately from actual ghost movement."""
+    state, position = observe()
+    work('ghostroute')
+    try:
+        approach = approach_path(nav,corpse_map,position.position,corpse)
+    except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
+        log('Initial corpse path unavailable; searching alternative reclaim-side routes')
+        approach=alternate_approach_path(nav,corpse_map,position.position,corpse,log=log)
+    work('clear')
+    if approach:
+        log(f'Running toward corpse as ghost; stopping near reclaim range '
+            f'({approach[-1].distance_to(corpse):.1f}y from corpse)')
+        walk(approach,'Corpse vicinity',toward_corpse=True)
+    state, position = observe()
+    # Only now is it meaningful to inspect the local creature scene.
+    log(f'Arrived near corpse ({position.position.distance_to(corpse):.1f}y); '
+        'evaluating resurrection locations')
+    if scout_surroundings is not None:
+        log('Actively surveying all directions before ranking reclaim locations')
+        scout_surroundings()
+        state, position = observe()
+    work('reclaim')
+    try:
+        chosen,fallback=scout_reclaim_site(observe=observe,walk=walk,corpse=corpse,
+            corpse_map=corpse_map,nav=nav,read_hazards=read_hazards,read_spawn_hints=read_spawn_hints,
+            scout_surroundings=scout_surroundings,sleep=sleep,now=now,log=log,breadcrumbs=breadcrumbs,
+            work=work)
+    finally:
+        work('clear')
+    return chosen,fallback
+
+
 def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                    read_hazards=None, read_spawn_hints=None, restore=None,
                    scout_surroundings=None, prepare_retreat=None, fast_observe=None,
@@ -383,34 +418,10 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                     not driver.emergency_stop_requested()):
                 set_status('clear')
 
-    state, position = observe()
-    work('ghostroute')
-    try:
-        approach = approach_path(nav,corpse_map,position.position,corpse)
-    except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
-        log('Initial corpse path unavailable; searching alternative reclaim-side routes')
-        approach=alternate_approach_path(nav,corpse_map,position.position,corpse,log=log)
-    work('clear')
-    if approach:
-        log(f'Running toward corpse as ghost; stopping near reclaim range '
-            f'({approach[-1].distance_to(corpse):.1f}y from corpse)')
-        walk(approach,'Corpse vicinity',toward_corpse=True)
-    state, position = observe()
-    # Only now is it meaningful to inspect the local creature scene.
-    log(f'Arrived near corpse ({position.position.distance_to(corpse):.1f}y); '
-        'evaluating resurrection locations')
-    if scout_surroundings is not None:
-        log('Actively surveying all directions before ranking reclaim locations')
-        scout_surroundings()
-        state, position = observe()
-    work('reclaim')
-    try:
-        chosen,fallback=scout_reclaim_site(observe=observe,walk=walk,corpse=corpse,
-            corpse_map=corpse_map,nav=nav,read_hazards=read_hazards,read_spawn_hints=read_spawn_hints,
-            scout_surroundings=scout_surroundings,sleep=sleep,now=now,log=log,breadcrumbs=breadcrumbs,
-            work=work)
-    finally:
-        work('clear')
+    chosen,fallback=approach_and_scout(observe=observe,walk=walk,corpse=corpse,
+        corpse_map=corpse_map,nav=nav,read_hazards=read_hazards,read_spawn_hints=read_spawn_hints,
+        scout_surroundings=scout_surroundings,sleep=sleep,now=now,log=log,
+        breadcrumbs=breadcrumbs,work=work)
     if chosen is None:
         raise LiveControlError('Reached corpse vicinity but no safe reclaim site found; remaining a ghost nearby')
     state, position = observe()
