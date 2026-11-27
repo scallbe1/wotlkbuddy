@@ -177,8 +177,10 @@ def try_entrance_healer_control(state,enemies,origin,ahead,*,driver,awareness,gu
     nearby=[e for e in enemies if e.position.distance_to(origin)<=25
             and abs(e.position.z-origin.z)<=6
             and distance_to_corridor(e.position,origin,ahead)<=18]
-    healers=[e for e in nearby if is_healer(e)]
-    if not healers or len(nearby)<2:
+    healers=[e for e in nearby if is_healer(e) and
+             any(m.guid!=e.guid and m.position.distance_to(e.position)<=13 for m in nearby)
+             and ahead[0].distance_to(e.position)<=e.position.distance_to(origin)+1]
+    if not healers:
         return None
     healer=min(healers,key=lambda e:e.position.distance_to(origin))
     state=awareness.acquire(state,healer.guid,healer.entry)
