@@ -4,6 +4,7 @@ from time import monotonic, sleep as real_sleep
 from wotlkbuddy.horde.merchant import (
     _capture_fresh, verify_merchant_state, wait_merchant_closed)
 from wotlkbuddy.horde.quest_vendor import open_purchase_window
+from wotlkbuddy.horde.npc_catalog import nearby_service_npcs
 from wotlkbuddy.horde.service_travel import service_candidates, visit_service_npc
 from wotlkbuddy.horde.npc_visit import visit_npc, NpcTargetUnavailable
 from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
@@ -79,7 +80,7 @@ def maintain_equipment(*,profile,profiles_root,location,cap,driver,pid,nav,db,
     if state.resources.money_copper<=0:
         return deferred_repair(critical,'no copper available for repairs',log)
     options=service_candidates(profile=profile,profiles_root=profiles_root,
-        spawns=db,origin=current.position,map_id=current.map_id,role='repair')
+        spawns=db,origin=current.position,map_id=current.map_id,role='repair',catalog=nearby_service_npcs)
     reason='no verified repair vendor within 1800 yards'
     for npc in options[:3]:
         set_native_status('vendor')
