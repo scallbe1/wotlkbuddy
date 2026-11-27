@@ -138,7 +138,7 @@ def ghost_route_burst(before, waypoints, index, snapshot, *, guard, fast_observe
                 travel_input.key_up(turn_key)
                 turn_key=None
             if t>=next_read:
-                pos,_=fast_observe(snapshot,35.)
+                pos,hazard=fast_observe(snapshot,35.)
                 guard()
                 if pos.map_id!=expected_map_id or pos.player_guid.lower()!=guid.lower():
                     raise LiveControlError('Fast ghost observation changed map or identity')
