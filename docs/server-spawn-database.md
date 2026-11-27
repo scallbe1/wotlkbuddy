@@ -84,3 +84,10 @@ requires a unique route near the selected static spawn. Each move is planned
 through the existing Detour/encounter navigation. Live creature observations
 and exact target GUID must agree at interaction range. No guessed map
 percentage conversion is used.
+
+Patrol pickup searches now use a separate initial approach budget and a distance-scaled
+sweep budget. A timed-out leg can resume only after measured progress; a live
+sighting during travel interrupts the sweep for exact NPC reacquisition. Failed
+or skipped waypoints are reported separately from successfully reached waypoints.
+The same data format works for any uniquely matched waypoint patrol. Scripted
+movement and moving quest turn-in routing remain separate work.
