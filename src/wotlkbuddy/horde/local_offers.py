@@ -66,3 +66,28 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
         if local:
             memory[(before.player.guid,before.player.level,giver.entry)]=now()
     return accepted
+
+def run_offer_phase(args, *, profile, location, cap, driver, nav, db, pid,
+                    hud, set_native_status, report, log):
+    memory=getattr(args,'_local_offer_memory',None)
+    local=args.only=='objectives'
+    if args.only not in ('all','quests') and not (local and memory is not None):
+        return
+    offers=collect_profile_offers(profile=profile,location=location,cap=cap,
+        driver=driver,nav=nav,db=db,pid=pid,hud=hud,
+        set_native_status=set_native_status,log=log,memory=memory if local else None)
+    report['local_accepted_quests' if local else 'accepted_quests']=offers
+    if (args.only!='quests' or memory is None or any(offers.values())):
+        return
+    # After the ordinary offer search finds nothing, and no journal work
+    # remains, allow a single bounded native XP milestone attempt.
+    state,current=location()
+    if state.quests:
+        return
+    from wotlkbuddy.horde.level_milestones import next_milestone
+    from wotlkbuddy.horde.milestone_grind import run_milestone
+    goal=next_milestone(profile,state,map_id=current.map_id)
+    if goal:
+        report['level_milestone']=run_milestone(
+            goal,location=location,cap=cap,driver=driver,pid=pid,nav=nav,
+            hud=hud,set_native_status=set_native_status,log=log)
