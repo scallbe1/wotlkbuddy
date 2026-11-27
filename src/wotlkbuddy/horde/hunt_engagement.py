@@ -173,12 +173,21 @@ def execute_engagement(s, expected, corpse_xyz, *, blocked, unhittable_guids,
                        loot, log):
     """Attack one verified target, then verify post-fight loot and quest credit."""
     from wotlkbuddy.horde.combat import UnhittableMobError, objective_progress
+    from wotlkbuddy.horde.hunt_attack import TargetReassessment
     before = qlog(s)
     before_text = tuple(o.description for o in before.objectives)
     dead_guid = s.player.target_guid
     try:
         s = attack(s, expected, observed.index,
                    objective_progress(observed.description))
+    except TargetReassessment as exc:
+        latest=capture()
+        guard(latest)
+        if latest.player.in_combat:
+            latest=clear_remaining_aggro(latest)
+            guard(latest)
+        log(f'Quest target reassessment: {exc}; refreshing objective without unverified kill credit')
+        return
     except UnhittableMobError as exc:
         # The cast did not damage/kill this exact GUID, and
         # bounded Detour LOS recovery failed. Exclude it from
