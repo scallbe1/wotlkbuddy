@@ -131,8 +131,11 @@ def visit_known_patrol(*,npc_name,npc_id,pid,capture,driver,nav,spawns,
     from wotlkbuddy.horde.npc_patrol import visit_patrolling_npc
     lookup=getattr(spawns,'patrol',None)
     points=lookup(npc_id,world.map_id,dest) if callable(lookup) else ()
-    if not points or getattr(driver,'awareness',None) is None:
+    if not points:
         return None
+    if getattr(driver,'awareness',None) is None:
+        raise NpcTargetUnavailable(f'{npc_name}: verified server patrol requires live NPC awareness')
+    log(f'{npc_name} ({npc_id}): moving NPC identified from server patrol ({len(points)} waypoints)')
     def walk(point,budget,watch=False):
         return visit_npc(npc_name=npc_name,npc_id=npc_id,pid=pid,capture=capture,
             driver=driver,nav=nav,spawns=spawns,sleep=sleep,now=now,
