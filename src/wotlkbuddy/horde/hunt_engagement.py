@@ -103,6 +103,11 @@ def prepare_engagement(s, expected, *, routes, allowed_sources, unhittable_guids
                         driver.chat('/cleartarget')
                         s=fresh(s)
                     return s, expected, corpse_xyz, 'retry'
+                from wotlkbuddy.horde.threat_scan import controlled_priority_target
+                priority_guid,priority_entry=controlled_priority_target(s,plan,driver,selected_guid,expected)
+                if priority_guid!=selected_guid and priority_entry in allowed_sources:
+                    selected_guid,expected=priority_guid,priority_entry
+                    corpse_xyz=target_xyz(s)
                 if (s.player.target_guid!=selected_guid or not s.combat_target or
                         s.combat_target.fireball_in_range is not True):
                     log('Target moved during encounter survey; reacquiring')
