@@ -1472,8 +1472,8 @@ def main(argv: list[str] | None = None) -> int:
                         help='Read-only NPC world XYZ/spawn audit and optional Detour reference path')
     np.add_argument('--profiles-root', required=True)
     np.add_argument('--spawns-db',
-                    help='Optional local DB path. Without it, reuse ~/CopilotBuddy/datadb '
-                         'or download a pinned verified upstream copy automatically and cache it')
+                    help='Optional local DB override. Default: WotLKBuddy datadb snapshot '
+                         'or pinned verified native cache download')
     np.add_argument('--race', choices=['Undead', 'Orc', 'Troll', 'BloodElf'], default='Undead')
     np.add_argument('--level', type=int, default=1)
     np.add_argument('--quest-id', type=int, default=363)
