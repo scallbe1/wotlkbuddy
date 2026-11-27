@@ -40,7 +40,7 @@ def eligible_grind_target(state, where, goal, driver):
         return False
     target=matches[0].position
     if (where.map_id!=0 or target.distance_to(goal.hotspot)>75
-            or target.distance_to(where.position)>30 or abs(target.z-where.z)>4):
+            or target.distance_to(where.position)>30 or abs(target.z-where.position.z)>4):
         return False
     _,enemies,unknown=awareness.survey(state,where,probe=False)
     # Also consider same-faction creatures ignored as passive by the travel
