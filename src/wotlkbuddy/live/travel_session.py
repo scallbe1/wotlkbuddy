@@ -90,7 +90,7 @@ def wire_travel_session(*, first, world0, waypoints, now, notify, expected_map_i
         return ghost_route_burst(state.world,state.waypoints,index,state.current,
             guard=guard,fast_observe=fast_observe,expected_map_id=expected_map_id,
             guid=guid,now=now,travel_input=travel_input,arrival_yards=arrival_yards,
-            right_sign=right_sign,turn_rate=turn_rate,sleep=sleep)
+            right_sign=right_sign,turn_rate=turn_rate,sleep=sleep,living=not first.player.dead)
 
     state.current, state.world, state.turns, right_sign, turn_rate = calibrate_turn(
         cache=calibration_cache, keyboard=keyboard, guid=guid,
@@ -137,7 +137,7 @@ def wire_travel_session(*, first, world0, waypoints, now, notify, expected_map_i
 
 def run_route(services, *, distance_status, destination_status, on_threat,
               continuous_forward, fast_observe, arrival_yards, sample,
-              ghost_only, replan_path, notify):
+              ghost_only, replan_path, notify, passive_route_scan=False):
     """Execute the active route; replacement routes restart the waypoint cursor."""
     state, destination, breadcrumbs = services.state, services.destination, services.breadcrumbs
     guard, checked, pulse = services.guard, services.checked, services.pulse
@@ -167,7 +167,7 @@ def run_route(services, *, distance_status, destination_status, on_threat,
                f'({waypoint.x:.2f},{waypoint.y:.2f},{waypoint.z:.2f}) toward goal '
                f'({destination.x:.2f},{destination.y:.2f},{destination.z:.2f}); '
                f'{state.world.position.distance_to(destination):.1f}y away')
-        if (ghost_only and continuous_forward and fast_observe is not None
+        if ((ghost_only or passive_route_scan) and continuous_forward and fast_observe is not None
                 and services.ghost_route_burst is not None):
             before=state.world
             burst=services.ghost_route_burst(index)
@@ -175,14 +175,15 @@ def run_route(services, *, distance_status, destination_status, on_threat,
                 next_index,steering,reason=burst
                 state.moves+=1
                 state.turns+=steering
-                state.current,state.world=checked()
+                hazard=reason=='passive hazard'
+                state.current,state.world=checked(force_scan=hazard,suppress_scan=passive_route_scan and not reason)
                 # Use the fully verified position, not the last fast sample,
                 # as the start of every recovery or subsequent burst.
                 if _distance_xy(before.position,state.world.position)>.5:
                     breadcrumbs.append(state.world.position)
                     del breadcrumbs[:-24]
-                if reason:
-                    notify('Ghost movement interrupted: '+reason)
+                if reason and not hazard:
+                    notify('Continuous movement interrupted: '+reason)
                     if recover_collision(reason):
                         index=1
                         state.reached=0

@@ -13,6 +13,7 @@ from typing import Callable
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.combat import objective_progress
+from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable, unsafe_route_encounter, detour_around_encounters
 from wotlkbuddy.horde.profile import HordeProfile, condition_value
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
@@ -133,6 +134,21 @@ def next_object_hotspot(hotspots,visited,origin):
     return min(candidates,key=lambda pair:pair[1].distance_to(origin),default=None)
 
 
+def recover_object_encounter(driver,nav,map_id,world,destination,*,sample,guard,log):
+    """Use remembered verified pack locations rather than walking into the same pull."""
+    hazards=[p for p,at in getattr(driver,'dangerous_hunt_positions',[]) if monotonic()-at<90]
+    if not hazards:
+        raise EncounterRouteUnavailable('GameObject encounter unavailable; refreshing on next continuous cycle')
+    def supervise():
+        state,_=sample()
+        guard(state)
+    route=detour_around_encounters(nav,map_id,world.position,destination,hazards,
+        max_distance=6000,guard=supervise,log=log)
+    if not route:
+        raise EncounterRouteUnavailable('No safe GameObject detour; refreshing on next continuous cycle')
+    return route
+
+
 def navigate_object_destination(s,destination,*,pid,world_position,capture,guard,
                                 driver,nav,travel,goal,started,max_seconds,now,sleep,log,fresh):
     """Retain the object destination after verified combat/loot displacement."""
@@ -146,6 +162,7 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
     owner=s.player.guid
     height=HeightRecovery(world.position,destination)
     encounter_replans=0
+    alternate=None
 
     def sample():
         snap=capture()
@@ -168,13 +185,17 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
         remaining=max_seconds-(now()-started)
         if remaining<15:
             raise LiveControlError('GameObject navigation time budget exhausted')
-        raw=nav.find_path(map_id,world.position,destination)
+        raw=alternate or nav.find_path(map_id,world.position,destination)
+        alternate=None
         if not raw or abs(raw[0].z-world.z)>2.5:
             raise LiveControlError('GameObject Detour route does not start on measured floor')
         route=validate_nav_path(raw,world.position,destination,max_step=18.,max_distance=6000)
         waypoints=delivery_legs(route)[0]
         log(f'GameObject Detour: {len(waypoints)-1} verified legs; '
             f'{world.position.distance_to(destination):.1f}y to objective hotspot')
+        status=getattr(driver,'set_navigation_distance',None)
+        if callable(status):
+            status(destination,world.position)  # Already stationary at segment boundary.
         report=travel(waypoints,sample=sample,keyboard=getattr(driver,'keyboard',driver),
             stop_requested=driver.emergency_stop_requested,
             expected_quest_id=goal.quest_id,expected_map_id=map_id,
@@ -183,6 +204,7 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
             progress=log,on_aggro=getattr(driver,'on_aggro',None),
             on_threat=getattr(driver,'scan_hostiles',None),
             waypoint_spacing=18.,continuous_forward=True,threat_check_yards=14.,
+            passive_route_scan=True,
             fast_observe=getattr(driver,'fast_travel_observe',None),
             replan_path=lambda a,b:nav.find_path(map_id,a,b),sleep=sleep,now=now)
         reason=report.stopped_reason
@@ -195,15 +217,19 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
                 raise LiveControlError('GameObject transit segment endpoint not confirmed')
             log('GameObject transit segment reached; continuing toward original hotspot')
             continue
-        if not encounter_route_failure(reason) and not height_route_failure(reason):
+        blocked=unsafe_route_encounter(reason)
+        if not blocked and not encounter_route_failure(reason) and not height_route_failure(reason):
             raise LiveControlError('GameObject navigation stopped: '+reason)
         s,world=sample()
         guard(s)
-        if encounter_route_failure(reason):
+        if blocked or encounter_route_failure(reason):
             encounter_replans+=1
             if encounter_replans>12:
-                raise LiveControlError('GameObject encounter replan budget exhausted')
+                raise EncounterRouteUnavailable('GameObject encounter replan budget exhausted')
             log(f'GameObject encounter recovery {encounter_replans}/12; retaining objective destination')
+            if blocked:
+                alternate=recover_object_encounter(driver,nav,map_id,world,destination,
+                    sample=sample,guard=guard,log=log)
         elif not height.record(world.position):
             raise LiveControlError('GameObject height recovery stalled')
         log(f'Replanning GameObject route from live XYZ ({world.x:.2f},{world.y:.2f},{world.z:.2f})')

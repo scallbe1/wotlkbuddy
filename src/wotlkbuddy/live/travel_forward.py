@@ -95,7 +95,7 @@ def smooth_forward(before, waypoint, snapshot, *, guard, fast_observe,
 
 def ghost_route_burst(before, waypoints, index, snapshot, *, guard, fast_observe,
                       expected_map_id, guid, now, travel_input, arrival_yards,
-                      right_sign, turn_rate, sleep):
+                      right_sign, turn_rate, sleep, living=False):
     """Follow consecutive mesh legs with W held across gentle corners.
 
     Ghosts do not need hostile scans. Stop at sharp corners, stalled movement,
@@ -104,11 +104,13 @@ def ghost_route_burst(before, waypoints, index, snapshot, *, guard, fast_observe
     """
     guard()
     try:
-        pos,_=fast_observe(snapshot,35.)
+        pos,hazard=fast_observe(snapshot,35.)
     except (OSError,ValueError,RuntimeError) as exc:
         raise LiveControlError(f'Fast ghost position unavailable: {exc}') from exc
     if pos.map_id!=expected_map_id or pos.player_guid.lower()!=guid.lower():
         raise LiveControlError('Fast ghost observation changed map or identity')
+    if living and hazard:
+        return index,0,'passive hazard'
     if pos.position.distance_to(before.position)>1.5:
         return None
     target=waypoints[index]
@@ -140,7 +142,10 @@ def ghost_route_burst(before, waypoints, index, snapshot, *, guard, fast_observe
                 guard()
                 if pos.map_id!=expected_map_id or pos.player_guid.lower()!=guid.lower():
                     raise LiveControlError('Fast ghost observation changed map or identity')
-                if _distance_xy(before.position,pos.position)>14*(now()-started)+2:
+                if living and hazard:
+                    reason='passive hazard'
+                    break
+                if _distance_xy(before.position,pos.position)>(11 if living else 14)*(now()-started)+2:
                     raise LiveControlError('Implausible world jump during continuous ghost movement')
                 if abs(pos.z-last.z)>3:
                     reason='ghost terrain slide during continuous movement'
@@ -151,17 +156,21 @@ def ghost_route_burst(before, waypoints, index, snapshot, *, guard, fast_observe
                     reason='no forward progress during continuous ghost movement'
                     break
                 distance=_distance_xy(pos.position,target)
-                if distance<=arrival_yards+.35:
+                tolerance=arrival_yards
+                if living:
+                    from wotlkbuddy.live.travel_waypoint import corner_arrival_yards
+                    tolerance=corner_arrival_yards(waypoints,index,arrival_yards)
+                if distance<=tolerance+.35:
                     if abs(pos.z-target.z)>5:
                         reason='ghost waypoint height/floor mismatch'
                         break
                     if index==len(waypoints)-1:
                         # The ordinary waypoint loop finishes the exact final
                         # arrival if we stopped a fraction early.
-                        if distance<=arrival_yards:
+                        if distance<=tolerance:
                             index+=1
                         break
-                    if distance<=arrival_yards:
+                    if distance<=tolerance:
                         index+=1
                         target=waypoints[index]
                         last_distance=_distance_xy(pos.position,target)
@@ -182,7 +191,7 @@ def ghost_route_burst(before, waypoints, index, snapshot, *, guard, fast_observe
                     turn_end=now()+min(.09,max(.035,abs(error)/turn_rate*.70))
                     steering+=1
                 last=pos
-                next_read=now()+.06
+                next_read=now()+(.12 if living else .06)
             sleep(.03)
     except (OSError,ValueError,RuntimeError) as exc:
         if isinstance(exc,LiveControlError):

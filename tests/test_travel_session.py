@@ -115,3 +115,16 @@ def test_destination_only_hud_retains_route_scans_and_live_progress(monkeypatch)
     assert events==['destination','scan','leg']
     distance.assert_not_called()
     assert any('y away' in call.args[0] for call in notify.call_args_list)
+
+
+def test_passive_clear_route_avoids_redundant_stationary_scan(monkeypatch):
+    from wotlkbuddy.live import travel_waypoint
+    session=services()
+    session.ghost_route_burst=lambda i:(2,0,'')
+    def checked(**kw):
+        assert kw=={'force_scan':False,'suppress_scan':True}
+        return session.state.current,position(5)
+    session.checked=checked
+    monkeypatch.setattr(travel_waypoint,'execute_waypoint',lambda *a,**k:pytest.fail('already reached'))
+    run_route(session,**args(continuous_forward=True,fast_observe=Mock(),passive_route_scan=True))
+    assert session.state.reached==1

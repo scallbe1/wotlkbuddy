@@ -194,6 +194,7 @@ def follow_world_path(
     replan_path: Callable[[Vec3, Vec3], Sequence[Vec3]] | None = None,
     destination_status: Callable[[Vec3], None] | None = None,
     distance_status: Callable[[Vec3, Vec3], None] | None = None,
+    passive_route_scan: bool = False,
 ) -> WorldTravelReport:
     """Follow pre-validated mesh waypoints, stopping *before* fighting or interacting.
 
@@ -254,7 +255,8 @@ def follow_world_path(
         run_route(services, distance_status=distance_status, destination_status=destination_status,
                   on_threat=on_threat, continuous_forward=continuous_forward,
                   fast_observe=fast_observe, arrival_yards=arrival_yards, sample=sample,
-                  ghost_only=ghost_only, replan_path=replan_path, notify=notify)
+                  ghost_only=ghost_only, replan_path=replan_path, notify=notify,
+                  passive_route_scan=passive_route_scan)
     except LiveControlError as exc:
         # Nothing is retried automatically. Caller may use the reported live
         # position to regenerate a new mesh path on the next invocation.
