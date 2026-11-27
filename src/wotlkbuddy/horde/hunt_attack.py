@@ -241,7 +241,12 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
             raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
         faced=reface_before_cast(s,driver,guard,target_guid,expected)
         if faced is None:
-            raise TargetReassessment('Target changed while facing before cast')
+            latest=fresh(s)
+            if latest.player.in_combat:
+                return recover(latest)
+            return confirm_lost_target(latest,collect_items=collect_items,target_guid=target_guid,
+                expected=expected,driver=driver,fresh=fresh,credit_advanced=credit_advanced,
+                record_kill=record_kill,log=log)
         s=faced
         if s.combat_target.dead:
             continue
