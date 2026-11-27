@@ -86,6 +86,43 @@ def select_vendor_reward(options: tuple[QuestRewardChoice, ...],
     return max(options,key=lambda o:(o.vendor_price*o.quantity,-o.index))
 
 
+def wait_for_turnin_frame(pred, *, last, player, capture, guard, sleep, now,
+                          timeout, log, opening=False):
+    """Wait without sending input; tolerate incomplete frames only while opening UI."""
+    deadline = now() + timeout
+    incomplete = None
+    while now() < deadline:
+        guard()
+        sleep(.15)
+        try:
+            state = capture()
+        except ValueError:
+            continue
+        guard()
+        if state.player.guid != player.guid or state.player.name != player.name:
+            raise LiveControlError('Character identity changed during quest turn-in')
+        if state.player.dead or state.player.in_combat:
+            reason = 'death' if state.player.dead else 'combat'
+            raise LiveControlError(f'Player entered {reason} during quest turn-in')
+        if state.sequence == last.sequence:
+            continue
+        if state.truncated or state.dialog is None:
+            reason = 'truncated telemetry' if state.truncated else 'quest dialog record missing'
+            if not opening:
+                raise LiveControlError(f'Quest turn-in interrupted: {reason} (frame {state.sequence})')
+            if incomplete is None:
+                log(f'Quest dialogue opening: {reason}; waiting for a complete fresh frame without further input')
+            incomplete = reason
+            continue
+        incomplete = None
+        last = state
+        if pred(state):
+            return state, last
+    if incomplete is not None:
+        raise LiveControlError(f'Quest dialogue opening timed out: {incomplete}; no further quest input sent')
+    return None, last
+
+
 def turnin_profile_quest(
     profile: HordeProfile, *, quest_id: int,
     capture: Callable[[], ClientTelemetry],
@@ -133,11 +170,6 @@ def turnin_profile_quest(
         if driver.emergency_stop_requested() or not driver.wow_is_foreground():
             raise LiveControlError('Escape or WoW lost foreground focus')
 
-    def valid(s: ClientTelemetry) -> bool:
-        return (s.player.guid == player.guid and s.player.name == player.name and
-                not s.truncated and not s.player.dead and not s.player.in_combat and
-                s.dialog is not None)
-
     def history(s: ClientTelemetry) -> bool | None:
         return dict(s.quest_completions).get(quest_id)
 
@@ -163,24 +195,11 @@ def turnin_profile_quest(
     selected_verified_menu = False
     requested_verified_completion = False
 
-    def wait_for(pred: Callable[[ClientTelemetry], bool]) -> ClientTelemetry | None:
+    def wait_for(pred: Callable[[ClientTelemetry], bool], *, opening=False) -> ClientTelemetry | None:
         nonlocal last
-        deadline = now() + timeout
-        while now() < deadline:
-            guard()
-            sleep(0.15)
-            try:
-                next_state = capture()
-            except ValueError:
-                continue
-            if next_state.sequence == last.sequence:
-                continue
-            if not valid(next_state):
-                raise LiveControlError('Player identity, combat or telemetry changed')
-            last = next_state
-            if pred(next_state):
-                return next_state
-        return None
+        found, last = wait_for_turnin_frame(pred, last=last, player=player, capture=capture,
+            guard=guard, sleep=sleep, now=now, timeout=timeout, log=notify, opening=opening)
+        return found
 
     def dialog_ok(s: ClientTelemetry, kind: str) -> bool:
         d = s.dialog
@@ -225,7 +244,7 @@ def turnin_profile_quest(
             (last.dialog and last.dialog.kind in ('gossip', 'greeting')):
         notify(f'Interacting with {npc_name}')
         driver.interact()
-        observed = wait_for(lambda s: s.dialog is not None and s.dialog.kind != 'none')
+        observed = wait_for(lambda s: s.dialog is not None and s.dialog.kind != 'none', opening=True)
         if observed is None:
             return report('npc_out_of_range', 'No dialog; NPC may not be within range', target=True)
 
