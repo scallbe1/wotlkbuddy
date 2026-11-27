@@ -158,6 +158,8 @@ class KeyboardQuestInput:
         if command == '/targetenemy':
             self.target_nearest_enemy()
             return
+        allowed_work = re.fullmatch(
+            r'/wbtwork (?:routes|patrol|reclaim|reclaimwait|ghostroute|clear) (?:0|[1-9][0-9]{0,3}) (?:0|[1-9][0-9]{0,3})', command) is not None
         allowed_combat = command in (
             '/targetenemy', '/targetlasttarget', '/targetlastenemy', '/cleartarget',
             '/wbthud show', '/wbthud hide',
@@ -183,7 +185,7 @@ class KeyboardQuestInput:
             r'/use [0-4] ([1-9]|[12][0-9]|3[0-6])', command) is not None
         allowed_item_track = re.fullmatch(
             r'/wbttrack (0|[1-9][0-9]{0,5})', command) is not None
-        if (not allowed_combat and not allowed_goal and
+        if (not allowed_work and not allowed_combat and not allowed_goal and
                 not allowed_npc_travel and not allowed_item_track and
                 not allowed_consumable and
                 command not in ('/run AcceptQuest()', '/run CompleteQuest()', '/click QuestFrameCloseButton', '/click ClassTrainerFrameCloseButton', '/click MerchantFrameCloseButton', '/run CloseGossip()') and
@@ -260,6 +262,24 @@ class KeyboardQuestInput:
         if self.wow_is_foreground() and not self.emergency_stop_requested():
             self.chat('/wbttravel '+('activityclear' if kind=='clear' else kind))
             self._tactical_activity=kind
+
+    def set_work_status(self, kind: str, done: int = 0, total: int = 0) -> None:
+        """Throttled stationary-work update; never send input from a timer thread."""
+        if (kind not in ('routes','patrol','reclaim','reclaimwait','ghostroute','clear')
+                or type(done) is not int or type(total) is not int
+                or not 0 <= done <= 9999 or not 0 <= total <= 9999):
+            raise ValueError('Invalid stationary work status')
+        if not getattr(self,'native_hud_enabled',True):
+            return
+        now = monotonic()
+        previous = getattr(self,'_work_status_kind',None)
+        if previous == kind and (kind == 'clear' or
+                now-getattr(self,'_work_status_at',0.) < 5.):
+            return
+        if self.wow_is_foreground() and not self.emergency_stop_requested():
+            self.chat(f'/wbtwork {kind} {done} {total}')
+            self._work_status_kind = kind
+            self._work_status_at = now
 
     def set_navigation_destination(self, point) -> None:
         if getattr(self,'native_hud_enabled',True):
