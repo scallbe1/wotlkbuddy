@@ -1587,7 +1587,7 @@ end
 -- (combat, loot, walking, casting) comes from the game itself.
 local statusFrame = CreateFrame('Frame', 'WotLKBuddyStatusHUD', UIParent)
 statusFrame:SetWidth(370)
-statusFrame:SetHeight(70)
+statusFrame:SetHeight(86)
 statusFrame:ClearAllPoints()
 -- Anchor below the RGB telemetry grid near the top center-right.
 -- Relative anchoring follows the grid across UI scales and resolutions,
@@ -1661,6 +1661,227 @@ local hudPhase = 'idle'
 local hudTravelKind = ''
 local hudTravelName = ''
 local hudActivity = ''
+-- Work updates are sent only at synchronous, guarded Python checkpoints.
+-- The timer measures age of the last real update, not process liveness.
+local hudWorkKind, hudWorkDone, hudWorkTotal = '', 0, 0
+local hudWorkSince, hudWorkAt = 0, 0
+local workLabels = {
+    routes='Searching alternate firing positions',
+    patrol='Waiting for patrol changes',
+    reclaim='Evaluating resurrection sites',
+    reclaimwait='Watching for safe resurrection',
+    ghostroute='Searching alternate corpse routes'
+}
+local workText = statusFrame:CreateFontString(nil,'OVERLAY','GameFontHighlightSmall')
+workText:SetPoint('TOPLEFT',destinationText,'BOTTOMLEFT',0,-4)
+workText:SetWidth(352)
+workText:SetJustifyH('LEFT')
+workText:SetText('')
+SLASH_WOTLKBUDDYWORK1 = '/wbtwork'
+SlashCmdList['WOTLKBUDDYWORK'] = function(message)
+    local kind,done,total = string.match(message or '', '^(%a+) (%d+) (%d+)
+local hudLastActive = 0
+local phaseLabels = {
+    idle='Waiting for next goal',
+    hunt='Complete quest objectives',
+    turnin='Turn in completed quest',
+    quests='Accept available quests',
+    train='Visit class trainer',
+    gear='Check and equip upgrades',
+    vendor='Visit merchant'
+}
+local function setQuestGoal(id)
+    if hudQuestId ~= id then
+        hudTravelKind, hudTravelName = '', ''
+        hudActivity = ''
+    end
+    hudQuestId = id
+    hudQuestName = ''
+    if id > 0 and GetNumQuestLogEntries and GetQuestLogTitle then
+        for i=1, GetNumQuestLogEntries() do
+            local title, _, _, _, isHeader, _, _, _, qid =
+                GetQuestLogTitle(i)
+            if not isHeader and qid == id and type(title) == 'string' then
+                hudQuestName = title
+                break
+            end
+        end
+    end
+    if id > 0 and hudQuestName == '' then
+        hudQuestName = 'Quest ' .. tostring(id)
+    end
+end
+SLASH_WOTLKBUDDYGOAL1 = '/wbtgoal'
+SlashCmdList['WOTLKBUDDYGOAL'] = function(message)
+    local id = tonumber(message or '')
+    if not id or id ~= math.floor(id) or id < 0 or id > 999999 then return end
+    setQuestGoal(id)
+    statusFrame:Show()
+end
+SLASH_WOTLKBUDDYPHASE1 = '/wbtphase'
+SlashCmdList['WOTLKBUDDYPHASE'] = function(message)
+    if phaseLabels[message or ''] then
+        if hudPhase ~= message then
+            hudTravelKind, hudTravelName = '', ''
+            hudActivity = ''
+            destinationText:SetText('')
+        end
+        hudPhase = message
+        statusFrame:Show()
+    end
+end
+
+-- BEGIN HUD NAVIGATION CONTEXT
+-- These are presentation-only strings. They never influence targeting,
+-- movement, quest telemetry, combat, or spell casts.
+local function travelActionLabel(kind, target, questName)
+    if kind == 'enemies' then
+        return 'Navigating to ' ..
+            ((questName and questName ~= '' and questName) or 'quest') .. ' enemies'
+    elseif kind == 'npc' and target and target ~= '' then
+        return 'Navigating to ' .. target
+    elseif kind == 'deathrun' then
+        return 'Navigating to own corpse'
+    elseif kind == 'corpse' then
+        return 'Navigating to quest corpse'
+    elseif kind == 'firing' then
+        return 'Navigating to firing position'
+    elseif kind == 'planning' then
+        return 'Planning a route around nearby enemies'
+    elseif kind == 'retreat' then
+        return 'Retreating to change approach'
+    elseif kind == 'detour' then
+        return 'Moving around enemy group'
+    end
+    return nil
+end
+
+SLASH_WOTLKBUDDYTRAVEL1 = '/wbttravel'
+SlashCmdList['WOTLKBUDDYTRAVEL'] = function(message)
+    if message == 'activityclear' then
+        hudActivity = ''
+    elseif message == 'assess' or message == 'range' then
+        hudActivity = message
+    elseif message == 'clear' then
+        hudTravelKind, hudTravelName = '', ''
+        hudActivity = ''
+        destinationText:SetText('')
+    elseif message == 'enemies' or message == 'corpse' or
+            message == 'firing' or message == 'deathrun' or
+            message == 'planning' or message == 'retreat' or message == 'detour' then
+        hudTravelKind, hudTravelName = message, ''
+    else
+        -- Accept only a bounded NPC name, not an arbitrary Lua expression
+        -- or command string. Names originate in validated quest profiles.
+        local npc = string.match(message or '', "^npc ([A-Za-z][A-Za-z '%-]*)$")
+        if not npc or string.len(npc) > 64 then return end
+        hudTravelKind, hudTravelName = 'npc', npc
+    end
+    statusFrame:Show()
+end
+local tacticalLabels = {
+    assess='Assessing nearby enemies and linked pull',
+    range='Target out of range; adjusting approach'
+}
+SLASH_WOTLKBUDDYACTIVITY1 = '/wbtaction'
+SlashCmdList['WOTLKBUDDYACTIVITY'] = function(message)
+    if message == 'clear' then
+        hudActivity = ''
+    elseif tacticalLabels[message] then
+        hudActivity = message
+    else
+        return
+    end
+    statusFrame:Show()
+end
+-- END HUD NAVIGATION CONTEXT
+
+local statusElapsed = 0
+statusFrame:SetScript('OnUpdate', function(_, elapsed)
+    statusElapsed = statusElapsed + elapsed
+    if statusElapsed < 0.20 then return end
+    statusElapsed = 0
+    if hudQuestId > 0 and hudQuestName == ('Quest '..hudQuestId) then
+        setQuestGoal(hudQuestId)
+    end
+    local goal = phaseLabels[hudPhase] or phaseLabels.idle
+    if hudQuestId > 0 then
+        goal = goal .. ': ' .. hudQuestName
+    end
+    goalText:SetText('Goal: ' .. string.sub(goal, 1, 65))
+    local action = phaseLabels[hudPhase] or 'Standing by'
+    if hudWorkKind~='' then
+        action=workLabels[hudWorkKind]
+    elseif UnitIsDeadOrGhost('player') then
+        action = (UnitIsGhost('player') and (travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) or 'Ghost: recovering corpse')) or 'Dead: awaiting spirit release'
+    elseif LootFrame and LootFrame:IsShown() then
+        action = 'Looting corpse'
+    elseif ClassTrainerFrame and ClassTrainerFrame:IsShown() then
+        action = 'Training Mage spells'
+    elseif UnitCastingInfo and UnitCastingInfo('player') then
+        local spell = UnitCastingInfo('player')
+        action = 'Casting ' .. tostring(spell)
+    elseif UnitChannelInfo and UnitChannelInfo('player') then
+        local spell = UnitChannelInfo('player')
+        action = 'Channeling ' .. tostring(spell)
+    elseif UnitAffectingCombat('player') then
+        action = 'Combat'
+    elseif tacticalLabels[hudActivity] then
+        action = tacticalLabels[hudActivity]
+    elseif travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) then
+        -- Keep the actual destination visible during paused Detour movement,
+        -- steering corrections, and proactive hostile scans. GetUnitSpeed
+        -- drops to zero during those pauses and must not hide the goal.
+        action = travelActionLabel(hudTravelKind, hudTravelName, hudQuestName)
+    elseif GetUnitSpeed and (GetUnitSpeed('player') or 0) > 0.2 then
+        action = travelActionLabel(
+            hudPhase == 'hunt' and 'enemies' or '', '', hudQuestName
+        ) or 'Navigating'
+    elseif hudPhase == 'hunt' then
+        action = 'Searching for quest enemies'
+    elseif hudPhase == 'turnin' then
+        action = 'Interacting with quest giver'
+    end
+    if hudWorkKind~='' then
+        local age=math.max(0,math.floor(GetTime()-hudWorkAt))
+        local duration=math.max(0,math.floor(GetTime()-hudWorkSince))
+        local count=hudWorkTotal>0 and string.format('%d/%d | ',hudWorkDone,hudWorkTotal) or ''
+        if age>=15 then
+            workText:SetText(string.format('%s%d sec | No script update for %d sec',count,duration,age))
+            workText:SetTextColor(1,0.65,0.25)
+        else
+            workText:SetText(string.format('%s%d sec | Last update %d sec ago',count,duration,age))
+            workText:SetTextColor(0.6,0.9,0.6)
+        end
+    end
+    if action ~= hudLastAction then
+        hudLastAction = action
+        hudLastActive = GetTime()
+        actionText:SetText('Action: ' .. string.sub(action, 1, 67))
+    end
+end)
+statusFrame:Hide()
+SLASH_WOTLKBUDDYHUD1 = '/wbthud'
+SlashCmdList['WOTLKBUDDYHUD'] = function(message)
+    if message == 'show' then statusFrame:Show()
+    elseif message == 'hide' then statusFrame:Hide() end
+end
+
+queryCompletions()
+publish()
+)
+    done,total=tonumber(done),tonumber(total)
+    if not done or not total or done>9999 or total>9999 then return end
+    if kind=='clear' then
+        hudWorkKind=''
+        workText:SetText('')
+    elseif workLabels[kind] then
+        if hudWorkKind~=kind then hudWorkSince=GetTime() end
+        hudWorkKind,hudWorkDone,hudWorkTotal=kind,done,total
+        hudWorkAt=GetTime()
+        statusFrame:Show()
+    end
+end
 local hudLastAction = ''
 local hudLastActive = 0
 local phaseLabels = {
