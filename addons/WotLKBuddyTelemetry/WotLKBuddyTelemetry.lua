@@ -136,6 +136,36 @@ SlashCmdList['WOTLKBUDDYTRACK'] = function(message)
     trackedQuestItemId = id
 end
 
+-- BEGIN VERIFIED QUEST VENDOR PURCHASE
+-- Only this exact server-validated, single-unit purchase is authorized.
+SLASH_WOTLKBUDDYBUYTHREAD1 = '/wbtbuythread'
+SlashCmdList['WOTLKBUDDYBUYTHREAD'] = function(message)
+    if message ~= '' or trackedQuestItemId ~= 2320 or
+            UnitAffectingCombat('player') or UnitIsDeadOrGhost('player') or
+            (InCombatLockdown and InCombatLockdown()) or
+            not (MerchantFrame and MerchantFrame:IsShown()) or
+            not (GetMerchantNumItems and GetMerchantItemInfo and GetMerchantItemLink
+                 and GetItemCount and BuyMerchantItem and GetMoney) then return end
+    if MerchantFrame.selectedTab and MerchantFrame.selectedTab ~= 1 then return end
+    local guid = UnitGUID('target') or ''
+    if not string.match(guid, '^0x[Ff]130%x%x%x%x%x%x%x%x%x%x%x%x$') or
+            tonumber(string.sub(guid,7,12),16) ~= 2118 or
+            GetItemCount(2320,false) ~= 0 then return end
+    local chosen, count = nil, 0
+    for i=1,math.min(120,GetMerchantNumItems() or 0) do
+        local link=GetMerchantItemLink(i)
+        if type(link)=='string' and tonumber(string.match(link,'item:(%d+)'))==2320 then
+            count=count+1
+            local name, _, price, quantity, stock, _, extended=GetMerchantItemInfo(i)
+            if name=='Coarse Thread' and type(price)=='number' and price>0 and price<=10
+                    and quantity==1 and (stock==-1 or (type(stock)=='number' and stock>=1))
+                    and not extended and GetMoney()>=price then chosen=i end
+        end
+    end
+    if count==1 and chosen then BuyMerchantItem(chosen,1) end
+end
+-- END VERIFIED QUEST VENDOR PURCHASE
+
 -- BEGIN SPELLBOOK PROBE HELPER
 -- Legacy WotLK clients can expose GetSpellName but lack
 -- GetSpellBookItemInfo. Use the exact spellbook slot plus GetSpellLink's

@@ -162,7 +162,7 @@ class KeyboardQuestInput:
             r'/wbtwork (?:routes|patrol|reclaim|reclaimwait|ghostroute|clear) (?:0|[1-9][0-9]{0,3}) (?:0|[1-9][0-9]{0,3})', command) is not None
         allowed_combat = command in (
             '/targetenemy', '/targetlasttarget', '/targetlastenemy', '/cleartarget',
-            '/wbthud show', '/wbthud hide',
+            '/wbthud show', '/wbthud hide', '/wbtbuythread',
             '/wbtphase idle', '/wbtphase hunt', '/wbtphase turnin',
             '/wbtphase quests', '/wbtphase train', '/wbtphase gear',
             '/wbtphase vendor',

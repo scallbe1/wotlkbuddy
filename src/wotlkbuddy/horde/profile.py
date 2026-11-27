@@ -131,7 +131,7 @@ def _objective(element: ET.Element) -> ObjectiveSpec:
     hotspots = []
     for child in element.iter():
         tag, ca = _tag(child), _attrs(child)
-        if tag in ('mob', 'gameobject') and 'id' in ca:
+        if tag in ('mob', 'gameobject', 'vendor') and 'id' in ca:
             sources.append(Source(tag, _positive(ca, 'id'), ca.get('name', '')))
         if tag == 'hotspot':
             point = _xyz(ca)

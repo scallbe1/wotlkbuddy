@@ -52,6 +52,14 @@ def execute_active_objective(args, *, quest_profile, location, cap, driver,
     target_mode, target_quest, kill, collection = select_objective(
         args, quest_profile, state, current)
     collecting = target_mode == 'collect'
+    if collecting and not collection.sources:
+        from wotlkbuddy.horde.quest_vendor import thread_vendor, execute_thread_purchase
+        vendor=thread_vendor(quest_profile,collection)
+        if vendor is not None:
+            report['quest_vendor_purchase']=execute_thread_purchase(
+                vendor,pid=pid,cap=cap,driver=driver,nav=nav,db=db,hud=hud,
+                set_native_status=set_native_status,log=log)
+            return
     if target_quest is None:
         active_unfinished = [
             {'quest_id': q.quest_id, 'title': q.title}

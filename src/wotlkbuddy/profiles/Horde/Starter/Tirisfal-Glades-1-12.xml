@@ -27,6 +27,7 @@
 		<Vendor Name="Austil de Mon" Entry="2131" Type="Train" TrainClass="Warrior" X="2254.76" Y="238.445" Z="33.717" />
 		<Vendor Name="Marion Call" Entry="2130" Type="Train" TrainClass="Rogue" X="2271.04" Y="242.997" Z="41.1981" />
 		<Vendor Name="Dark Cleric Beryl" Entry="2129" Type="Train" TrainClass="Priest" X="2265.2" Y="251.054" Z="41.1981" />
+		<Vendor Name="Abigail Shiel" Entry="2118" Type="General" X="2259.73" Y="275.571" Z="34.8637" />
 		<Vendor Name="Cain Firesong" Entry="2128" Type="Train" TrainClass="Mage" X="2256.8101" Y="233.219" Z="41.1981" />
 		<Vendor Name="Rupert Boch" Entry="2127" Type="Train" TrainClass="Warlock" X="2259.05" Y="250.317" Z="41.1981" />
 		<Vendor Name="Constance Brisboise" Entry="3522" Type="Repair" X="2157.34" Y="656.666" Z="34.6295" />
@@ -422,6 +423,9 @@
 		</Objective>
 	</Quest>
 	<Quest Id="375" Name="The Chill of Death">
+		<Objective Type="CollectItem" ItemId="2320" CollectCount="1">
+			<CollectFrom><Vendor Name="Abigail Shiel" Id="2118" /></CollectFrom>
+		</Objective>
 		<Objective Type="CollectItem" ItemId="2876" CollectCount="5">
 			<CollectFrom>
 				<Mob Name="Greater Duskbat" Id="1553" />
@@ -792,6 +796,7 @@
 		<TurnIn QuestName="A Rogue's Deal" QuestId="590" TurnInName="Calvin Montague" TurnInId="6784" X="2126.65" Y="1305.98" Z="53.9885" />
 		<Objective QuestName="Fields of Grief" QuestId="365" Type="CollectItem" ItemId="2846" CollectCount="10" />
 		<Objective QuestName="At War With The Scarlet Crusade" QuestId="427" Type="KillMob" MobId="1535" KillCount="10" />
+		<Objective QuestName="The Chill of Death" QuestId="375" Type="CollectItem" ItemId="2320" CollectCount="1" />
 		<Objective QuestName="The Chill of Death" QuestId="375" Type="CollectItem" ItemId="2876" CollectCount="5" />
 		<Objective QuestName="The Haunted Mills" QuestId="362" Type="CollectItem" ItemId="2831" CollectCount="1" />
 		<Objective QuestName="Deaths in the Family" QuestId="354" Type="CollectItem" ItemId="2828" CollectCount="1" />
@@ -833,8 +838,6 @@
 		<TurnIn QuestName="The Haunted Mills" QuestId="362" TurnInName="Coleman Farthing" TurnInId="1500" X="2262.26" Y="244.257" Z="33.717" />
 		<PickUp QuestName="Speak with Sevren" QuestId="355" GiverName="Coleman Farthing" GiverId="1500" X="2262.26" Y="244.257" Z="33.717" />
 		<TurnIn QuestName="A Letter Undelivered" QuestId="361" TurnInName="Yvette Farthing" TurnInId="1560" X="2252.83" Y="250.671" Z="34.3437" />
-		<!-- TODO: quest 375 also requires Coarse Thread (2320), purchased from a vendor.
-		     Retain the quest until supported; never abandon it to advance the profile. -->
 		<TurnIn QuestName="The Chill of Death" QuestId="375" TurnInName="Gretchen Dedmar" TurnInId="1521" X="2249.06" Y="236.785" Z="41.2981" />
 
 		<TurnIn QuestName="Speak with Sevren" QuestId="355" TurnInName="Magistrate Sevren" TurnInId="1499" X="2305.91" Y="265.164" Z="38.7532" />

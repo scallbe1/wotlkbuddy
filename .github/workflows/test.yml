@@ -43,3 +43,5 @@ jobs:
         run: lua5.1 tests/lua_merchant_candidate_batch.lua
       - name: Exercise stationary work HUD and stale update warning
         run: lua5.1 tests/lua_stationary_work_hud.lua
+      - name: Exercise verified quest vendor purchase
+        run: lua5.1 tests/lua_quest_vendor_thread.lua
