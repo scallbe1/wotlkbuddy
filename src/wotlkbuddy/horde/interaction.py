@@ -122,6 +122,7 @@ class KeyboardQuestInput:
         if not state.trainer_open or state.player.dead or state.player.in_combat:
             raise LiveControlError('Cannot refresh filters outside a safe trainer window')
         self.chat("/run SetTrainerServiceTypeFilter('available',1)")
+        self.chat("/run ExpandTrainerSkillLine(0)")
 
     def target_nearest_enemy(self) -> None:
         """One ordinary Tab press, never a typed /targetenemy macro.
@@ -169,7 +170,7 @@ class KeyboardQuestInput:
         allowed_combat = command in (
             '/targetenemy', '/targetlasttarget', '/targetlastenemy', '/cleartarget',
             '/wbthud show', '/wbthud hide', '/wbtbuythread',
-            "/run SetTrainerServiceTypeFilter('available',1)",
+            "/run SetTrainerServiceTypeFilter('available',1)", "/run ExpandTrainerSkillLine(0)",
             '/wbtphase idle', '/wbtphase hunt', '/wbtphase turnin',
             '/wbtphase quests', '/wbtphase train', '/wbtphase gear',
             '/wbtphase vendor',
