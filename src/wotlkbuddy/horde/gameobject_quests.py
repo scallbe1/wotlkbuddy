@@ -126,6 +126,74 @@ def next_active_gameobject_quest(
     return None
 
 
+def navigate_object_destination(s,destination,*,pid,world_position,capture,guard,
+                                driver,nav,travel,goal,started,max_seconds,now,sleep,log,fresh):
+    """Retain the object destination after verified combat/loot displacement."""
+    from wotlkbuddy.horde.return_turnin import encounter_route_failure,height_route_failure
+    from wotlkbuddy.horde.height_recovery import HeightRecovery
+    guard(s)
+    who,world=world_position(s)
+    if who!=pid:
+        raise LiveControlError('WoW PID changed before GameObject navigation')
+    map_id=world.map_id
+    owner=s.player.guid
+    height=HeightRecovery(world.position,destination)
+    encounter_replans=0
+
+    def sample():
+        snap=capture()
+        if (snap.truncated or snap.player.guid!=owner or snap.player.dead
+                or driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+            raise LiveControlError('GameObject route lost verified player or focus')
+        if not snap.player.in_combat:
+            guard(snap)
+        if not any(q.quest_id==goal.quest_id for q in snap.quests):
+            raise LiveControlError('GameObject quest disappeared during navigation')
+        opid,wp=world_position(snap)
+        if opid!=pid or wp.map_id!=map_id:
+            raise LiveControlError('WoW PID/map changed on GameObject route')
+        return snap,wp
+
+    for _ in range(24):
+        guard(s)
+        if hypot(world.x-destination.x,world.y-destination.y)<=2.8 and abs(world.z-destination.z)<=5:
+            return s
+        remaining=max_seconds-(now()-started)
+        if remaining<15:
+            raise LiveControlError('GameObject navigation time budget exhausted')
+        raw=nav.find_path(map_id,world.position,destination)
+        if not raw or abs(raw[0].z-world.z)>2.5:
+            raise LiveControlError('GameObject Detour route does not start on measured floor')
+        waypoints=validate_nav_path(raw,world.position,destination,max_step=18.)
+        log(f'GameObject Detour: {len(waypoints)-1} verified legs')
+        report=travel(waypoints,sample=sample,keyboard=getattr(driver,'keyboard',driver),
+            stop_requested=driver.emergency_stop_requested,
+            expected_quest_id=goal.quest_id,expected_map_id=map_id,
+            max_seconds=min(600,remaining),
+            can_traverse=lambda a,b:nav.segment_clear(map_id,a,b),
+            progress=log,on_aggro=getattr(driver,'on_aggro',None),
+            on_threat=getattr(driver,'scan_hostiles',None),
+            waypoint_spacing=18.,continuous_forward=True,threat_check_yards=14.,
+            fast_observe=getattr(driver,'fast_travel_observe',None),
+            replan_path=lambda a,b:nav.find_path(map_id,a,b),sleep=sleep,now=now)
+        reason=report.stopped_reason
+        if reason=='complete':
+            return fresh(s)
+        if not encounter_route_failure(reason) and not height_route_failure(reason):
+            raise LiveControlError('GameObject navigation stopped: '+reason)
+        s,world=sample()
+        guard(s)
+        if encounter_route_failure(reason):
+            encounter_replans+=1
+            if encounter_replans>12:
+                raise LiveControlError('GameObject encounter replan budget exhausted')
+            log(f'GameObject encounter recovery {encounter_replans}/12; retaining objective destination')
+        elif not height.record(world.position):
+            raise LiveControlError('GameObject height recovery stalled')
+        log(f'Replanning GameObject route from live XYZ ({world.x:.2f},{world.y:.2f},{world.z:.2f})')
+    raise LiveControlError('GameObject route replan budget exhausted')
+
+
 def execute_gameobject_quest(
     *, goal: ActiveGameObjectQuest, pid: int,
     capture: Callable[[], ClientTelemetry], driver, nav,
@@ -206,43 +274,10 @@ def execute_gameobject_quest(
         return nums[0]
 
     def navigate(s, destination):
-        nonlocal visited_hotspots
-        who,world=world_position(s)
-        if who!=pid:
-            raise LiveControlError('WoW PID changed before GameObject navigation')
-        if hypot(world.x-destination.x,world.y-destination.y)<=2.8:
-            return s
-        route=nav.find_path(world.map_id,world.position,destination)
-        waypoints=validate_nav_path(
-            route,world.position,destination,max_step=18.0)
-        log(f'GameObject Detour: {len(waypoints)-1} verified legs')
-        kb=getattr(driver,'keyboard',driver)
-
-        def sample():
-            snap=capture()
-            if snap.player.in_combat:
-                if snap.truncated or snap.player.guid != guid or snap.player.dead:
-                    raise LiveControlError('GameObject navigation lost character during aggro')
-            else:
-                guard(snap)
-            opid,wp=world_position(snap)
-            if opid!=pid:
-                raise LiveControlError('WoW PID changed on GameObject route')
-            return snap,wp
-
-        report=travel(
-            waypoints,sample=sample,keyboard=kb,
-            stop_requested=driver.emergency_stop_requested,
-            expected_quest_id=goal.quest_id,expected_map_id=world.map_id,
-            max_seconds=min(600,max(15,max_seconds-(now()-started))),
-            can_traverse=lambda a,b:nav.segment_clear(world.map_id,a,b),
-            progress=log, on_aggro=getattr(driver, 'on_aggro', None),
-            on_threat=getattr(driver, 'scan_hostiles', None),
-            waypoint_spacing=18.0, continuous_forward=True,
-            threat_check_yards=14.0)
-        if report.stopped_reason!='complete':
-            raise LiveControlError('GameObject navigation stopped: '+report.stopped_reason)
-        return fresh(s)
+        return navigate_object_destination(s,destination,pid=pid,world_position=world_position,
+            capture=capture,guard=guard,driver=driver,nav=nav,travel=travel,
+            goal=goal,started=started,max_seconds=max_seconds,now=now,sleep=sleep,
+            log=log,fresh=fresh)
 
     def local_approach(s, obj):
         """Move a measured ~1 yard closer to the SAME observed GO.
