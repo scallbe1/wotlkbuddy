@@ -118,3 +118,44 @@ def test_object_unavailable_encounter_is_retryable():
     with pytest.raises(EncounterRouteUnavailable,match='next continuous cycle'):
         recover_object_encounter(NS(),None,0,NS(position=Vec3(0,0,0)),Vec3(50,0,0),
             sample=lambda:None,guard=lambda s:None,log=lambda s:None)
+
+
+def test_possible_pack_retreats_then_routes_to_original_hotspot(monkeypatch):
+    from time import monotonic
+    from wotlkbuddy.horde import gameobject_quests as module
+    state=NS(player=NS(guid='owner',dead=False,in_combat=False),truncated=False,
+             quests=[NS(quest_id=365)])
+    origin=Vec3(0,0,0)
+    blocked=Vec3(30,0,0)
+    destination=Vec3(80,0,0)
+    location=[origin]
+    legs_seen=[]
+    detour_origins=[]
+    def position(s):
+        p=location[0]
+        return 77,NS(position=p,x=p.x,y=p.y,z=p.z,map_id=0)
+    def travel(legs,**kwargs):
+        legs_seen.append(legs)
+        if len(legs_seen)==1:
+            location[0]=blocked
+            kwargs['sample']()
+            return NS(stopped_reason='Possible pack behind cave bend; holding position')
+        location[0]=legs[-1]
+        return NS(stopped_reason='complete')
+    def detour(nav,map_id,start,end, hazards,**kwargs):
+        detour_origins.append(start)
+        if start==blocked:
+            return None
+        return (start,Vec3(0,40,0),Vec3(80,40,0),end)
+    monkeypatch.setattr(module,'detour_around_encounters',detour)
+    driver=NS(emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True,
+              dangerous_hunt_positions=[(Vec3(40,0,0),monotonic())])
+    result=module.navigate_object_destination(state,destination,pid=77,world_position=position,
+        capture=lambda:state,guard=lambda s:None,driver=driver,
+        nav=NS(find_path=lambda m,a,b:[a,b],segment_clear=lambda *a:True),
+        travel=travel,goal=NS(quest_id=365),started=0,max_seconds=900,
+        now=lambda:0,sleep=lambda _:None,log=lambda _:None,fresh=lambda s:s)
+    assert result is state and location[0]==destination
+    assert detour_origins==[blocked,origin]
+    assert legs_seen[1][-1]==origin
+    assert Vec3(0,40,0) in legs_seen[2]
