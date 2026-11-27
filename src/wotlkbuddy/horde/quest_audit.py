@@ -1,5 +1,6 @@
 """Read-only reconciliation of profile quests with live journal and observed history."""
 from collections import Counter
+import re
 from wotlkbuddy.horde.profile import condition_value
 from wotlkbuddy.live.control import LiveControlError
 
@@ -28,7 +29,8 @@ def audit_profile_quests(profile, state, *, map_id=None):
         relevant=pickups or steps
         checks=[(i,s,[condition_value(c,level=state.player.level,race=race,
                      class_name=cls,map_id=map_id,active_quests=set(journal),
-                     completed_quests=completed if history else None)
+                     completed_quests=completed if all(int(q) in history for q in
+                         re.findall(r'IsQuestCompleted\s*\(\s*(\d+)\s*\)',c)) else None)
                      for c in s.conditions]) for i,s in relevant]
         eligible=any(all(v is True for v in vs) for _,_,vs in checks)
         conditional=any(False not in vs and None in vs for _,_,vs in checks)
