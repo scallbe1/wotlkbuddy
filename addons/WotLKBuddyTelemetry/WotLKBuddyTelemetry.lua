@@ -166,6 +166,30 @@ SlashCmdList['WOTLKBUDDYBUYTHREAD'] = function(message)
 end
 -- END VERIFIED QUEST VENDOR PURCHASE
 
+-- BEGIN VERIFIED EQUIPMENT REPAIR
+SLASH_WOTLKBUDDYREPAIR1 = '/wbtrepair'
+SlashCmdList['WOTLKBUDDYREPAIR'] = function(message)
+    local entry,budget=string.match(message or '', '^(%d+) (%d+)$')
+    entry,budget=tonumber(entry),tonumber(budget)
+    if not entry or entry<1 or entry>=16777216 or not budget or
+            budget<1 or budget>1000000 or UnitIsDeadOrGhost('player') or
+            UnitAffectingCombat('player') or (InCombatLockdown and InCombatLockdown()) or
+            not (MerchantFrame and MerchantFrame:IsShown()) or
+            not (CanMerchantRepair and GetRepairAllCost and RepairAllItems and GetMoney) then return end
+    if MerchantFrame.selectedTab and MerchantFrame.selectedTab~=1 then return end
+    local guid=UnitGUID('target') or ''
+    if not string.match(guid,'^0x[Ff]130%x%x%x%x%x%x%x%x%x%x%x%x$') or
+            tonumber(string.sub(guid,7,12),16)~=entry then return end
+    local capable=CanMerchantRepair()
+    if capable~=true and capable~=1 then return end
+    local cost,canRepair=GetRepairAllCost()
+    if (canRepair==true or canRepair==1) and type(cost)=='number' and
+            cost>0 and cost<=budget and cost<=GetMoney() then
+        RepairAllItems()
+    end
+end
+-- END VERIFIED EQUIPMENT REPAIR
+
 -- BEGIN SPELLBOOK PROBE HELPER
 -- Legacy WotLK clients can expose GetSpellName but lack
 -- GetSpellBookItemInfo. Use the exact spellbook slot plus GetSpellLink's

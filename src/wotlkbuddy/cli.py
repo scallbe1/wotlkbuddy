@@ -363,15 +363,10 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
                         accept_existing_detail=True,log=log)
                     report['chained_quests']=resumed_offer
                     report['resumed_open_offer']=True
-            if args.only in ('all', 'vendor', 'objectives', 'collect', 'objects',
-                              'turnin'):
-                # Bags can fill while collecting items. Preflight before
-                # questing and again immediately before claiming a reward.
-                ensure_reward_bag_space(force_sale=args.only=='vendor')
-                if args.only == 'vendor':
-                    report['vendor'] = {
-                        'status': 'bag space verified',
-                        'free_slots': cap().resources.free_bag_slots}
+            inventory.prepare_services(
+                args,quest_profile=quest_profile,profiles_root=profiles_root,
+                pid=pid,cap=cap,driver=driver,nav=nav,db=db,location=location,
+                hud=hud,set_native_status=set_native_status,log=log)
 
             local_memory=getattr(args,'_local_offer_memory',None)
             if args.only in ('all','quests') or (args.only=='objectives' and local_memory is not None):
