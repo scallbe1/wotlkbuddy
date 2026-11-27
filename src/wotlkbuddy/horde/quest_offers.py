@@ -55,6 +55,7 @@ def accept_npc_offers(
     *, npc_name: str, npc_id: int, capture: Callable[[], ClientTelemetry],
     driver, max_quests: int = 4, profile: HordeProfile | None = None,
     accept_existing_detail: bool = False, confirmed_completed: tuple[int,...] = (),
+    allowed_quest_ids: frozenset[int] | None = None,
     sleep: Callable[[float], None] = real_sleep,
     now: Callable[[], float] = monotonic,
     log: Callable[[str], None] = lambda _: None,
@@ -137,7 +138,7 @@ def accept_npc_offers(
                 if state.dialog is not None and state.dialog.kind != 'none':
                     break
             if state.dialog is None or state.dialog.kind == 'none':
-                if accepted and state.dialog is not None and state.dialog.kind=='none':
+                if (accepted or allowed_quest_ids is not None) and state.dialog is not None and state.dialog.kind=='none':
                     # Fresh telemetry and exact NPC identity were verified by
                     # fresh(). A silent NPC after success is not a failed pickup.
                     log(f'{npc_name}: no further dialogue after {len(accepted)} confirmed pickup(s); continuing')
@@ -160,6 +161,9 @@ def accept_npc_offers(
                     f'{npc_name}: direct quest detail has no visible title; '
                     'no quest accepted')
             step=matching_direct_offer(profile,state,npc_id,npc_name,confirmed_completed)
+            if allowed_quest_ids is not None and (step is None or step.quest_id not in allowed_quest_ids):
+                state=dismiss()
+                break
             if step is None:
                 raise LiveControlError(
                     f'{npc_name}: unverified direct offer {observed_title!r} '
@@ -235,6 +239,13 @@ def accept_npc_offers(
             log(f'{npc_name}: no additional quest offers in verified {source} list')
             state = dismiss()
             break
+        if allowed_quest_ids is not None:
+            titles={s.name for s in profile.steps if s.kind=='pickup' and
+                    s.entry==npc_id and s.quest_id in allowed_quest_ids}
+            visible=[o for o in visible if o.title in titles]
+            if not visible:
+                state=dismiss()
+                break
         visible.sort(key=lambda o: o.index)
         option = visible[0]
         if len([o for o in visible if o.title == option.title]) != 1:
@@ -302,6 +313,11 @@ def accept_npc_offers(
             raise LiveControlError(
                 f'Selected quest detail changed before acceptance: '
                 f'{observed} -> {after}; no quest accepted')
+        if allowed_quest_ids is not None:
+            matched=matching_direct_offer(profile,again,npc_id,npc_name,confirmed_completed)
+            if matched is None or matched.quest_id not in allowed_quest_ids:
+                state=dismiss()
+                break
         driver.chat('/run AcceptQuest()')
         deadline = now()+9
         last = again
@@ -317,6 +333,8 @@ def accept_npc_offers(
         if result is None:
             raise LiveControlError(
                 f'Acceptance of {option.title!r} not uniquely confirmed in quest journal')
+        if allowed_quest_ids is not None and result not in allowed_quest_ids:
+            raise LiveControlError('Accepted quest outside verified recovery set')
         accepted.append(result)
         log(f'Accepted {option.title!r} (quest {result}) — journal confirmed')
         # Close any leftover quest/progress/gossip screen before trying the
