@@ -45,12 +45,24 @@ def training_priority(args, *, cap, quest_profile, log):
     return budget_state, training_goal, training_due
 
 
+def missing_frost_requires_check(args, driver, goal):
+    """A live negative spellbook probe overrides a stale empty training budget."""
+    missing=getattr(driver,'missing_frost_spells',None)
+    return (getattr(args,'_continuous_training_check',False) is True
+            and isinstance(missing,set) and bool(missing)
+            and goal is not None and not goal.pending)
+
+
 def execute_training_phase(args, *, quest_profile, profiles_root, cap, driver,
                            location, pid, nav, db, hud, set_native_status,
                            serialize_vendor_sale, report, log):
     """Fund and visit a trainer only when the existing session policy permits."""
     budget_state, training_goal, training_due = training_priority(
         args, cap=cap, quest_profile=quest_profile, log=log)
+    frost_recheck=missing_frost_requires_check(args,driver,training_goal)
+    if frost_recheck:
+        training_due=True
+        log('Training priority: live missing Frost spells override previous empty trainer check')
     if args.only not in ('all', 'train') and not training_due:
         return
     automatic=args.only=='objectives' and training_due
@@ -101,6 +113,9 @@ def execute_training_phase(args, *, quest_profile, profiles_root, cap, driver,
                 current=current, training_goal=training_goal, cap=cap, driver=driver,
                 pid=pid, nav=nav, db=db, hud=hud, set_native_status=set_native_status,
                 report=report, log=log)
+            if frost_recheck and memory is not None and getattr(driver,'missing_frost_spells',None):
+                memory[key]=time.monotonic()+300
+                log('Frost spells still missing after trainer visit; retry deferred for five minutes')
         except (EncounterRouteUnavailable,NpcTargetUnavailable) as exc:
             if not automatic:
                 raise
