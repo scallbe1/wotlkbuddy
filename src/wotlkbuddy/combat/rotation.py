@@ -68,8 +68,10 @@ class Rotation:
 DEFAULT_ROTATIONS: dict[str, Rotation] = {
     'MAGE': Rotation('MAGE', (
         # Maintenance buffs remain a separate pre-combat behavior.
-        RotationRule('Fire Blast', 5),
+        RotationRule('Fire Blast', 5, max_target_health_fraction=.25),
         RotationRule('Frostbolt', 10),
+        # Preserve instant damage when Frostbolt is unavailable.
+        RotationRule('Fire Blast', 15),
         RotationRule('Fireball', 20),
     )),
     'PRIEST': Rotation('PRIEST', (
