@@ -14,12 +14,13 @@ SERVICE_RADIUS = 1800
 LOCAL_RADIUS = 600
 
 
-def service_candidates(*,profile,spawns,origin,map_id,role,profiles_root):
+def service_candidates(*,profile,spawns,origin,map_id,role,profiles_root,
+                       catalog=nearby_service_npcs):
     """Prefer local services; broaden same-map search only when necessary."""
     args=dict(profile=profile,spawns=spawns,origin=origin,map_id=map_id,
               role=role,profiles_root=profiles_root)
-    return (nearby_service_npcs(**args,radius=LOCAL_RADIUS) or
-            nearby_service_npcs(**args,radius=SERVICE_RADIUS))
+    return (catalog(**args,radius=LOCAL_RADIUS) or
+            catalog(**args,radius=SERVICE_RADIUS))
 
 
 def visit_service_npc(*,npc_name,npc_id,pid,capture,driver,nav,spawns,
