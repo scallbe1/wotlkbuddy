@@ -216,3 +216,42 @@ class GameObjectQuestTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
+
+def test_repeatable_collection_uses_nearest_live_exact_source_outside_hotspots():
+    from types import SimpleNamespace as NS
+    from wotlkbuddy.horde.gameobject_quests import eligible_objects
+    origin=Vec3(100,200,30)
+    goal=NS(object_id=375,objective_type='CollectItem',required_count=10,
+            hotspots=(Vec3(170,200,30),))
+    near=VisibleGameObject(1,375,Vec3(102,200,30))
+    farther=VisibleGameObject(2,375,Vec3(160,200,30))
+    wrong=VisibleGameObject(3,376,origin)
+    distant=VisibleGameObject(4,375,Vec3(300,200,30))
+    observe=lambda *_:(farther,wrong,distant,near)
+    world=NS(position=origin)
+    assert eligible_objects(goal,None,world,observe,set(),None)==(near,farther)
+    assert eligible_objects(goal,None,world,observe,{1},None)==(farther,)
+    goal.objective_type='UseObject'
+    assert eligible_objects(goal,None,world,observe,set(),None)==(farther,)
+
+
+def test_visited_pumpkin_does_not_exhaust_whole_hotspot():
+    from types import SimpleNamespace as NS
+    from wotlkbuddy.horde.gameobject_quests import mark_exhausted_hotspots
+    goal=NS(object_id=375,objective_type='CollectItem',required_count=10,hotspots=(POS,))
+    visited_hotspots=set()
+    mark_exhausted_hotspots(goal,(VisibleGameObject(1,375,POS),),{1},visited_hotspots)
+    assert not visited_hotspots
+
+
+def test_incomplete_pumpkin_sweep_is_retryable():
+    import pytest
+    from types import SimpleNamespace as NS
+    from wotlkbuddy.horde.gameobject_quests import exhausted_object_search
+    from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+    goal=NS(object_id=375,object_name='Tirisfal Pumpkin',objective_type='CollectItem',required_count=10)
+    logs=[]
+    with pytest.raises(EncounterRouteUnavailable,match='refresh live objects and respawns'):
+        exhausted_object_search(goal,(VisibleGameObject(1,375,POS),),{1},set(),6,logs.append)
+    assert '6/10' in logs[0] and '1 exact live objects loaded' in logs[0]

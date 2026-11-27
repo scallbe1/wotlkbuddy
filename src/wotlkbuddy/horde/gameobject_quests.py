@@ -336,21 +336,44 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
     raise LiveControlError('GameObject route replan budget exhausted')
 
 
+def repeatable_collection(goal):
+    return goal.objective_type=='CollectItem' and goal.required_count>1
+
+
 def eligible_objects(goal,state,world,observe_objects,visited_guids,preferred_guid):
+    # XML hotspots guide discovery, not ownership of a repeatable source.
+    # Exact live template/identity, map, range, hover and journal verification
+    # remain mandatory; retain location restrictions for unique use objectives.
     options=(o for o in observe_objects(state,goal.object_id)
              if o.entry==goal.object_id
-             and min(o.position.distance_to(h) for h in goal.hotspots)<40
+             and (repeatable_collection(goal) or
+                  min(o.position.distance_to(h) for h in goal.hotspots)<40)
              and o.position.distance_to(world.position)<175 and o.guid not in visited_guids)
     return tuple(sorted(options,key=lambda o:(o.guid!=preferred_guid,
                                                o.position.distance_to(world.position))))
 
 
 def mark_exhausted_hotspots(goal,visible_now,visited_guids,visited_hotspots):
-    """Avoid revisiting hotspots containing only an exhausted live instance."""
+    """Never infer a whole collection area is exhausted from one visited GUID."""
+    if repeatable_collection(goal):
+        return
     for i,hotspot in enumerate(goal.hotspots):
         if any(loaded.guid in visited_guids and loaded.entry==goal.object_id
                and loaded.position.distance_to(hotspot)<=12 for loaded in visible_now):
             visited_hotspots.add(i)
+
+
+def exhausted_object_search(goal,visible,visited,blocked_hotspots,current,log):
+    exact=[o for o in visible if o.entry==goal.object_id]
+    log(f'{goal.object_name}: {current}/{goal.required_count}; '
+        f'{len(exact)} exact live objects loaded, '
+        f'{sum(o.guid in visited for o in exact)} already attempted; '
+        'profile sweep exhausted')
+    if repeatable_collection(goal) or blocked_hotspots:
+        raise EncounterRouteUnavailable(
+            f'{goal.object_name}: collection/search incomplete; refresh live objects and respawns next continuous cycle')
+    raise LiveControlError(f'No currently observed GameObject {goal.object_id} '
+                           'and no unvisited verified XML hotspots within 4000y')
 
 
 def guard_object_quest(s, *, driver, guid, goal, now, started, max_seconds):
@@ -630,11 +653,8 @@ def execute_gameobject_quest(
             mark_exhausted_hotspots(goal,observe_objects(state,goal.object_id),visited_guids,visited_hotspots)
             unexplored=next_object_hotspot(goal.hotspots,visited_hotspots|blocked_hotspots,world.position)
             if unexplored is None:
-                if blocked_hotspots:
-                    raise EncounterRouteUnavailable('All remaining GameObject hotspots blocked; retrying next continuous cycle')
-                raise LiveControlError(
-                    f'No currently observed GameObject {goal.object_id} '
-                    'and no unvisited verified XML hotspots within 4000y')
+                exhausted_object_search(goal,observe_objects(state,goal.object_id),
+                    visited_guids,blocked_hotspots,current,log)
             i,spot=unexplored
             log(f'No loaded GameObject yet; travelling to XML hotspot '
                 f'{i+1}/{len(goal.hotspots)}')
