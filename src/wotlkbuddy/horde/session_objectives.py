@@ -52,6 +52,16 @@ def execute_active_objective(args, *, quest_profile, location, cap, driver,
     target_mode, target_quest, kill, collection = select_objective(
         args, quest_profile, state, current)
     collecting = target_mode == 'collect'
+    if target_quest is not None and args.only in ('all','objectives'):
+        from wotlkbuddy.horde.level_milestones import next_milestone
+        from wotlkbuddy.horde.milestone_grind import run_milestone
+        milestone=next_milestone(quest_profile,state,map_id=current.map_id,
+                                 before_step=target_quest.profile_step)
+        if milestone is not None:
+            report['level_milestone']=run_milestone(
+                milestone,location=location,cap=cap,driver=driver,pid=pid,nav=nav,
+                hud=hud,set_native_status=set_native_status,log=log)
+            return
     if collecting and not collection.sources:
         from wotlkbuddy.horde.quest_vendor import thread_vendor, execute_thread_purchase
         vendor=thread_vendor(quest_profile,collection)
