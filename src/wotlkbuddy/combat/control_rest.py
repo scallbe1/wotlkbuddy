@@ -87,6 +87,38 @@ def rest_with_controlled_healer(state,*,driver,fresh,log,now=monotonic):
     return state
 
 
+def finish_controlled_healer(state,*,driver,fresh,log,now=monotonic):
+    """Once other planned enemies are dead, reopen on the exact healer."""
+    fight=getattr(driver,'linked_fight',None)
+    if (not isinstance(fight,LinkedFight) or not is_healer(fight.secondary)
+            or fight.remaining or not primary_defeated(state,fight)
+            or state.player.dead or state.player.in_combat or now()>=fight.expires
+            or state.resources is None or state.player.health<.40*state.player.max_health):
+        return state
+    state=select_exact(state,fight.secondary,driver=driver,fresh=fresh,max_tabs=2)
+    if state.player.in_combat or not exact_hostile(state,fight.secondary):
+        return state
+    face=getattr(driver,'face_combat_target',None)
+    if callable(face):
+        state=face(state)
+    if state.player.in_combat or state.player.dead or not exact_hostile(state,fight.secondary):
+        return state
+    from wotlkbuddy.combat.runtime import selected_action
+    action=selected_action(state)
+    cast=getattr(driver,'cast_action_spell',None)
+    if action is None or not callable(cast):
+        log('Controlled healer cleanup deferred: no ready verified damage spell')
+        return state
+    fight.primary_dead=True
+    log(f'Controlled healer cleanup: {action.name} on {fight.secondary.guid}')
+    cast(state,action.spell_id)
+    for _ in range(20):
+        state=fresh(state,.20)
+        if state.player.in_combat or not exact_hostile(state,fight.secondary):
+            break
+    return state
+
+
 def finish_defensive_exchange(state,*,driver,fresh,log,resume):
     """If a recovery window is interrupted, hand back to bounded defense once."""
     if getattr(driver,'control_rest_active',False) is True:
@@ -94,6 +126,8 @@ def finish_defensive_exchange(state,*,driver,fresh,log,resume):
     driver.control_rest_active=True
     try:
         state=rest_with_controlled_healer(state,driver=driver,fresh=fresh,log=log)
+        if not state.player.in_combat:
+            state=finish_controlled_healer(state,driver=driver,fresh=fresh,log=log)
         if state.player.in_combat:
             return resume(state)
         return state
