@@ -20,7 +20,7 @@ CATCHUP = {
     5482: (5,6,5481),
     354: (7,11,0),
     362: (7,10,0),
-    359: (6,11,358),
+    359: (6,9,358),
     356: (6,11,0),
 }
 
@@ -37,6 +37,7 @@ def recovery_offers(profile, state, current, db, memory, *, now):
     if (Path(profile.source_path).resolve()!=native.resolve() or current.map_id!=0
             or state.truncated or state.player.dead or state.player.in_combat
             or not state.player.guid or len(state.quests)>=23
+            or any(q.complete for q in state.quests)
             or state.resources is None
             or state.resources.class_token.upper()!='MAGE'
             or state.resources.race_token.casefold() not in ('undead','scourge')):
