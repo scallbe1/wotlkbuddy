@@ -113,16 +113,16 @@ def observe_cast(s, *, action, target_guid, fresh):
     return s
 
 
+class TargetReassessment(LiveControlError):
+    """Selection changed without proof of a kill; resume objective search."""
+
+
 def confirm_lost_target(s, *, collect_items, target_guid, expected, driver,
                         fresh, credit_advanced, record_kill, log):
     """A lost target requires exact corpse evidence or journal credit."""
     if collect_items:
-        # Loot-item credit comes only after opening the corpse,
-        # so kill credit cannot prove death for item collection.
-        # Only reselect the EXACT formerly targeted dead creature.
-        if s.player.target_guid:
-            raise LiveControlError(
-                'Target switched during item-collection fight')
+        if s.player.in_combat:
+            raise TargetReassessment('Target changed during active item-collection combat')
         driver.chat('/targetlasttarget')
         s = fresh(s)
         observed_dead = s.combat_target
@@ -131,9 +131,9 @@ def confirm_lost_target(s, *, collect_items, target_guid, expected, driver,
                 observed_dead.entry_id != expected or
                 observed_dead.dead is not True or
                 s.player.in_combat):
-            raise LiveControlError(
+            raise TargetReassessment(
                 'CollectItem kill not verified: exact dead corpse '
-                'could not be reselected')
+                'could not be reselected; reassess without kill credit')
         record_kill(expected)
         log(f'Item-source creature {expected} defeated and '
             'exact corpse GUID reselected')
@@ -173,7 +173,7 @@ def observe_impact(s, *, target_guid, expected, previous_health, fresh,
                 log('Delayed Fireball impact credited a quest '
                     'kill after the target disappeared')
                 return s, None, True
-            raise LiveControlError(
+            raise TargetReassessment(
                 'Fireball target changed during impact observation '
                 'without verified quest kill credit')
         if new.dead or new.health<previous_health:
@@ -223,7 +223,7 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
                 t.entry_id != expected):
             if s.player.in_combat:
                 return recover(s)
-            raise UnhittableMobError(target_guid,'Target changed before verified kill')
+            raise TargetReassessment('Target changed before verified kill')
         if t.dead or t.health == 0:
             remember=getattr(driver,'remember_defeated',None)
             if callable(remember):
@@ -241,7 +241,7 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
             raise LiveControlError('Insufficient mana for another Fireball; recovery needed')
         faced=reface_before_cast(s,driver,guard,target_guid,expected)
         if faced is None:
-            return recover(fresh(s)) if s.player.in_combat else confirm_lost_target(fresh(s),collect_items=collect_items,target_guid=target_guid,expected=expected,driver=driver,fresh=fresh,credit_advanced=credit_advanced,record_kill=record_kill,log=log)
+            raise TargetReassessment('Target changed while facing before cast')
         s=faced
         if s.combat_target.dead:
             continue
