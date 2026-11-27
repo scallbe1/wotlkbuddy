@@ -41,3 +41,5 @@ jobs:
         run: lua5.1 tests/lua_native_hud_travel_v060.lua
       - name: Exercise merchant candidate batches and exclusions
         run: lua5.1 tests/lua_merchant_candidate_batch.lua
+      - name: Exercise stationary work HUD and stale update warning
+        run: lua5.1 tests/lua_stationary_work_hud.lua
