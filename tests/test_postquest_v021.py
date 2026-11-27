@@ -126,7 +126,11 @@ class PostquestTests(unittest.TestCase):
         taps=[]
         d._tap=lambda code, shifted=False, **kw: taps.append(code)
         for command in ('/run EquipItemByName(3275,10)', '/run EquipItemByName(3277,16)',
-                        '/run BuyTrainerService(1)', '/run BuyTrainerService(120)'):
+                        '/run BuyTrainerService(1)', '/run BuyTrainerService(120)',
+                        '/run BuyTrainerService(0)',
+                        '/run BuyTrainerService(10001)',
+                        '/run BuyTrainerService(0121)', '/run BuyTrainerService(251)',
+                        '/run BuyTrainerService(10000)'):
             taps.clear()
             d.chat(command)
             self.assertGreater(len(taps),1)

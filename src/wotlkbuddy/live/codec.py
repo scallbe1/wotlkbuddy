@@ -369,6 +369,21 @@ class TrainerService:
     required_level: int
 
 
+def parse_trainer_service(parts, trainer_seen, trainer_audit, trainer_services):
+    if len(parts) != 6 or not trainer_seen:
+        raise TelemetryError('Trainer service without active trainer panel')
+    try:
+        index, cost, level = int(parts[1]), int(parts[4]), int(parts[5])
+    except ValueError as exc:
+        raise TelemetryError('Malformed trainer service') from exc
+    if (not 1 <= index <= (trainer_audit.total if trainer_audit else 120) or
+            index in trainer_services or
+            not parts[2] or len(parts[2]) > 55 or len(parts[3]) > 25 or
+            not 0 <= cost <= 2000000000 or not 0 <= level <= 100):
+        raise TelemetryError('Invalid or duplicate trainer service')
+    return TrainerService(index, parts[2], parts[3], cost, level)
+
+
 @dataclass(frozen=True)
 class ClientTelemetry:
     sequence: int
@@ -1104,19 +1119,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
             trainer_count, trainer_audit = parse_trainer_header(parts)
             trainer_seen = True
         elif parts[0] == 'Y':
-            if len(parts) != 6 or not trainer_seen:
-                raise TelemetryError('Trainer service without active trainer panel')
-            try:
-                index, cost, level = int(parts[1]), int(parts[4]), int(parts[5])
-            except ValueError as exc:
-                raise TelemetryError('Malformed trainer service') from exc
-            if (not 1 <= index <= (trainer_audit.total if trainer_audit else 120) or
-                    index in trainer_services or
-                    not parts[2] or len(parts[2]) > 55 or len(parts[3]) > 25 or
-                    not 0 <= cost <= 2000000000 or not 0 <= level <= 100):
-                raise TelemetryError('Invalid or duplicate trainer service')
-            trainer_services[index] = TrainerService(index, parts[2], parts[3],
-                                                     cost, level)
+            service = parse_trainer_service(parts, trainer_seen, trainer_audit, trainer_services)
+            trainer_services[service.index] = service
         elif parts[0] == 'C':
             if len(parts) != 3:
                 raise TelemetryError('Invalid completed-quest status row')
