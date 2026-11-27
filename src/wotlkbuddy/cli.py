@@ -103,12 +103,12 @@ def _horde_profile_audit(args: argparse.Namespace) -> None:
     """Read-only audit of the real CopilotBuddy Horde leveling XML."""
     from collections import Counter
     from wotlkbuddy.horde.profile import (load_horde_profile, condition_value,
-                                         select_profile_from_loader)
+                                         select_quest_profile)
     if not 1 <= args.level <= 60:
         raise ValueError('Horde Mage target level must be 1..60')
     if not 1 <= args.limit <= 100:
         raise ValueError('--limit must be 1..100')
-    chosen = (args.profile or select_profile_from_loader(args.profiles_root,
+    chosen = (args.profile or select_quest_profile(args.profiles_root,
                 level=args.level, race=args.race))
     profile = load_horde_profile(chosen)
     kinds = Counter(step.kind for step in profile.steps)
@@ -143,7 +143,7 @@ def _horde_profile_audit(args: argparse.Namespace) -> None:
 def _horde_quest_pickup(args: argparse.Namespace) -> None:
     """Pick up Rude Awakening only after verifying NPC + quest-detail telemetry."""
     from wotlkbuddy.horde.interaction import KeyboardQuestInput, pickup_planned_quest
-    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.profile import load_horde_profile, select_quest_profile
     from wotlkbuddy.live.capture import capture_monitor
     if not args.enable_input:
         raise ValueError('Quest interaction requires explicit --enable-input')
@@ -160,7 +160,7 @@ def _horde_quest_pickup(args: argparse.Namespace) -> None:
     first = cap()
     if not 1 <= first.player.level <= 12 or not first.player.name or not first.player.guid:
         raise ValueError('First Undead starter quest requires a valid level 1..12 character')
-    chosen = (args.profile or select_profile_from_loader(args.profiles_root,
+    chosen = (args.profile or select_quest_profile(args.profiles_root,
                 level=first.player.level, race='Undead'))
     profile = load_horde_profile(chosen)
     driver = KeyboardQuestInput(interact_key=args.interact_key)
@@ -177,7 +177,7 @@ def _horde_quest_pickup(args: argparse.Namespace) -> None:
 
 def _horde_mage_plan(args: argparse.Namespace) -> None:
     """Read-only plan from currently visible WoW quest and status telemetry."""
-    from wotlkbuddy.horde.profile import (load_horde_profile, select_profile_from_loader)
+    from wotlkbuddy.horde.profile import (load_horde_profile, select_quest_profile)
     from wotlkbuddy.horde.planner import plan_mage
     from wotlkbuddy.live.capture import capture_monitor
     if not 2 <= args.countdown <= 20:
@@ -188,7 +188,7 @@ def _horde_mage_plan(args: argparse.Namespace) -> None:
     snapshot = capture_monitor(args.monitor)
     if not 1 <= snapshot.player.level <= 60:
         raise ValueError('Horde Mage planner currently supports levels 1..60')
-    chosen = (args.profile or select_profile_from_loader(args.profiles_root,
+    chosen = (args.profile or select_quest_profile(args.profiles_root,
                 level=snapshot.player.level, race=args.race))
     profile = load_horde_profile(chosen)
     print(f'Profile selected: {profile.name}')
@@ -228,7 +228,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         nearby_service_npcs)
     from wotlkbuddy.horde.npc_visit import visit_npc
     from wotlkbuddy.horde.quest_offers import accept_npc_offers
-    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.profile import load_horde_profile, select_quest_profile
     from wotlkbuddy.horde.training import train_available_mage_spells
     from wotlkbuddy.horde.npc_service_turnin import turnin_ready_quests_at_npc
     from wotlkbuddy.live.status_hud import GoalActionHUD
@@ -305,7 +305,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
             raise ValueError('NPC visits need Navigation.dll, adjacent mmaps and x86 Python')
         profiles_root = str(Path(args.profiles_root or
                                 (Path.home() / 'Questing-profiles')).expanduser())
-        chosen = select_profile_from_loader(
+        chosen = select_quest_profile(
             profiles_root, level=first.player.level, race='Undead')
         quest_profile = load_horde_profile(chosen)
         driver.awareness.names.update({src.entry:src.name
@@ -314,6 +314,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         driver.awareness.names.update({step.entry:step.npc_name
             for step in quest_profile.steps if step.entry and step.npc_name})
         log(f'NPC services and quest profile: {quest_profile.name}')
+        log(f'Profile source: {chosen}')
         with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
                 NavigationProxy(py32, dll) as nav:
             # Detour's *walking* segment clearance is a negative cave-wall
@@ -464,7 +465,7 @@ def _horde_continuous(args: argparse.Namespace) -> dict:
 def _horde_next(args: argparse.Namespace) -> None:
     """Run a verified profile step, including source-backed item collection."""
     from wotlkbuddy.live.control import LiveControlError
-    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.profile import load_horde_profile, select_quest_profile
     from wotlkbuddy.horde.planner import plan_mage
     from wotlkbuddy.live.status_hud import GoalActionHUD
     import atexit
@@ -486,7 +487,7 @@ def _horde_next(args: argparse.Namespace) -> None:
             snap.resources.race_token.lower() not in ('undead', 'scourge'):
         raise ValueError('This Horde execution adapter requires a verified Undead Mage')
     _pid, world = verified_live_position(snap, pid=args.pid)
-    chosen = select_profile_from_loader(args.profiles_root, level=snap.player.level,
+    chosen = select_quest_profile(args.profiles_root, level=snap.player.level,
                                         race='Undead')
     profile = load_horde_profile(chosen)
     completed = {qid for qid, done in snap.quest_completions if done}
@@ -635,7 +636,7 @@ def _horde_next(args: argparse.Namespace) -> None:
 
 def _horde_return_turnin(args: argparse.Namespace) -> None:
     """Explicit return/hand-in for an already complete, journal-verified quest."""
-    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.profile import load_horde_profile, select_quest_profile
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.live.capture import capture_monitor
     from wotlkbuddy.live.world_position import verified_live_position
@@ -655,7 +656,7 @@ def _horde_return_turnin(args: argparse.Namespace) -> None:
             not any(q.quest_id == args.quest_id and q.complete for q in snap.quests)):
         raise LiveControlError('Requested quest is not verified complete or player is busy')
     pid, _world = verified_live_position(snap, pid=args.pid)
-    chosen = select_profile_from_loader(args.profiles_root,
+    chosen = select_quest_profile(args.profiles_root,
                                         level=snap.player.level, race='Undead')
     profile = load_horde_profile(chosen)
     driver = KeyboardQuestInput(interact_key=args.interact_key)
@@ -679,7 +680,7 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
     Navigation is only possible with a recorded path or explicit experimental
     direct steering on Deathknell's 2D zone map. No navmesh is inferred.
     """
-    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.profile import load_horde_profile, select_quest_profile
     from wotlkbuddy.horde.delivery import plan_deathknell_delivery
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.horde.turnin import turnin_rude_awakening
@@ -738,7 +739,7 @@ def _horde_quest_363(args: argparse.Namespace) -> None:
         print('Travel:', json.dumps(report.to_dict(), ensure_ascii=False))
         if report.stopped_reason != 'complete':
             raise LiveControlError('Travel did not complete: ' + report.stopped_reason)
-    chosen = select_profile_from_loader(args.profiles_root, level=p.level, race='Undead')
+    chosen = select_quest_profile(args.profiles_root, level=p.level, race='Undead')
     profile = load_horde_profile(chosen)
     driver = KeyboardQuestInput(interact_key=args.interact_key)
     result = turnin_rude_awakening(profile, capture=cap, driver=driver,
@@ -757,7 +758,7 @@ def _horde_nav_plan(args: argparse.Namespace) -> None:
     This command NEVER assumes the character is at the giver NPC coordinate;
     the corridor is only a reference route from one known NPC to another.
     """
-    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.profile import load_horde_profile, select_quest_profile
     from wotlkbuddy.horde.worlddata import (CreatureSpawnDatabase, distance_world,
                                             prepare_quest_corridor,
                                             resolve_creature_spawns)
@@ -767,7 +768,7 @@ def _horde_nav_plan(args: argparse.Namespace) -> None:
     import sys as _sys
     if bool(args.nav_dll) != bool(args.python32):
         raise ValueError('Supply BOTH --nav-dll and --python32 for the 32-bit nav helper')
-    chosen = select_profile_from_loader(args.profiles_root,
+    chosen = select_quest_profile(args.profiles_root,
                                         level=args.level, race=args.race)
     profile = load_horde_profile(chosen)
     db_path = resolve_creature_spawns(args.spawns_db)
@@ -850,7 +851,7 @@ def _horde_nav_deliver(args: argparse.Namespace) -> None:
     fighting/loot are NOT integrated and must not be inferred from arrival.
     """
     from pathlib import Path
-    from wotlkbuddy.horde.profile import load_horde_profile, select_profile_from_loader
+    from wotlkbuddy.horde.profile import load_horde_profile, select_quest_profile
     from wotlkbuddy.horde.worlddata import (CreatureSpawnDatabase, prepare_quest_corridor,
                                             resolve_creature_spawns, distance_world)
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
@@ -896,7 +897,7 @@ def _horde_nav_deliver(args: argparse.Namespace) -> None:
     pid, world = verified_live_position(initial, pid=args.pid)
     if world.map_id != 0:
         raise LiveControlError('Quest #363 navigation requires world map ID 0')
-    chosen = select_profile_from_loader(args.profiles_root, level=player.level, race='Undead')
+    chosen = select_quest_profile(args.profiles_root, level=player.level, race='Undead')
     profile = load_horde_profile(chosen)
     with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db:
         corridor = prepare_quest_corridor(profile, db, 363, world.map_id)
