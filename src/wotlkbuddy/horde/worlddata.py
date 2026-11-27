@@ -119,6 +119,11 @@ class CreatureSpawnDatabase:
             if not required <= cols:
                 raise ValueError('Invalid CreatureSpawns.db schema: spawns table lacks '
                                  + ', '.join(sorted(required - cols)))
+            self.server_snapshot=False
+            if self._conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_metadata'").fetchone():
+                metadata=dict(self._conn.execute('SELECT key,value FROM source_metadata'))
+                self.server_snapshot=metadata.get('format')=='server-tsv-v1'
+
         except Exception:
             self.close()
             raise

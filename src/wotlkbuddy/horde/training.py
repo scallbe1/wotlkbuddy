@@ -14,6 +14,19 @@ def trainer_purchase_priority(service):
     return priority.get(service.name,3),service.cost,service.index
 
 
+def refresh_trainer_services(state, *, driver, fresh, log):
+    """Do not equate a newly opened or filtered trainer list with no ranks."""
+    show=getattr(driver,'show_available_trainer_services',None)
+    if callable(show):
+        show(state)
+        log('Trainer: enabled available-spells filter; refreshing live service list')
+        for _ in range(3):
+            state=fresh(state)
+            if not state.trainer_open:
+                raise LiveControlError('Trainer closed during service refresh')
+    return state
+
+
 def train_available_mage_spells(
     *, npc_name: str, npc_id: int, capture: Callable[[], ClientTelemetry],
     driver, max_spells: int = 8,
@@ -126,7 +139,7 @@ def train_available_mage_spells(
         raise LiveControlError(
             f'{npc_name}: quest/gossip UI did not yield class trainer '
             'within bounded attempts')
-    bought=[]
+    s, bought = refresh_trainer_services(s,driver=driver,fresh=fresh,log=log), []
     for _ in range(max_spells):
         guard(s)
         if not s.trainer_open:
@@ -140,7 +153,7 @@ def train_available_mage_spells(
                 log(f'{npc_name}: cash {s.resources.money_copper}c; outstanding '+
                     ', '.join(f'{v.name} {v.rank} ({v.cost}c)' for v in eligible))
             else:
-                log(f'{npc_name}: no observed level-eligible spells remaining')
+                log(f'{npc_name}: no observed level-eligible spells in refreshed list; not proof that missing spells are learned')
             break
         available.sort(key=trainer_purchase_priority)
         choice = available[0]
