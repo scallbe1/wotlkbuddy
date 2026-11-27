@@ -17,15 +17,35 @@ from wotlkbuddy.live.control import LiveControlError
 # server are ever spent. A pre-existing mismatched build stops allocation.
 # The sequence can be extended without modifying the talent actuator.
 DPS_TALENT_ORDERS: dict[str, tuple[tuple[str,int],...]] = {
+    # 3.3.5a Frost tree, ordered so every rank is learnable when its turn
+    # comes: row k needs 5*(k-1) points spent in-tree, and the actuator
+    # never skips ahead. Precision was removed because it sits in Arcane
+    # row 2 and deadlocked the plan (5 Arcane points were never spent).
+    # Frostbite is mandatory filler (rows 1-3 top out at 14 points before
+    # the row-4 gate of 15) and passively roots with Chills; Cold as Ice,
+    # Cold Snap and Improved Cone of Cold only fill row gates.
     'MAGE': (
         ('Improved Frostbolt',5),
-        ('Ice Shards',3),
-        ('Precision',3),
+        ('Ice Shards',5),
         ('Piercing Ice',3),
         ('Icy Veins',1),
+        ('Frostbite',3),
         ('Arctic Reach',2),
         ('Frost Channeling',3),
         ('Shatter',3),
+        ('Cold as Ice',2),
+        ("Winter's Chill",5),
+        ('Ice Barrier',1),
+        ('Shattered Barrier',3),
+        ('Cold Snap',1),
+        ('Improved Cone of Cold',2),
+        ('Empowered Frostbolt',2),
+        ('Fingers of Frost',3),
+        ('Summon Water Elemental',1),
+        ('Enduring Winter',3),
+        ('Brain Freeze',3),
+        ('Chilled to the Bone',5),
+        ('Deep Freeze',1),
     ),
     'PRIEST': (
         ('Spirit Tap',5),
