@@ -240,3 +240,37 @@ def test_moving_npc_opens_window_before_return_and_retries(kind,monkeypatch):
         walk=lambda *a:pytest.fail('no movement needed'),open_window=True)
     assert patrol.npc_window_open(result)
     assert len(attempts)==2
+
+
+def test_opening_pursuit_does_not_target_on_every_distant_replan(monkeypatch):
+    import wotlkbuddy.horde.npc_patrol as patrol
+    import wotlkbuddy.horde.npc_visit as visit
+    player=NS(guid='owner',dead=False,in_combat=False,target_guid='')
+    state=NS(player=player,truncated=False,sequence=1,dialog=NS(kind='none'))
+    pos=[Vec3(0,0,0)]
+    mob=NS(entry=42,guid='mobile',health=10,position=Vec3(40,0,0))
+    calls=[]
+    def select(*args):
+        assert pos[0].distance_to(mob.position)<=6
+        calls.append('target')
+        player.target_guid='mobile'
+        return state
+    def interact():
+        calls.append('interact')
+        state.sequence+=1
+        state.dialog=NS(kind='gossip')
+    def capture():
+        return NS(**vars(state))
+    def chase(point,budget):
+        calls.append('walk')
+        pos[0]=Vec3(min(38,pos[0].x+10),0,0)
+        raise patrol.PatrolSighting(patrol.SIGHTING_REASON)
+    driver=NS(emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True,
+        awareness=NS(read=lambda *a:[mob]),interact=interact)
+    monkeypatch.setattr(patrol,'creature_entry_from_guid',lambda _:42)
+    monkeypatch.setattr(visit,'target_npc',select)
+    result=visit_patrolling_npc(points=(pos[0],mob.position),npc_name='Mobile NPC',npc_id=42,
+        pid=1,owner='owner',map_id=0,capture=capture,world_position=lambda s:(1,NS(position=pos[0],map_id=0)),
+        driver=driver,sleep=lambda _:None,now=lambda:0,log=lambda _:None,walk=chase,open_window=True)
+    assert result.dialog.kind=='gossip'
+    assert calls==['walk']*4+['target','interact']

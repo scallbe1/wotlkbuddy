@@ -141,15 +141,21 @@ def visit_known_patrol(*,npc_name,npc_id,pid,capture,driver,nav,spawns,
             driver=driver,nav=nav,spawns=spawns,sleep=sleep,now=now,
             world_position=world_position,travel=travel,log=log,
             _waypoint=point,_travel_budget=budget,_patrol_watch=watch)
-    return visit_patrolling_npc(points=points,npc_name=npc_name,npc_id=npc_id,
+    return run_patrol_with_status(driver,npc_name,lambda:visit_patrolling_npc(points=points,npc_name=npc_name,npc_id=npc_id,
         pid=pid,owner=owner,map_id=world.map_id,capture=capture,
         world_position=world_position,driver=driver,sleep=sleep,now=now,log=log,
         walk=walk,walk_search=lambda point,budget:walk(point,budget,True),
         walk_chase=lambda point,budget:walk(point,budget,'chase_open' if open_window else 'chase'),
-        open_window=open_window)
+        open_window=open_window))
 
 
-def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patrol_watch):
+def run_patrol_with_status(driver,npc_name,acquire):
+    # One label for the whole pursuit, not three chat commands per replan.
+    # Clear only after the interaction window is confirmed or pursuit fails.
+    return navigate_with_status(driver,'npc',acquire,target=npc_name)
+
+
+def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patrol_watch,patrol_leg=False):
     scan=getattr(driver,'scan_hostiles',None)
     def patrol_scan(state,where,legs):
         from wotlkbuddy.horde.npc_patrol import nearby_npc,SIGHTING_REASON,patrol_intercept_required
@@ -170,8 +176,8 @@ def walk_npc_path(path,budget,*,travel,sample,driver,nav,map_id,log,npc_id,patro
         expected_quest_id=None,expected_map_id=map_id,
         can_traverse=lambda a,b:nav.segment_clear(map_id,a,b),
         replan_path=lambda a,b:nav.find_path(map_id,a,b),
-        destination_status=getattr(driver,'set_navigation_destination',None),
-        distance_status=getattr(driver,'set_navigation_distance',None),
+        destination_status=None if patrol_leg or patrol_watch else getattr(driver,'set_navigation_destination',None),
+        distance_status=None if patrol_leg or patrol_watch else getattr(driver,'set_navigation_distance',None),
         progress=log,on_aggro=getattr(driver,'on_aggro',None),
         on_threat=patrol_scan if patrol_watch else scan,
         waypoint_spacing=18.,continuous_forward=True,
@@ -280,7 +286,7 @@ def visit_npc(
                     continue
                 def walk(p,t):
                     return walk_npc_path(p,t,travel=travel,sample=sample,driver=driver,nav=nav,
-                        map_id=world.map_id,log=log,npc_id=npc_id,patrol_watch=_patrol_watch)
+                        map_id=world.map_id,log=log,npc_id=npc_id,patrol_watch=_patrol_watch,patrol_leg=_waypoint is not None)
                 result=walk_with_elevator(
                     route, sample=sample, walk=walk,
                     nav=nav, destination=dest, map_id=world.map_id,
@@ -351,7 +357,10 @@ def visit_npc(
                 if not raw or abs(raw[0].z-measured.z)>2.5:
                     raise EncounterRouteUnavailable('NPC replan does not start on measured floor')
                 route=verified_npc_route(raw,measured.position,dest,map_id=world.map_id)
-        navigate_with_status(driver,'npc',execute_visit,target=npc_name)
+        if _waypoint is not None:
+            execute_visit()
+        else:
+            navigate_with_status(driver,'npc',execute_visit,target=npc_name)
 
     after = capture()
     after_pid, at = world_position(after)
