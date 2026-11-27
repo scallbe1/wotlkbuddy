@@ -43,3 +43,19 @@ def test_empty_export_is_rejected(tmp_path):
     with pytest.raises(ValueError,match='empty'):
         import_spawns(source,dest)
     assert not dest.exists()
+
+
+def test_server_snapshot_resolves_unique_moved_spawn_not_ambiguous(tmp_path):
+    from wotlkbuddy.horde.npc_catalog import _verified_spawn
+    source=tmp_path/'world.tsv'
+    dest=tmp_path/'world.db'
+    source.write_text('9999\t0\t100\t0\t0\n'
+                      '8888\t0\t150\t0\t0\n8888\t0\t250\t0\t0\n',encoding='utf-8')
+    import_spawns(source,dest)
+    with CreatureSpawnDatabase(dest) as db:
+        assert db.server_snapshot is True
+        args=dict(map_id=0,origin=Vec3(0,0,0),anchor=Vec3(0,0,0),radius=600)
+        assert _verified_spawn(db,entry=9999,**args)==Vec3(100,0,0)
+        assert _verified_spawn(db,entry=8888,**args) is None
+        db.server_snapshot=False
+        assert _verified_spawn(db,entry=9999,**args) is None
