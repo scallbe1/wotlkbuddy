@@ -349,11 +349,12 @@ def parse_trainer_header(parts):
     if not values:
         return count,None
     total,available,unavailable,used,headers,collapsed,unknown,enabled,complete=values
-    if (not 0<=total<=10000 or any(not 0<=v<=120 for v in values[1:7])
-            or sum((available,unavailable,used,headers,unknown))!=min(total,120)
+    if (not 0<=total<=10000 or any(not 0<=v<=total for v in values[1:7])
+            or sum((available,unavailable,used,headers,unknown)) not in (total,min(total,120))
             or collapsed>headers or count>available or enabled not in (0,1)
             or complete not in (0,1) or (complete and
-            (total>120 or count!=available or collapsed or unknown or not enabled))):
+            (sum((available,unavailable,used,headers,unknown))!=total or
+             count!=available or collapsed or unknown or not enabled))):
         raise TelemetryError('Inconsistent trainer service audit')
     return count,TrainerAudit(total,available,unavailable,used,headers,collapsed,
                               unknown,bool(enabled),bool(complete))
@@ -1109,7 +1110,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                 index, cost, level = int(parts[1]), int(parts[4]), int(parts[5])
             except ValueError as exc:
                 raise TelemetryError('Malformed trainer service') from exc
-            if (not 1 <= index <= 120 or index in trainer_services or
+            if (not 1 <= index <= (trainer_audit.total if trainer_audit else 120) or
+                    index in trainer_services or
                     not parts[2] or len(parts[2]) > 55 or len(parts[3]) > 25 or
                     not 0 <= cost <= 2000000000 or not 0 <= level <= 100):
                 raise TelemetryError('Invalid or duplicate trainer service')
