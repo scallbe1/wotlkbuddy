@@ -54,13 +54,13 @@ def recover_encounter(snapshot: ClientTelemetry, *, collect_items, target_guid,
     return snapshot
 
 
-def cast_selected_action(s, *, driver, log):
+def cast_selected_action(s, *, driver, log, quest_entry=None):
     """Issue the existing verified action policy or legacy driver fallback."""
     # Class-aware action policy: select the strongest suitable
     # learned/ready spell whose actual hotbar binding and range were
     # observed. This does not hardcode a particular quest or rank.
     from wotlkbuddy.combat.runtime import selected_action
-    action = selected_action(s)
+    action = selected_action(s,quest_entry=quest_entry) if quest_entry is not None else selected_action(s)
     cast_action = getattr(driver, 'cast_action_spell', None)
     if action is not None and callable(cast_action):
         cast_action(s, action.spell_id)
@@ -258,7 +258,7 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
         if s.player.target_guid!=target_guid or not s.combat_target or s.combat_target.dead:
             continue
         previous_health = s.combat_target.health
-        action, casted = cast_selected_action(s, driver=driver, log=log)
+        action, casted = cast_selected_action(s, driver=driver, log=log, quest_entry=expected)
         if not casted:
             if s.player.in_combat:
                 return recover(s)

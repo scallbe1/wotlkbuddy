@@ -98,7 +98,7 @@ def prepare_engagement(s, expected, *, routes, allowed_sources, unhittable_guids
                     if plan is not None:
                         remember_pack(driver,[m.position for m in plan.enemies],now())
                     routes.force_spawn_search=True
-                    log('Avoiding linked encounter; selecting another quest hunting location')
+                    log('Quest pull rejected: '+(plan.reason if plan is not None else 'no assessment')+'; selecting another quest hunting location')
                     if s.player.target_guid:
                         driver.chat('/cleartarget')
                         s=fresh(s)
