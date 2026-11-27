@@ -353,6 +353,19 @@ def mark_exhausted_hotspots(goal,visible_now,visited_guids,visited_hotspots):
             visited_hotspots.add(i)
 
 
+def guard_object_quest(s, *, driver, guid, goal, now, started, max_seconds):
+    if (driver.emergency_stop_requested() or not driver.wow_is_foreground()
+            or s.truncated or s.player.guid!=guid or s.player.dead
+            or s.resources is None or s.resources.class_token.upper()!='MAGE'):
+        raise LiveControlError('GameObject quest changed character/focus or player died')
+    if s.player.in_combat:
+        raise LiveControlError('Aggro/combat detected during encounter detour')
+    if now()-started>max_seconds:
+        raise EncounterRouteUnavailable('GameObject objective time budget exhausted; refresh next cycle')
+    if not any(q.quest_id==goal.quest_id for q in s.quests):
+        raise LiveControlError('GameObject quest disappeared from journal')
+
+
 def execute_gameobject_quest(
     *, goal: ActiveGameObjectQuest, pid: int,
     capture: Callable[[], ClientTelemetry], driver, nav,
@@ -393,16 +406,8 @@ def execute_gameobject_quest(
     no_progress=0
 
     def guard(s):
-        if (driver.emergency_stop_requested() or not driver.wow_is_foreground()
-                or s.truncated or s.player.guid!=guid or s.player.dead
-                or s.resources is None or s.resources.class_token.upper()!='MAGE'):
-            raise LiveControlError('GameObject quest changed character/focus or player died')
-        if s.player.in_combat:
-            raise LiveControlError('Aggro/combat detected during encounter detour')
-        if now()-started>max_seconds:
-            raise EncounterRouteUnavailable('GameObject objective time budget exhausted; refresh next cycle')
-        if not any(q.quest_id==goal.quest_id for q in s.quests):
-            raise LiveControlError('GameObject quest disappeared from journal')
+        guard_object_quest(s,driver=driver,guid=guid,goal=goal,now=now,
+                           started=started,max_seconds=max_seconds)
 
     def fresh(s,delay=.58):
         guard(s)
