@@ -240,10 +240,10 @@ PASSIVE_FACTIONS = frozenset({7, 15, 31, 35})
 PASSIVE_CRITTERS = frozenset({4075, 32820})  # Rat, Wild Turkey
 
 
-# Standard 3.3.5a FactionTemplate: 68/71 Undercity, 714 Horde Generic.
-# All three have Horde friendly mask and no Horde hostile mask.
+# Standard 3.3.5a FactionTemplate: 68/71 Undercity, 83/714 Horde Generic.
+# These have Horde friendly mask and no Horde hostile mask.
 # Never classify this as globally passive or authorize attacks from a hint.
-HORDE_FRIENDLY_TEMPLATES = frozenset({68, 71, 714})
+HORDE_FRIENDLY_TEMPLATES = frozenset({68, 71, 83, 714})
 HORDE_RACE_TOKENS = frozenset({'orc', 'scourge', 'undead', 'tauren', 'troll', 'bloodelf'})
 
 
