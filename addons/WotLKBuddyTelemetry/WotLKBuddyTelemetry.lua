@@ -571,7 +571,7 @@ local function trainerServiceRows()
     local total = GetNumTrainerServices() or 0
     local services = {}
     local available, unavailable, used, headers, collapsed, unknown = 0,0,0,0,0,0
-    for i=1,math.min(total,120) do
+    for i=1,math.min(total,10000) do
         local name, rank, category, expanded = GetTrainerServiceInfo(i)
         if category == 'available' and name then
             available = available + 1
@@ -590,7 +590,7 @@ local function trainerServiceRows()
     end
     local filter = GetTrainerServiceTypeFilter and GetTrainerServiceTypeFilter('available')
     local enabled = (filter==true or filter==1) and 1 or 0
-    local complete = (total<=120 and unknown==0 and available==#services and
+    local complete = (total<=10000 and unknown==0 and available==#services and
                       collapsed==0 and enabled==1) and 1 or 0
     local audit = {total,available,unavailable,used,headers,collapsed,unknown,enabled,complete}
     return services, audit
@@ -1513,7 +1513,7 @@ local function tickData()
         end
         local needed = string.len(header(#services))+1
         for _, row in ipairs(services) do needed = needed+string.len(row)+1 end
-        if payloadBytes+needed <= CAPACITY-20 then
+        if #services<=120 and payloadBytes+needed <= CAPACITY-20 then
             appendLine(header(#services))
             for _, row in ipairs(services) do appendLine(row) end
         else
