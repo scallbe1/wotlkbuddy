@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from contextlib import closing
 import hashlib
 from datetime import datetime, timezone
 from math import isfinite
@@ -44,7 +45,7 @@ def import_spawns(source, destination, *, replace=False):
     os.close(fd)
     temp=Path(name)
     try:
-        with sqlite3.connect(temp) as conn:
+        with closing(sqlite3.connect(temp)) as conn, conn:
             conn.execute('CREATE TABLE spawns (entry INTEGER NOT NULL, map_id INTEGER NOT NULL, '
                          'x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL, '
                          'UNIQUE(entry,map_id,x,y,z))')
