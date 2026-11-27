@@ -73,6 +73,10 @@ def defend_against_aggro(
     from functools import partial
     fresh=partial(fresh_defense,guard=guard,sleep=sleep,capture=capture,driver=driver)
 
+    from wotlkbuddy.combat.control_rest import finish_defensive_exchange
+    finish=partial(finish_defensive_exchange,driver=driver,fresh=fresh,log=log,
+                   resume=lambda s:defend_against_aggro(initial=s,capture=capture,driver=driver,log=log,
+                       sleep=sleep,max_casts=max_casts,max_acquire=max_acquire))
     state=initial
     guard(state)
 
@@ -82,18 +86,16 @@ def defend_against_aggro(
     critical_logged = False
     melee_target=None
     readiness_waits=0
-    # A global cast budget and bounded acquisition keep the encounter finite.
-    # A dead, cleared, or changed target is normal while adds remain alive.
     from wotlkbuddy.combat.consumables import emergency_heal
     for _ in range(max_casts):
         guard(state)
         state=emergency_heal(state,driver=driver,fresh=fresh,log=log)
         if not state.player.in_combat:
             log('Incoming combat cleared; navigation may resume')
-            return state
+            return finish(state)
         for _acquire in range(max_acquire + 1):
             if not state.player.in_combat:
-                return state
+                return finish(state)
             state,controlled_focus=linked_focus(state,driver=driver,fresh=fresh,log=log)
             if controlled_focus or (not protected_control_target(state,driver) and
                     (verified_attacker(state) or fleeing_target(state,target_guid,target_entry))):
@@ -116,7 +118,7 @@ def defend_against_aggro(
             state = face(state)
             guard(state)
             if not state.player.in_combat:
-                return state
+                return finish(state)
             if state.player.target_guid != target_guid or not (verified_attacker(state) or
                     fleeing_target(state,target_guid,target_entry) or linked_target_authorized(state,driver)):
                 target_guid = None
@@ -141,8 +143,6 @@ def defend_against_aggro(
                     log(f'Defensive spell readiness: HP {state.player.health}/{state.player.max_health}, '
                         f'mana {state.resources.mana}/{state.resources.max_mana}; '
                         f'actions {[(a.name,a.usable,a.cooldown_ms,a.in_range) for a in state.action_spells]}')
-                # Global cooldown, casts already in flight, and insufficient
-                # mana are NOT a missing key binding. Keep observing combat.
                 # A verified living aggressor is the only permissible melee
                 # target; StartAttack never moves toward it.
                 if (not (state.current_cast_remaining_ms or state.fireball_cast_remaining_ms or 0)
@@ -179,7 +179,6 @@ def defend_against_aggro(
             state = fresh(state, min(.20, max(.06, remaining/1000.0)))
         else:
             raise LiveControlError('Defensive cast did not complete')
-        # Wait for the projectile (which may land after casting finishes).
         for _impact in range(3):
             new = state.combat_target
             if (state.player.target_guid == target_guid and new and new.dead):
@@ -188,7 +187,7 @@ def defend_against_aggro(
                     remember(state)
             if not state.player.in_combat:
                 log('Incoming combat ended; verified Mage is safe to resume')
-                return state
+                return finish(state)
             if (state.player.target_guid != target_guid or new is None
                     or new.entry_id != target_entry or new.dead or new.health == 0):
                 break
@@ -201,7 +200,7 @@ def defend_against_aggro(
             if callable(remember):
                 remember(state)
         if not state.player.in_combat:
-            return state
+            return finish(state)
         if (state.player.target_guid != target_guid or new is None
                 or new.entry_id != target_entry or new.dead or new.health == 0):
             log('Attacker defeated or target changed; combat persists, reacquiring')

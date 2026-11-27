@@ -32,6 +32,28 @@ class LinkedFight:
     expires: float
     primary_dead: bool = False
     prior_kills: frozenset = frozenset()
+    remaining: tuple = ()
+    rest_attempted: bool = False
+
+
+# WotLK creature template: Scarlet Friar casts Lesser Heal.
+HEALER_ENTRIES = frozenset({1538})
+
+
+def is_healer(enemy):
+    return enemy.entry in HEALER_ENTRIES
+
+
+def healer_order(enemies, chosen):
+    """Control a healer; prioritize any remaining healer, then damage dealers."""
+    healers=sorted((e for e in enemies if is_healer(e)),
+                   key=lambda e:(e.guid==chosen.guid,e.guid))
+    if not healers or len(enemies) not in (2,3):
+        return None
+    escort=healers[0]
+    active=sorted((e for e in enemies if e.guid!=escort.guid),
+                  key=lambda e:(not is_healer(e),e.guid!=chosen.guid,e.guid))
+    return active[0],escort,tuple(active[1:])
 
 
 def exact_hostile(state, enemy):
@@ -135,9 +157,64 @@ def verified_uncontrolled_pair(state,plan,chosen,escort,escort_snapshot):
     return PullPlan(True,verified,'verified normal weaker pair; high resources')
 
 
+def prepare_healer_pull(state,plan,chosen,*,driver,awareness,quest_entries,log):
+    """Only authorize a healer pack with verified control and bounded active damage."""
+    from dataclasses import replace
+    from wotlkbuddy.horde.encounter import PullPlan
+    denied=PullPlan(False,plan.enemies,'healer pack requires verified control')
+    ordered=healer_order(plan.enemies,chosen)
+    player,resources=state.player,state.resources
+    required=(chosen.entry in quest_entries or
+              getattr(driver,'assessing_travel_corridor',False) is True or
+              isinstance(getattr(driver,'entrance_approach_guid',None),str))
+    if (not ordered or not required or player.dead or player.in_combat
+            or resources is None or awareness is None or player.health<.95*player.max_health
+            or resources.mana<.90*resources.max_mana
+            or any(e.classification not in ('normal','unknown') or e.level is None
+                   or not 0<e.level<=player.level+1 or e.health<=0 for e in plan.enemies)):
+        return state,denied
+    rules=CONTROL_RULES.get(resources.class_token.upper(),())
+    if not rules:
+        return state,denied
+    fresh=awareness._fresh
+    verified=[]
+    for enemy in plan.enemies:
+        if enemy.classification=='unknown':
+            state=select_exact(state,enemy,driver=driver,fresh=fresh,max_tabs=4)
+            if state.player.in_combat:
+                return state,None
+            if state.player.dead or not exact_hostile(state,enemy):
+                log(f'Healer pull: exact pack member not verified: {enemy.guid}')
+                return state,denied
+            t=state.combat_target
+            if t.classification!='normal' or t.level is None or not 0<t.level<=player.level+1:
+                return state,denied
+            enemy=replace(enemy,classification=t.classification,level=t.level,health=t.health)
+        verified.append(enemy)
+    primary,escort,remaining=healer_order(verified,chosen)
+    if sum(e.health for e in (primary,*remaining))>2.5*player.max_health:
+        return state,denied
+    state=select_exact(state,escort,driver=driver,fresh=fresh,max_tabs=4)
+    if state.player.in_combat:
+        return state,None
+    if state.player.dead or state.player.health<.95*state.player.max_health or state.resources.mana<.90*state.resources.max_mana:
+        return state,denied
+    for rule in rules:
+        if control_action(state,escort,rule,driver) is not None:
+            log(f'Healer pull: sheep {escort.entry} {escort.guid}; kill {primary.entry} {primary.guid} first')
+            verified_plan=PullPlan(plan.allowed,tuple(verified),plan.reason)
+            return cast_control(state,primary,escort,rule,verified_plan,denied,
+                                driver=driver,fresh=fresh,log=log,remaining=remaining)
+    log('Healer pull deferred: '+control_rejection(state,escort,rules,driver))
+    return state,denied
+
+
 def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries, log):
     """Attempt control on a required objective or verified travel-corridor pair."""
     from wotlkbuddy.horde.encounter import PullPlan
+    if any(is_healer(e) for e in plan.enemies):
+        return prepare_healer_pull(state,plan,chosen,driver=driver,awareness=awareness,
+                                   quest_entries=quest_entries,log=log)
     denied=PullPlan(False,plan.enemies,'prefer isolated enemy; nearby linked group')
     on_entrance=isinstance(getattr(driver,'entrance_approach_guid',None),str)
     on_corridor=getattr(driver,'assessing_travel_corridor',False) is True
@@ -180,7 +257,7 @@ def prepare_linked_pull(state, plan, chosen, *, driver, awareness, quest_entries
     return state,denied
 
 
-def cast_control(state, primary, escort, rule, plan, denied, *, driver, fresh, log):
+def cast_control(state, primary, escort, rule, plan, denied, *, driver, fresh, log, remaining=()):
     from wotlkbuddy.horde.encounter import PullPlan
     face=getattr(driver,'face_combat_target',None)
     if callable(face):
@@ -207,7 +284,7 @@ def cast_control(state, primary, escort, rule, plan, denied, *, driver, fresh, l
             break
         if rule.aura in state.target_auras:
             driver.linked_fight=LinkedFight(primary,escort,rule,monotonic()+rule.duration+2,
-                prior_kills=frozenset(getattr(state,'recent_kills',())))
+                prior_kills=frozenset(getattr(state,'recent_kills',())),remaining=remaining)
             log(f'Crowd control confirmed on {escort.guid}; priority target {primary.guid}')
             state=select_exact(state,primary,driver=driver,fresh=fresh)
             if exact_hostile(state,primary):
@@ -233,6 +310,11 @@ def linked_focus(state, *, driver, fresh, log):
                 g==fight.primary.guid and (serial,g,name) not in fight.prior_kills
                 for serial,g,name in getattr(state,'recent_kills',())):
         fight.primary_dead=True
+    if fight.primary_dead and fight.remaining:
+        fight.primary,*rest=fight.remaining
+        fight.remaining=tuple(rest)
+        fight.primary_dead=False
+        log(f'Priority enemy dead; keeping healer controlled, next target {fight.primary.guid}')
     if not fight.primary_dead:
         if not exact_hostile(state,fight.primary):
             state=select_exact(state,fight.primary,driver=driver,fresh=fresh,max_tabs=3)
@@ -277,6 +359,38 @@ def fleeing_target(state,guid,entry):
                 0<t.health<=.25*max(1,t.max_health))
 
 
+def reactive_healer_pull(state,primary,candidates,rules,*,driver,fresh,log):
+    """Do not sheep DPS while a verified healer is sustaining the encounter."""
+    if is_healer(primary):
+        # Verify an actual second attacker before controlling the current target.
+        for damage in sorted(candidates,key=is_healer)[:2]:
+            state=select_exact(state,damage,driver=driver,fresh=fresh,max_tabs=3)
+            if not state.player.in_combat:
+                return state
+            if not exact_hostile(state,damage) or state.combat_target.attacks_player is not True:
+                continue
+            state=select_exact(state,primary,driver=driver,fresh=fresh,max_tabs=3)
+            if not state.player.in_combat:
+                return state
+            for rule in rules:
+                if control_action(state,primary,rule,driver) is not None and state.combat_target.attacks_player is True:
+                    log(f'Reactive healer priority: control {primary.guid}; kill {damage.guid}')
+                    return reactive_cast(state,damage,primary,rule,driver=driver,fresh=fresh,log=log)
+            log('Healer control unavailable; focus the uncontrolled healer')
+            return select_exact(state,primary,driver=driver,fresh=fresh,max_tabs=3)
+        return select_exact(state,primary,driver=driver,fresh=fresh,max_tabs=3)
+    for healer in (e for e in candidates if is_healer(e)):
+        state=select_exact(state,healer,driver=driver,fresh=fresh,max_tabs=3)
+        if not state.player.in_combat:
+            return state
+        if exact_hostile(state,healer) and state.combat_target.attacks_player is True:
+            for rule in rules:
+                if control_action(state,healer,rule,driver) is not None:
+                    log(f'Reactive healer priority: control {healer.guid}; kill {primary.guid}')
+                    return reactive_cast(state,primary,healer,rule,driver=driver,fresh=fresh,log=log)
+    return select_exact(state,primary,driver=driver,fresh=fresh,max_tabs=3)
+
+
 def reactive_control(state, *, driver, fresh, log):
     """Control a verified additional attacker, preserving the original damage target."""
     awareness=getattr(driver,'awareness',None)
@@ -305,6 +419,8 @@ def reactive_control(state, *, driver, fresh, log):
     candidates=sorted((e for e in enemies if e.guid!=primary.guid and
                         e.position.distance_to(origin)<=25),
                        key=lambda e:e.position.distance_to(origin))
+    if is_healer(primary) or any(is_healer(e) for e in candidates):
+        return reactive_healer_pull(state,primary,candidates,rules,driver=driver,fresh=fresh,log=log)
     for escort in candidates[:2]:
         state=select_exact(state,escort,driver=driver,fresh=fresh,max_tabs=2)
         if not state.player.in_combat:
