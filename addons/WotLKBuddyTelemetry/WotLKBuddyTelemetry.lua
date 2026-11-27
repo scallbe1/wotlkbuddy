@@ -1587,7 +1587,7 @@ end
 -- (combat, loot, walking, casting) comes from the game itself.
 local statusFrame = CreateFrame('Frame', 'WotLKBuddyStatusHUD', UIParent)
 statusFrame:SetWidth(370)
-statusFrame:SetHeight(70)
+statusFrame:SetHeight(86)
 statusFrame:ClearAllPoints()
 -- Anchor below the RGB telemetry grid near the top center-right.
 -- Relative anchoring follows the grid across UI scales and resolutions,
@@ -1661,6 +1661,52 @@ local hudPhase = 'idle'
 local hudTravelKind = ''
 local hudTravelName = ''
 local hudActivity = ''
+-- BEGIN HUD STATIONARY WORK
+-- The timer measures age of a real Python checkpoint, not process liveness.
+local hudWorkKind, hudWorkDone, hudWorkTotal = '', 0, 0
+local hudWorkSince, hudWorkAt = 0, 0
+local workLabels = {
+    routes='Searching alternate firing positions',
+    patrol='Waiting for patrol changes (8 sec)',
+    reclaim='Evaluating resurrection sites',
+    reclaimwait='Watching for safe resurrection',
+    ghostroute='Searching alternate corpse routes'
+}
+local workText = statusFrame:CreateFontString(nil,'OVERLAY','GameFontHighlightSmall')
+workText:SetPoint('TOPLEFT',destinationText,'BOTTOMLEFT',0,-4)
+workText:SetWidth(352)
+workText:SetJustifyH('LEFT')
+workText:SetText('')
+SLASH_WOTLKBUDDYWORK1 = '/wbtwork'
+SlashCmdList['WOTLKBUDDYWORK'] = function(message)
+    local kind,done,total = string.match(message or '', '^(%a+) (%d+) (%d+)$')
+    done,total=tonumber(done),tonumber(total)
+    if not done or not total or done>9999 or total>9999 then return end
+    if kind=='clear' then
+        hudWorkKind=''
+        workText:SetText('')
+    elseif workLabels[kind] then
+        if hudWorkKind~=kind then hudWorkSince=GetTime() end
+        hudWorkKind,hudWorkDone,hudWorkTotal=kind,done,total
+        hudWorkAt=GetTime()
+        statusFrame:Show()
+    end
+end
+local function updateWorkText()
+    if hudWorkKind=='' then return end
+    local age=math.max(0,math.floor(GetTime()-hudWorkAt))
+    local duration=math.max(0,math.floor(GetTime()-hudWorkSince))
+    local count=hudWorkTotal>0 and string.format('%d/%d | ',hudWorkDone,hudWorkTotal) or ''
+    if age>=15 then
+        workText:SetText(string.format('%s%d sec | No script update for %d sec',count,duration,age))
+        workText:SetTextColor(1,0.65,0.25)
+    else
+        workText:SetText(string.format('%s%d sec | Last update %d sec ago',count,duration,age))
+        workText:SetTextColor(0.6,0.9,0.6)
+    end
+end
+-- END HUD STATIONARY WORK
+
 local hudLastAction = ''
 local hudLastActive = 0
 local phaseLabels = {
@@ -1793,7 +1839,7 @@ statusFrame:SetScript('OnUpdate', function(_, elapsed)
     goalText:SetText('Goal: ' .. string.sub(goal, 1, 65))
     local action = phaseLabels[hudPhase] or 'Standing by'
     if UnitIsDeadOrGhost('player') then
-        action = (UnitIsGhost('player') and (travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) or 'Ghost: recovering corpse')) or 'Dead: awaiting spirit release'
+        action = (UnitIsGhost('player') and (workLabels[hudWorkKind] or travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) or 'Ghost: recovering corpse')) or 'Dead: awaiting spirit release'
     elseif LootFrame and LootFrame:IsShown() then
         action = 'Looting corpse'
     elseif ClassTrainerFrame and ClassTrainerFrame:IsShown() then
@@ -1806,6 +1852,8 @@ statusFrame:SetScript('OnUpdate', function(_, elapsed)
         action = 'Channeling ' .. tostring(spell)
     elseif UnitAffectingCombat('player') then
         action = 'Combat'
+    elseif hudWorkKind~='' then
+        action=workLabels[hudWorkKind]
     elseif tacticalLabels[hudActivity] then
         action = tacticalLabels[hudActivity]
     elseif travelActionLabel(hudTravelKind, hudTravelName, hudQuestName) then
@@ -1822,6 +1870,7 @@ statusFrame:SetScript('OnUpdate', function(_, elapsed)
     elseif hudPhase == 'turnin' then
         action = 'Interacting with quest giver'
     end
+    updateWorkText()
     if action ~= hudLastAction then
         hudLastAction = action
         hudLastActive = GetTime()

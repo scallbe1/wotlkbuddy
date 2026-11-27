@@ -28,15 +28,26 @@ class HuntRouteState:
     terrain: HuntTerrain = field(default_factory=HuntTerrain)
 
 
+def wait_for_patrol_refresh(driver,sleep):
+    update=getattr(driver,'set_work_status',None)
+    if callable(update):
+        update('patrol')
+    try:
+        sleep(8)
+    finally:
+        if callable(update):
+            update('clear')
+
+
 def select_spawn_goal(s, *, routes, nearby, spec, allowed_sources, expected,
                       collect_items, rest, sleep, unhittable_guids,
-                      unhittable_positions, log):
+                      unhittable_positions, log, driver=None):
     """Refresh transient exclusions within the existing limit, retaining failed routes."""
     if not nearby and routes.refresh_rounds<2:
         routes.refresh_rounds+=1
         log('Local hunting sites exhausted; resting and expanding the profile-constrained search')
         s=rest(s)
-        sleep(8)
+        wait_for_patrol_refresh(driver,sleep)
         routes.recently_visited.clear()
         unhittable_guids.clear()
         unhittable_positions.clear()
@@ -56,7 +67,7 @@ def select_spawn_goal(s, *, routes, nearby, spec, allowed_sources, expected,
             routes.refresh_rounds+=1
             log('All nearby spawn approaches tried; waiting for patrol changes and expanding search')
             s=rest(s)
-            sleep(8)
+            wait_for_patrol_refresh(driver,sleep)
             routes.recently_visited.clear()
             unhittable_guids.clear()
             unhittable_positions.clear()
@@ -143,12 +154,18 @@ def tactical_navigate(driver,navigate,state,destination,path,kind):
 
 
 def search_remote_hunt_alternative(*,routes,world,nearby,hazards,nav,supervise,
-                                   capture,guard,clear_remaining_aggro):
+                                   capture,guard,clear_remaining_aggro,driver=None,log=lambda _:None):
     """Search remaining staging locations under the same live guard."""
+    from time import monotonic
+    started=monotonic()
+    update=getattr(driver,'set_work_status',None)
+    def progress(done,total):
+        if callable(update):
+            update('routes',done,total)
     try:
         candidates=[p for p in nearby if routes.recently_visited.get((round(p.x),round(p.y),round(p.z)),0)<2][:6]
         alternatives=alternate_hunt_routes(nav,world.map_id,world.position,candidates,hazards,
-            routes.recently_visited,excluded_staging=routes.staging_visited,guard=supervise)
+            routes.recently_visited,excluded_staging=routes.staging_visited,guard=supervise,progress=progress)
         supervise()
         if alternatives:
             return alternatives[0],False
@@ -158,6 +175,10 @@ def search_remote_hunt_alternative(*,routes,world,nearby,hazards,nav,supervise,
         if current.player.in_combat:
             clear_remaining_aggro(current)
         return None,True
+    finally:
+        if callable(update):
+            update('clear')
+        log(f'Alternate firing-position search finished after {monotonic()-started:.1f}s')
     # An exhaustive search from the same position will not improve by
     # blacklisting one remote spawn at a time. Refresh live patrols instead.
     raise EncounterRouteUnavailable('No verified alternate corridor; reobserve patrols before retry')
@@ -224,7 +245,7 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             try:
                 return search_remote_hunt_alternative(routes=routes,world=world,nearby=nearby,
                     hazards=hazards,nav=nav,supervise=supervise,capture=capture,guard=guard,
-                    clear_remaining_aggro=clear_remaining_aggro)
+                    clear_remaining_aggro=clear_remaining_aggro,driver=driver,log=log)
             except EncounterRouteUnavailable:
                 pass
     except RouteCombatInterrupted:
@@ -309,7 +330,7 @@ def find_hunt_alternative(s, *, routes, world, staging, nearby, hazards, driver,
             continue
     return search_remote_hunt_alternative(routes=routes,world=world,nearby=nearby,
         hazards=hazards,nav=nav,supervise=supervise,capture=capture,guard=guard,
-        clear_remaining_aggro=clear_remaining_aggro)
+        clear_remaining_aggro=clear_remaining_aggro,driver=driver,log=log)
 
 
 def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_camp,

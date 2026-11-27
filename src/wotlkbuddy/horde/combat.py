@@ -322,7 +322,7 @@ def _run_hunt(*, services, profile, quest_id, pid, capture, driver, nav, spawns,
             s, routes=routes, nearby=nearby, spec=spec, allowed_sources=allowed_sources,
             expected=expected, collect_items=collect_items, rest=rest, sleep=sleep,
             unhittable_guids=unhittable_guids, unhittable_positions=unhittable_positions,
-            log=log)
+            log=log, driver=driver)
         if goal is None:
             continue
         run_spawn_route(
