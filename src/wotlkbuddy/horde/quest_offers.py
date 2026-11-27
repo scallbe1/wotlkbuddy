@@ -12,6 +12,7 @@ from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
+from wotlkbuddy.horde.aggro_recovery import guard_interaction_aggro
 from wotlkbuddy.horde.profile import HordeProfile, condition_value
 
 
@@ -79,6 +80,12 @@ def filter_recovery_offers(visible, profile, npc_id, allowed_quest_ids):
     return [o for o in visible if o.title in titles]
 
 
+def interaction_capture(capture,guid,driver,log):
+    state=capture()
+    guard_interaction_aggro(state,owner=guid,driver=driver,capture=capture,log=log)
+    return state
+
+
 def accept_npc_offers(
     *, npc_name: str, npc_id: int, capture: Callable[[], ClientTelemetry],
     driver, max_quests: int = 4, profile: HordeProfile | None = None,
@@ -95,10 +102,9 @@ def accept_npc_offers(
     accepted = []
 
     def guard(s: ClientTelemetry):
-        if (s.truncated or s.player.guid != guid or s.player.dead or
-                s.player.in_combat or s.player.target_name != npc_name or
-                creature_entry_from_guid(s.player.target_guid) != npc_id or
-                driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+        guard_interaction_aggro(s,owner=guid,driver=driver,capture=capture,log=log)
+        if (s.player.target_name != npc_name or
+                creature_entry_from_guid(s.player.target_guid) != npc_id):
             raise LiveControlError(f'NPC {npc_name} or player changed during quest acceptance')
 
     def fresh(previous: ClientTelemetry, *, timeout=7) -> ClientTelemetry:
@@ -116,7 +122,7 @@ def accept_npc_offers(
 
     def dismiss() -> ClientTelemetry:
         return dismiss_quest_dialog(
-            capture=capture, driver=driver, expected_guid=guid,
+            capture=lambda: interaction_capture(capture,guid,driver,log), driver=driver, expected_guid=guid,
             sleep=sleep, now=now, log=log)
 
     for _ in range(max_quests):

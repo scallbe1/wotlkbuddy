@@ -3,9 +3,38 @@ from time import monotonic, sleep as real_sleep
 from wotlkbuddy.live.control import LiveControlError
 
 
+class NpcInteractionInterrupted(LiveControlError):
+    """Confirmed interaction-triggered combat resolved; refresh the journal."""
+
+
+def guard_interaction_aggro(state, *, owner, driver, capture, log):
+    """Combat takes precedence over the now-stale quest giver identity."""
+    if (state.truncated or not owner or state.player.guid!=owner or state.player.dead
+            or driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+        raise LiveControlError('Unsafe player identity/focus during NPC interaction')
+    if not state.player.in_combat:
+        return
+    log('Aggro began during verified NPC interaction; switching immediately to defensive combat')
+    defend=getattr(driver,'on_aggro',None)
+    if not callable(defend):
+        raise LiveControlError('Aggro began during verified NPC interaction')
+    defend(state)
+    after=capture()
+    if (after.truncated or after.player.guid!=owner or
+            driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+        raise LiveControlError('Unsafe player identity/focus after NPC interaction combat')
+    if after.player.dead or after.player.in_combat:
+        raise LiveControlError('Aggro began during verified NPC interaction; combat unresolved or death')
+    # Never resume an old quest panel, target GUID or AcceptQuest command.
+    # The next phase reads the actual journal, including any kill credit.
+    log('Interaction-triggered combat cleared; refreshing live quest journal before further dialogue')
+    raise NpcInteractionInterrupted('NPC interaction combat cleared; refresh quest journal')
+
+
 def recoverable_aggro_error(exc):
     text=str(exc)
     return any(marker in text for marker in (
+        'Aggro began during verified NPC interaction',
         'Aggro persists but no exact living attacker could be verified',
         'Aggro unresolved before starting quest phase',
         'Combat or death present; navigation is not a combat routine',

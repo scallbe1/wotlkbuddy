@@ -85,3 +85,12 @@ def test_no_safe_reclaim_remains_ghost_without_consuming_death_budget(monkeypatc
     s.recover_phase(LiveControlError('initial death'),1)
     assert s.recoveries==0
     assert s.steps[-1]['action']=='ghost_wait'
+
+
+@pytest.mark.parametrize('mode',['objectives','quests'])
+def test_interaction_combat_cleared_refreshes_next_cycle_without_route_wait(mode):
+    from wotlkbuddy.horde.aggro_recovery import NpcInteractionInterrupted
+    s=session(progress=Mock(side_effect=NpcInteractionInterrupted('journal refresh')))
+    assert s.guarded_phase(mode,1) is None
+    s.recover.assert_not_called()
+    assert s.steps==[{'cycle':1,'action':'interaction_combat_cleared','reason':'journal refresh'}]

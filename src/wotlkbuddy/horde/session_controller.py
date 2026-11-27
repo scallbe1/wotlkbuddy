@@ -11,6 +11,7 @@ from typing import Callable
 from wotlkbuddy.live.control import LiveControlError, WindowsKeyboard
 from wotlkbuddy.live.capture import capture_monitor
 from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+from wotlkbuddy.horde.aggro_recovery import NpcInteractionInterrupted
 from wotlkbuddy.horde.session_activity import Activity, ActivityGate
 
 
@@ -132,6 +133,8 @@ class QuestSession:
     def guarded_phase(self, mode: str, cycle: int) -> dict | None:
         try:
             return self.phase(mode)
+        except NpcInteractionInterrupted as exc:
+            self.steps.append({'cycle':cycle,'action':'interaction_combat_cleared','reason':str(exc)})
         except EncounterRouteUnavailable as exc:
             with self.activity.claim(Activity.ROUTE_WAIT):
                 self.retry_blocked_route(exc, cycle)
