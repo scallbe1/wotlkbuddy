@@ -9,6 +9,11 @@ from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 
 
+def trainer_purchase_priority(service):
+    priority={'Frostbolt':0,'Frost Nova':1,'Polymorph':2}
+    return priority.get(service.name,3),service.cost,service.index
+
+
 def train_available_mage_spells(
     *, npc_name: str, npc_id: int, capture: Callable[[], ClientTelemetry],
     driver, max_spells: int = 8,
@@ -137,7 +142,7 @@ def train_available_mage_spells(
             else:
                 log(f'{npc_name}: no observed level-eligible spells remaining')
             break
-        available.sort(key=lambda v: (v.cost, v.index))
+        available.sort(key=trainer_purchase_priority)
         choice = available[0]
         next_frame = fresh(s)
         if (not next_frame.trainer_open or
