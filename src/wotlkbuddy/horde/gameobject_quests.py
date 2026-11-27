@@ -215,6 +215,10 @@ def object_retreat_route(driver,nav,map_id,origin,anchors,*,sample,guard,log):
 
 def travel_object_segment(waypoints,*,destination,world,driver,nav,travel,sample,
                           goal,map_id,remaining,sleep,now,log):
+    # A short path returned by Detour may still end across blocked geometry.
+    # Reject it before dispatch so the caller can try a different object/hotspot.
+    if len(waypoints)==2 and not nav.segment_clear(map_id,waypoints[0],waypoints[1]):
+        raise EncounterRouteUnavailable('Short GameObject route blocked by navmesh geometry')
     status=getattr(driver,'set_navigation_distance',None)
     if callable(status):
         status(destination,world.position)
