@@ -70,6 +70,32 @@ def verified_npc_route(raw,start,dest, *, map_id=None):
         raise
 
 
+def patrol_hazard_positions(awareness, state, measured):
+    """Reuse live hostility and race-aware classification during a detour wait."""
+    _, enemies, unknown = awareness.survey(state, measured, probe=False)
+    return [m.position for m in (*enemies, *unknown)
+            if abs(m.position.z-measured.z)<=8]
+
+
+def bounded_position_jump(reason):
+    """Only modest, explicitly measured forward jumps may be re-anchored once."""
+    import re
+    match = re.match(r'^Implausible world jump during forward movement: (\d+\.\d+)y in ', str(reason))
+    return bool(match and 0 < float(match.group(1)) <= 40)
+
+
+def confirm_stopped_position(sample, sleep, reason):
+    state, measured = sample()
+    if bounded_position_jump(reason):
+        sleep(.25)
+        state2, second = sample()
+        if (state.player.dead or state.player.in_combat or state2.player.dead
+                or state2.player.in_combat or measured.position.distance_to(second.position)>1.5):
+            raise LiveControlError('Position did not stabilize after unexpected movement')
+        return state2, second
+    return state, measured
+
+
 def _wait_for_patrol_route(*, driver, nav, map_id, dest, rejected, guard_retry,
                            supervise, sleep, log):
     """Refresh observed patrol positions while searching for a safe detour."""
@@ -84,9 +110,7 @@ def _wait_for_patrol_route(*, driver, nav, map_id, dest, rejected, guard_retry,
             for _tick in range(10):
                 sleep(.2)
                 state,measured=supervise()
-            from wotlkbuddy.live.world_position import passive_creature
-            live=[m.position for m in awareness.read(state,measured.position)
-                  if not passive_creature(m) and abs(m.position.z-measured.z)<=8]
+            live=patrol_hazard_positions(awareness,state,measured)
             if not live:
                 # Fresh stationary threat scan still runs before moving.
                 raw=nav.find_path(map_id,measured.position,dest)
@@ -230,10 +254,10 @@ def visit_npc(
                 if reason=='complete':
                     return result
                 blocked=unsafe_route_encounter(reason)
-                encounter=blocked or encounter_route_failure(reason)
+                encounter=blocked or encounter_route_failure(reason) or (encounter_replans == 0 and bounded_position_jump(reason))
                 if not encounter and not height_route_failure(reason):
                     raise LiveControlError(f'NPC visit to {npc_name} stopped: {reason}')
-                state,measured=sample()
+                state,measured=confirm_stopped_position(sample,sleep,reason)
                 if (state.player.dead or driver.emergency_stop_requested() or not driver.wow_is_foreground()):
                     raise LiveControlError(f'Unsafe state after interrupted NPC route: {reason}')
                 if state.player.in_combat:

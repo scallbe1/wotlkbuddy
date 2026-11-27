@@ -202,7 +202,7 @@ def test_friendly_undercity_and_horde_generic_do_not_block_trainer_route():
     assert result == state[0] and not commands
 
 
-@pytest.mark.parametrize('faction', [71, 714])
+@pytest.mark.parametrize('faction', [71, 83, 714])
 @pytest.mark.parametrize('race, expected', [('Scourge', True), ('Human', False), ('', False)])
 def test_trainer_route_faction_hints_require_horde_identity(faction, race, expected):
     from wotlkbuddy.live.world_position import passive_creature
@@ -210,7 +210,7 @@ def test_trainer_route_faction_hints_require_horde_identity(faction, race, expec
     assert passive_creature(mob, race_token=race) is expected
 
 
-@pytest.mark.parametrize('faction', [71, 714])
+@pytest.mark.parametrize('faction', [71, 83, 714])
 def test_live_hostile_reaction_overrides_trainer_route_faction_hint(faction):
     row = NearbyCreature(G1, ENTRY, Vec3(12, 0, 0), 137, faction)
     state, commands, awareness, where, _ = setup((row,))
@@ -220,4 +220,31 @@ def test_live_hostile_reaction_overrides_trainer_route_faction_hint(faction):
                                              health=137, reaction=2, attackable=True, dead=False))
     _, enemies, unknown = awareness.survey(state[0], where)
     assert [e.guid for e in enemies] == [G1] and not unknown
+    assert not commands
+
+
+def test_venya_marthand_is_friendly_and_not_a_route_hazard():
+    from wotlkbuddy.horde.npc_visit import patrol_hazard_positions
+    rows = (NearbyCreature('0xF130001623003B50',5667,Vec3(24.1,0,0),100,83,10),
+            NearbyCreature('0xF130000854000590',2132,Vec3(21,0,0),100,68,25))
+    state, commands, awareness, where, driver = setup(rows)
+    driver.awareness = awareness
+    assert patrol_hazard_positions(awareness,state[0],where) == []
+    result = scan_and_clear_hostiles(initial=state[0],player_position=where,
+        path_ahead=(Vec3(30,0,0),),capture=lambda:state[0],driver=driver,
+        target_position=lambda s:Vec3(0,0,0),sleep=lambda _:None,
+        detection_yards=35,corridor_yards=18)
+    assert result == state[0] and not commands
+
+
+def test_patrol_wait_keeps_unknown_and_exact_hostile_hazards():
+    from wotlkbuddy.horde.npc_visit import patrol_hazard_positions
+    rows = (NearbyCreature(G1,ENTRY,Vec3(12,0,0),137,83),
+            NearbyCreature(G3,1525,Vec3(24,0,0),120,9999))
+    state, commands, awareness, where, _ = setup(rows)
+    s = state[0]
+    state[0] = replace(s,player=replace(s.player,target_guid=G1,target_name='Hostile'),
+        combat_target=replace(s.combat_target,entry_id=ENTRY,health=137,
+                              reaction=2,attackable=True,dead=False))
+    assert patrol_hazard_positions(awareness,state[0],where) == [m.position for m in rows]
     assert not commands
