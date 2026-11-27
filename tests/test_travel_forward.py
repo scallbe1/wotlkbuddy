@@ -63,3 +63,24 @@ def test_forward_burst_is_bounded_even_when_position_does_not_change():
     assert 2 <= elapsed <= 2.03
     assert not interrupted and steering == 0
     args['travel_input'].key_up.assert_called_once_with(_MOVEMENT_SCANCODES['forward'])
+
+
+def test_living_route_burst_crosses_waypoints_without_releasing_forward():
+    from wotlkbuddy.live.travel_forward import ghost_route_burst
+    clock=[0.]
+    args=context(now=lambda:clock[0],sleep=lambda dt:clock.__setitem__(0,clock[0]+dt))
+    args['fast_observe']=lambda *a:(position(x=min(30,clock[0]*7)),False)
+    result=ghost_route_burst(position(),(Vec3(0,0,0),Vec3(8,0,0),Vec3(16,0,0),Vec3(24,0,0)),
+        1,object(),**args,living=True)
+    assert result[0]>=3
+    assert not result[2]
+    args['travel_input'].key_down.assert_called_once_with(_MOVEMENT_SCANCODES['forward'])
+    args['travel_input'].key_up.assert_called_once_with(_MOVEMENT_SCANCODES['forward'])
+
+
+def test_living_route_burst_releases_for_new_hazard():
+    from wotlkbuddy.live.travel_forward import ghost_route_burst
+    args=context(fast_observe=Mock(side_effect=[(position(),False),(position(),True)]))
+    result=ghost_route_burst(position(),(Vec3(0,0,0),Vec3(10,0,0)),1,object(),**args,living=True)
+    assert result==(1,0,'passive hazard')
+    args['travel_input'].key_up.assert_called_once_with(_MOVEMENT_SCANCODES['forward'])
