@@ -462,10 +462,7 @@ def scan_and_clear_hostiles(
     before_hp=target.health
     before_quests = state.quests
     from wotlkbuddy.combat.runtime import selected_action
-    ability=selected_action(state)
-    fireball=next((a for a in state.action_spells if a.name=='Fireball' and a.usable and a.in_range is True and a.cooldown_ms==0),None)
-    if fireball is not None:
-        ability=fireball
+    ability=selected_action(state, opening=True)
     cast_action=getattr(driver,'cast_action_spell',None)
     if ability is not None and callable(cast_action):
         cast_action(state,ability.spell_id)
