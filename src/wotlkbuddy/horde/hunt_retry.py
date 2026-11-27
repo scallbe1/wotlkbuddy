@@ -31,7 +31,7 @@ class HuntRouteState:
 def wait_for_patrol_refresh(driver,sleep):
     update=getattr(driver,'set_work_status',None)
     if callable(update):
-        update('patrol',0,8)
+        update('patrol')
     try:
         sleep(8)
     finally:
