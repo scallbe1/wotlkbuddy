@@ -327,6 +327,14 @@ class KeyboardQuestInput:
             'reliably reconciled visible bar slots with GetActionInfo. '
             'No PickupSpell or PlaceAction input was sent.')
 
+    def cast_frost_nova(self, snapshot: ClientTelemetry, spell_id: int) -> None:
+        """Self-centered instant AoE; geometry is verified by the kite planner."""
+        from wotlkbuddy.combat.frost_kite import nova_ready, retreat_geometry
+        action=nova_ready(snapshot,self)
+        if action is None or action.spell_id!=spell_id or not retreat_geometry(snapshot,self,initial=True):
+            raise LiveControlError('Frost Nova readiness or retreat geometry not verified')
+        self._tap(_DIGITS[action.key])
+
     def cast_fireball(self, snapshot: ClientTelemetry) -> None:
         """Use a fast bound bar key only when live addon verified Fireball there.
 
