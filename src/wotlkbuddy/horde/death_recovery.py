@@ -64,6 +64,17 @@ def wait_death_transition(*, observe, guard, predicate, seconds, now, sleep, log
     raise LiveControlError('Timed out waiting for verified death recovery transition; no further input sent')
 
 
+def watch_reclaim_with_status(*, work, sample, **kwargs):
+    """Refresh the HUD only after a verified ghost observation returns."""
+    work('reclaimwait')
+    def observe():
+        state,position=sample()
+        if state.player.dead and state.death_state.ghost:
+            work('reclaimwait')
+        return state,position
+    return watch_reclaim_window(sample=observe,**kwargs)
+
+
 def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
                        read_spawn_hints, scout_surroundings, sleep, now, log, breadcrumbs,
                        work=lambda *args: None):
@@ -78,8 +89,7 @@ def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
     if in_reclaim_ring(position.position,corpse) and acceptable_site(position.position,corpse,tuple(read_hazards(state,corpse))):
         local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
         log(f'Current site: {len(local)} potential attackers; checking patrol opening')
-        work('reclaimwait')
-        chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
+        chosen = watch_reclaim_with_status(work=work,sample=observe,read_hazards=read_hazards,
             corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
             patrol_seconds=8 if len(local)>2 else 24)
         attempted.append(position.position)
@@ -137,8 +147,7 @@ def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
             scouted.append(position.position)
             local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
             log(f'Scouted site: {len(local)} potential attackers; watching for opening')
-            work('reclaimwait')
-            chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
+            chosen = watch_reclaim_with_status(work=work,sample=observe,read_hazards=read_hazards,
                 corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
                 patrol_seconds=8 if len(local)>2 else 24)
             if chosen is not None:
@@ -151,20 +160,20 @@ def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
             attempted.clear()
             state, position = observe()
             if in_reclaim_ring(position.position,corpse):
-                work('reclaimwait')
-                chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
+                chosen = watch_reclaim_with_status(work=work,sample=observe,read_hazards=read_hazards,
                     corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log)
     if chosen is not None:
         return chosen,False
     work('reclaim')
     chosen=find_fallback_site(observe=observe,walk=walk,corpse=corpse,corpse_map=corpse_map,
         nav=nav,read_hazards=read_hazards,scouted=scouted,scout_surroundings=scout_surroundings,
-        breadcrumbs=breadcrumbs,sleep=sleep,now=now,log=log)
+        breadcrumbs=breadcrumbs,sleep=sleep,now=now,log=log,work=work)
     return chosen,chosen is not None
 
 
 def find_fallback_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
-                       scouted, scout_surroundings, breadcrumbs, sleep, now, log):
+                       scouted, scout_surroundings, breadcrumbs, sleep, now, log,
+                       work=lambda *args:None):
     """Only after the zero-threat search fails, revisit the best escape site."""
     state,position=observe()
     hazards=tuple(read_hazards(state,corpse))
@@ -176,6 +185,7 @@ def find_fallback_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
         if any(point.distance_to(p)<2 for p in checked):
             continue
         checked.append(point)
+        work('reclaim',min(len(checked),8),8)
         if len(checked)>8:
             break
         state,position=observe()
@@ -198,7 +208,7 @@ def find_fallback_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
         if reclaim_escape_path(nav,corpse_map,position.position,hazards,route_hints=breadcrumbs) is None:
             continue
         log('Reclaim fallback: checking stable opening with at most one distant attacker and a verified escape route')
-        chosen=watch_reclaim_window(sample=observe,read_hazards=read_hazards,
+        chosen=watch_reclaim_with_status(work=work,sample=observe,read_hazards=read_hazards,
             corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
             patrol_seconds=8,reclaim_seconds=30,fallback=True)
         if chosen is not None:
