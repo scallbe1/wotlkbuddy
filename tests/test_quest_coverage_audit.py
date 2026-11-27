@@ -27,3 +27,18 @@ def test_reconcile_observed_and_unknown_quest_status():
     assert rows[2]['issues']==['objective count differs: 1 XML vs 2 live']
     assert audit['active_outside_profile'][0]['quest_id']==99
     assert rows[4]['pickups'][0]['entry']==100
+
+
+def test_live_status_argument_registration_and_default_profile_root():
+    import argparse
+    from pathlib import Path
+    from wotlkbuddy.cli import _register_live_status
+
+    parser = argparse.ArgumentParser()
+    _register_live_status(parser.add_subparsers(dest='command', required=True))
+    args = parser.parse_args(['live-status', '--quest-audit', '--countdown', '0'])
+    assert args.quest_audit
+    assert Path(args.profiles_root) == Path.home() / 'Questing-profiles'
+    assert args.countdown == 0
+    assert not parser.parse_args(['live-status']).quest_audit
+    assert parser.parse_args(['live-status', '--profiles-root', 'custom']).profiles_root == 'custom'
