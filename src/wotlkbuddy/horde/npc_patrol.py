@@ -113,7 +113,10 @@ def visit_patrolling_npc(*, points, npc_name, npc_id, pid, owner, map_id,
     log(f'{npc_name}: searching server patrol ({len(points)} waypoints); separate approach and sweep budgets')
     chase_attempts = 0
     checked = 0
-    for point in (*ordered, None):
+    index=0
+    interruptions=0
+    while index<=len(ordered):
+        point=ordered[index] if index<len(ordered) else None
         while now() < deadline - 15:
             state, where = observe()
             mob = nearby_npc(state, where, driver, npc_id)
@@ -145,26 +148,18 @@ def visit_patrolling_npc(*, points, npc_name, npc_id, pid, owner, map_id,
         if not reached:
             log(f'{npc_name}: checking server waypoint {points.index(point)+1}/{len(points)}')
             try:
-                walk_patrol_leg(point,walk=search_walk,observe=observe,deadline=deadline,
+                walk_patrol_leg(point,walk=search_walk if interruptions<3 and chase_attempts<12 else walk,
+                                observe=observe,deadline=deadline,
                                 now=now,log=log,npc_name=npc_name)
                 reached = True
             except PatrolSighting:
-                # The next observation reacquires exact entry/GUID and current XYZ.
-                log(f'{npc_name}: live sighting interrupted patrol travel; reacquiring')
-                if not sweep_started:
-                    deadline=now()+patrol_sweep_budget(points)
-                    sweep_started=True
-                # Recheck the interrupted waypoint after the chase if necessary.
-                state, where = observe()
-                mob=nearby_npc(state,where,driver,npc_id)
-                if mob is not None and chase_attempts < 12:
-                    try:
-                        walk_patrol_leg(mob.position,walk=walk,observe=observe,deadline=deadline,
-                                        now=now,log=log,npc_name=npc_name)
-                    except EncounterRouteUnavailable:
-                        pass
+                interruptions+=1
+                log(f'{npc_name}: live sighting interrupted patrol travel; reacquiring before resuming same waypoint')
+                continue
             except EncounterRouteUnavailable as exc:
                 log(f'{npc_name}: patrol waypoint unavailable: {exc}')
+        index+=1
+        interruptions=0
         if reached:
             checked += 1
             if not sweep_started:
