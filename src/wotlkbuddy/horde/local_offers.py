@@ -22,6 +22,15 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
         givers=sorted(givers,key=lambda g:g.distance)
         givers=[g for g in givers if now()-memory.get(
             (state.player.guid,state.player.level,g.entry),float('-inf'))>=180]
+    recovery=None
+    if local:
+        from wotlkbuddy.horde.missed_quests import recovery_offers
+        candidates=recovery_offers(profile,state,current,db,memory,now=now())
+        if candidates:
+            recovery=candidates[0]
+            givers=[recovery.giver]
+            log(f'Quest catch-up: checking earlier quests {sorted(recovery.quest_ids)} '
+                f'at {recovery.giver.name}, {recovery.giver.distance:.0f}y away')
     log(f'{"Local quest sweep" if local else "Unresolved, reachable profile quest givers"}: {len(givers)} eligible NPCs')
     accepted={}
     if not givers:
@@ -30,13 +39,13 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
     for giver in givers[:4 if local else 12]:
         before,where=location()
         if local and (len(before.quests)>=23 or
-                where.position.distance_to(giver.position)>160):
+                where.position.distance_to(giver.position)>(600 if recovery else 160)):
             continue
         hud.set(goal=f'Accept quests from {giver.name}',action='Navigating to quest giver')
         log(f'Profile quest giver: {giver.name} ({giver.entry}) from {giver.source}')
         try:
             visit_npc(npc_name=giver.name,npc_id=giver.entry,pid=pid,capture=cap,
-                driver=driver,nav=nav,spawns=db,radius=240,
+                driver=driver,nav=nav,spawns=db,radius=600 if recovery else 240,
                 destination_hint=giver.position,log=log)
         except (NpcTargetUnavailable,EncounterRouteUnavailable) as exc:
             if not local:
@@ -52,7 +61,8 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
             slots=max(0,23-len(cap().quests)) if local else 4
             if slots:
                 accepted[giver.name]=accept_npc_offers(npc_name=giver.name,npc_id=giver.entry,
-                    capture=cap,driver=driver,max_quests=min(4,slots),profile=profile,log=log)
+                    capture=cap,driver=driver,max_quests=min(4,slots),profile=profile,log=log,
+                    **({'allowed_quest_ids':recovery.quest_ids} if recovery else {}))
         if local:
             memory[(before.player.guid,before.player.level,giver.entry)]=now()
     return accepted
