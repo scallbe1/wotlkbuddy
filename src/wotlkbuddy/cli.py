@@ -313,8 +313,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
             for src in objective.sources if src.kind=='mob' and src.name})
         driver.awareness.names.update({step.entry:step.npc_name
             for step in quest_profile.steps if step.entry and step.npc_name})
-        log(f'NPC services and quest profile: {quest_profile.name}')
-        log(f'Profile source: {chosen}')
+        log(f'NPC services and quest profile: {quest_profile.name}; source: {chosen}')
         with CreatureSpawnDatabase(resolve_creature_spawns(args.spawns_db)) as db, \
                 NavigationProxy(py32, dll) as nav:
             # Detour's *walking* segment clearance is a negative cave-wall
