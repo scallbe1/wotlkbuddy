@@ -144,15 +144,16 @@ def run_route(services, *, distance_status, destination_status, on_threat,
     smooth_forward = services.smooth_forward
     recover_collision, recover_around_wall = services.recover_collision, services.recover_around_wall
     right_sign, turn_rate = services.right_sign, services.turn_rate
-    # HUD input is sent only with movement keys released, and is throttled
-    # to avoid slowing every short Detour step. Coordinates stay unchanged.
-    last_hud_position=state.world.position
-    if distance_status is not None:
-        guard()
-        distance_status(destination,state.world.position)
-    elif destination_status is not None:
+    # Publish the destination once, before movement. Never interrupt a
+    # route to type HUD-only distance updates. Live XYZ remains available
+    # to steering, encounter checks, and the console progress log.
+    if destination_status is not None:
         guard()
         destination_status(destination)
+    elif distance_status is not None:
+        # Legacy callers may publish one initial distance snapshot only.
+        guard()
+        distance_status(destination,state.world.position)
     if on_threat is not None:
         state.current, state.world = checked(force_scan=True)
     if continuous_forward and fast_observe is not None:
@@ -166,11 +167,6 @@ def run_route(services, *, distance_status, destination_status, on_threat,
                f'({waypoint.x:.2f},{waypoint.y:.2f},{waypoint.z:.2f}) toward goal '
                f'({destination.x:.2f},{destination.y:.2f},{destination.z:.2f}); '
                f'{state.world.position.distance_to(destination):.1f}y away')
-        if (distance_status is not None and
-                state.world.position.distance_to(last_hud_position)>=15):
-            guard()
-            distance_status(destination,state.world.position)
-            last_hud_position=state.world.position
         if (ghost_only and continuous_forward and fast_observe is not None
                 and services.ghost_route_burst is not None):
             before=state.world
