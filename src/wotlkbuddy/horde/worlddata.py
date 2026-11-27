@@ -1,6 +1,6 @@
 """Read-only NPC-spawn lookup and quest corridor preparation.
 
-Likon69/CopilotBuddy datadb/CreatureSpawns.db provides creature positions,
+WotLKBuddy datadb/CreatureSpawns.db provides server-derived creature positions,
 not path traversability. Likon69/Questing-profiles provides world XYZ for
 quest order NPCs. Always keep WORLD coordinates separate from UI map fractions.
 """
@@ -21,14 +21,18 @@ from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.profile import HordeProfile
 
 
-# Pinned to the exact upstream Git blob rather than an unversioned master URL.
-# The 16 MB upstream binary does not advertise a redistribution license, so
-# it is obtained directly from its author at runtime, never redistributed.
-SPAWNS_REPO_REVISION = 'c0cc1fcac7afd9095b409065497ff58048005d46'
-SPAWNS_GIT_BLOB_SHA = '6bb5578e8269d113574bbbdf9c3283d14d418733'
-SPAWNS_SIZE = 16_130_048
-SPAWNS_URL = (f'https://raw.githubusercontent.com/Likon69/CopilotBuddy/'
+# The repository's server-derived snapshot is the default. Installed wheels
+# without the checkout can fetch this exact version, not a moving branch.
+SPAWNS_REPO_REVISION = '774699dc5e4a20e4a9e7bdaf0a85a4e913d24588'
+SPAWNS_GIT_BLOB_SHA = 'e4312aa70536246ffdd9fd7b54fd5f66a7a17ed1'
+SPAWNS_SIZE = 15_572_992
+SPAWNS_URL = (f'https://raw.githubusercontent.com/scallbe1/wotlkbuddy/'
               f'{SPAWNS_REPO_REVISION}/datadb/CreatureSpawns.db')
+
+
+def repository_spawn_path() -> Path:
+    """Locate the data adjacent to this source checkout, not the working directory."""
+    return Path(__file__).resolve().parents[3] / 'datadb' / 'CreatureSpawns.db'
 
 
 def _valid_upstream_blob(path: Path) -> bool:
@@ -44,11 +48,12 @@ def _valid_upstream_blob(path: Path) -> bool:
 
 def resolve_creature_spawns(explicit: str | Path | None = None, *,
                             home: Path | None = None) -> Path:
-    """Find a local copy or fetch the pinned upstream DB into a persistent cache.
+    """Find the native checkout snapshot or fetch its pinned version into a cache.
 
     An explicitly provided path is always respected and NEVER downloaded into.
-    Reuse the existing CopilotBuddy checkout when present, else a verified
-    cache. Downloads are bounded, verified, and atomically moved into place.
+    Prefer the WotLKBuddy checkout, then a verified native cache. Downloads
+    are bounded, verified, and atomically moved into place. Other servers
+    can supply their own database explicitly.
     """
     if explicit is not None:
         path = Path(explicit).expanduser().resolve()
@@ -56,9 +61,9 @@ def resolve_creature_spawns(explicit: str | Path | None = None, *,
             raise FileNotFoundError(f'--spawns-db file not found: {path}')
         return path
     root = Path.home() if home is None else Path(home)
-    existing = root / 'CopilotBuddy' / 'datadb' / 'CreatureSpawns.db'
+    existing = repository_spawn_path()
     if existing.is_file():
-        return existing.resolve()   # existing user-supplied file; schema checked by reader
+        return existing.resolve()   # schema checked by reader
     cached = root / '.cache' / 'wotlkbuddy' / 'CreatureSpawns.db'
     if _valid_upstream_blob(cached):
         return cached.resolve()
@@ -80,7 +85,7 @@ def resolve_creature_spawns(explicit: str | Path | None = None, *,
         os.replace(temporary, cached)
         temporary = None
     except (OSError, URLError, TimeoutError) as exc:
-        raise RuntimeError(f'Could not retrieve CopilotBuddy spawn data from {SPAWNS_URL}: {exc}') from exc
+        raise RuntimeError(f'Could not retrieve WotLKBuddy spawn data from {SPAWNS_URL}: {exc}') from exc
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)

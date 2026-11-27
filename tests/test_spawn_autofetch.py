@@ -10,6 +10,13 @@ from wotlkbuddy.horde import worlddata as wd
 
 
 class SpawnAutoFetchTests(unittest.TestCase):
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.native=Path(tmp.name)/'datadb'/'CreatureSpawns.db'
+        self.addCleanup(patch.stopall)
+        patch.object(wd,'repository_spawn_path',return_value=self.native).start()
+
     def test_explicit_file_uses_that_copy_no_fetch(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / 'my.db'
@@ -19,14 +26,16 @@ class SpawnAutoFetchTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, '--spawns-db'):
                 wd.resolve_creature_spawns(db.with_name('no.db'))
 
-    def test_existing_user_copy_preferred_over_network(self):
+    def test_repository_copy_preferred_over_legacy_and_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'CopilotBuddy' / 'datadb'
             repo.mkdir(parents=True)
             db = repo / 'CreatureSpawns.db'
             db.write_bytes(b'existing local database')
+            self.native.parent.mkdir()
+            self.native.write_bytes(b'native server snapshot')
             with patch.object(wd, 'urlopen', side_effect=AssertionError('network access')):
-                self.assertEqual(wd.resolve_creature_spawns(home=Path(tmp)), db.resolve())
+                self.assertEqual(wd.resolve_creature_spawns(home=Path(tmp)), self.native.resolve())
 
     def test_download_verified_and_cached_second_run(self):
         blob = b'compact upstream database fixture'
