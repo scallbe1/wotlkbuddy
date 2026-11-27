@@ -193,6 +193,12 @@ class QuestSession:
             self.steps.append({'cycle':cycle,'action':'quest_vendor_purchase',
                                **report['quest_vendor_purchase']})
             return False
+        milestone=report.get('level_milestone')
+        if milestone:
+            self.steps.append({'cycle':cycle,'action':'level_milestone',**milestone})
+            # On verified XP progress, refresh training/readiness next cycle.
+            # If deferred, seek another available quest rather than skipping the gate.
+            return milestone.get('status')!='progress'
         objective = report.get('active_objective', {})
         status = objective.get('status')
         if status not in ('no_supported_objective', None):
@@ -213,6 +219,13 @@ class QuestSession:
             for qid in ids if isinstance(qid, int) and qid > 0
         })
         if not newly_accepted:
+            milestone=offers.get('level_milestone')
+            if milestone:
+                self.steps.append({'cycle':cycle,'action':'level_milestone',**milestone})
+                if milestone.get('status')=='progress':
+                    return
+                self.reason='level_milestone_deferred'
+                return
             self.reason = 'no_supported_objectives_or_reachable_quest_offers'
             return
         if any(qid in self.accepted_ids for qid in newly_accepted):
