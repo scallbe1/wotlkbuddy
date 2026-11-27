@@ -4,7 +4,7 @@
 
 local SIDE = 4
 local COLS = 48
-local ROWS = 20
+local ROWS = 32
 local CAPACITY = (COLS * ROWS - 6) * 3
 local MAGIC = {{255, 0, 255}, {0, 255, 255}, {255, 255, 0}, {0, 0, 0}}
 local canvas = CreateFrame('Frame', 'WotLKBuddyTelemetryFrame', UIParent)
@@ -1113,48 +1113,6 @@ local function tickData()
             end
         end
     end
-    -- Completed quest history is intentionally profile-agnostic: emit observed
-    -- server flags and recent journal IDs, not hard-coded quest 363.
-    local completionStates = {}
-    if completionCache then
-        for id, done in pairs(completionCache) do
-            if type(id) == 'number' and id > 0 and (done == true or done == 1) then
-                completionStates[id] = 1
-            end
-        end
-    end
-    if IsQuestFlaggedCompleted then
-        for id in pairs(recentlyObservedQuestIds) do
-            local ok, done = pcall(IsQuestFlaggedCompleted, id)
-            if ok and done ~= nil then
-                if done == true or done == 1 then completionStates[id] = 1
-                elseif completionStates[id] ~= 1 then completionStates[id] = 0 end
-            end
-        end
-    end
-    local completedIds = {}
-    for id in pairs(completionStates) do table.insert(completedIds, id) end
-    table.sort(completedIds)
-    -- Bound the historical flag block. At early levels all history fits; on
-    -- longer characters we prioritize recently seen quests first.
-    local emitted = {}
-    local recentIds = {}
-    for id in pairs(recentlyObservedQuestIds) do table.insert(recentIds,id) end
-    table.sort(recentIds)
-    local count = 0
-    for _, id in ipairs(recentIds) do
-        if completionStates[id] ~= nil and count < 100 then
-            appendLine(table.concat({'C', tostring(id), tostring(completionStates[id])}, '\t'))
-            emitted[id] = true
-            count = count + 1
-        end
-    end
-    for _, id in ipairs(completedIds) do
-        if not emitted[id] and count < 100 then
-            appendLine(table.concat({'C', tostring(id), tostring(completionStates[id])}, '\t'))
-            count = count + 1
-        end
-    end
     -- Find the exact on-screen button associated with each *active* quest.
     -- GossipTitleButtonN's frame N is NOT the same as its GetID(): available
     -- quests appear first, so a quest with active index 1 may be button 3.
@@ -1235,9 +1193,7 @@ local function tickData()
             end
         end
     end
-    -- Completion-state records have already been emitted once above from the
-    -- server-backed cache and recently observed quest IDs. Do not append
-    -- legacy quest-363 rows: their value was undefined and duplicated IDs.
+    -- Publish the complete current journal before historical completion flags.
     local entries = GetNumQuestLogEntries() or 0
     for i = 1, entries do
         local title, level, _, _, isHeader, _, isComplete, _, questID = GetQuestLogTitle(i)
@@ -1255,6 +1211,68 @@ local function tickData()
                     break
                 end
             end
+        end
+    end
+    -- Distinguish an empty list from an incomplete/filtered trainer scan.
+    if ClassTrainerFrame and ClassTrainerFrame:IsShown() and
+            GetNumTrainerServices and GetTrainerServiceInfo then
+        local services,audit = trainerServiceRows()
+        local function header(count)
+            return table.concat({'N','1',tostring(count),unpack(audit)}, '\t')
+        end
+        local needed = string.len(header(#services))+1
+        for _, row in ipairs(services) do needed = needed+string.len(row)+1 end
+        if #services<=120 and payloadBytes+needed <= CAPACITY-20 then
+            appendLine(header(#services))
+            for _, row in ipairs(services) do appendLine(row) end
+        else
+            -- Keep window visibility and counts even when the rows don't fit.
+            audit[9]=0
+            appendLine(header(0))
+        end
+    end
+    -- Completed quest history is intentionally profile-agnostic: emit observed
+    -- server flags and recent journal IDs, not hard-coded quest 363.
+    local completionStates = {}
+    if completionCache then
+        for id, done in pairs(completionCache) do
+            if type(id) == 'number' and id > 0 and (done == true or done == 1) then
+                completionStates[id] = 1
+            end
+        end
+    end
+    if IsQuestFlaggedCompleted then
+        for id in pairs(recentlyObservedQuestIds) do
+            local ok, done = pcall(IsQuestFlaggedCompleted, id)
+            if ok and done ~= nil then
+                if done == true or done == 1 then completionStates[id] = 1
+                elseif completionStates[id] ~= 1 then completionStates[id] = 0 end
+            end
+        end
+    end
+    local completedIds = {}
+    for id in pairs(completionStates) do table.insert(completedIds, id) end
+    table.sort(completedIds)
+    -- Bound the historical flag block. At early levels all history fits; on
+    -- longer characters we prioritize recently seen quests first.
+    local emitted = {}
+    local recentIds = {}
+    for id in pairs(recentlyObservedQuestIds) do table.insert(recentIds,id) end
+    table.sort(recentIds)
+    local count = 0
+    for _, id in ipairs(recentIds) do
+        if completionStates[id] ~= nil and count < 100 then
+            appendLine(table.concat({'C', tostring(id), tostring(completionStates[id])}, '\t'))
+            emitted[id] = true
+            count = count + 1
+        end
+    end
+    for _, id in ipairs(completedIds) do
+        if not emitted[id] and count < 100 then
+            local row = table.concat({'C', tostring(id), tostring(completionStates[id])}, '\t')
+            if payloadBytes + string.len(row) + 1 > CAPACITY - 20 then break end
+            appendLine(row)
+            count = count + 1
         end
     end
     -- Optional bounded inventory scan for Mage cloth and main-hand upgrades. No equipment
@@ -1504,24 +1522,6 @@ local function tickData()
         end
     end
     -- END MERCHANT CANDIDATE BATCH
-    -- Distinguish an empty list from an incomplete/filtered trainer scan.
-    if ClassTrainerFrame and ClassTrainerFrame:IsShown() and
-            GetNumTrainerServices and GetTrainerServiceInfo then
-        local services,audit = trainerServiceRows()
-        local function header(count)
-            return table.concat({'N','1',tostring(count),unpack(audit)}, '\t')
-        end
-        local needed = string.len(header(#services))+1
-        for _, row in ipairs(services) do needed = needed+string.len(row)+1 end
-        if #services<=120 and payloadBytes+needed <= CAPACITY-20 then
-            appendLine(header(#services))
-            for _, row in ipairs(services) do appendLine(row) end
-        else
-            -- Keep window visibility and counts even when the rows don't fit.
-            audit[9]=0
-            appendLine(header(0))
-        end
-    end
     -- Optional talent/cast/aura records follow the priority quest data.
     -- One controller-requested talent, resolved by *name* to the real
     -- tree/index on this 3.3.5a client. The addon NEVER spends points.

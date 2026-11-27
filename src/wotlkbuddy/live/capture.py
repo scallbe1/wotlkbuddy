@@ -72,7 +72,7 @@ def _origins(buffer: bytes, width: int, height: int):
             continue
         pixel_number = hit // 4
         x, y = pixel_number % width, pixel_number // width
-        if x > width - COLS * 2 or y > height - ROWS * 2:
+        if x > width - COLS * 2 or y > height - 2:
             continue
         # Keep only the upper-left pixel of each solid magenta marker tile.
         if x and _bgra_pixel(buffer, width, height, x - 1, y) == MAGIC[0]:
@@ -101,7 +101,7 @@ def _origins(buffer: bytes, width: int, height: int):
 
 def find_origin(buffer: bytes, width: int, height: int) -> tuple[int, int]:
     """Locate the marker (without assuming its rendered tile width is 4 px)."""
-    if width < COLS * 2 or height < ROWS * 2 or len(buffer) != width * height * 4:
+    if width < COLS * 2 or height < 2 or len(buffer) != width * height * 4:
         raise TelemetryError('Invalid screenshot dimensions / pixel layout')
     for x, y, _pitch in _origins(buffer, width, height):
         return (x, y)
@@ -159,8 +159,9 @@ def decode_bgra_frame(buffer: bytes, width: int, height: int) -> ClientTelemetry
                     size = header[4][1] + 256 * header[4][2]
                     if not 1 <= size <= (COLS * ROWS - 6) * 3:
                         continue
+                    used_rows = (6 + (size + 2) // 3 + COLS - 1) // COLS
                     for py in _pitches(estimate, 0.05, 20):
-                        if y_origin + ROWS * py > height + 2:
+                        if y_origin + used_rows * py > height + 2:
                             continue
                         layout = _Layout(x_origin, y_origin, px, py)
                         try:

@@ -22,8 +22,8 @@ def screenshot(payload: bytes, origin=(9, 7), size=(260, 130)) -> bytearray:
     for i, (r, g, b) in enumerate(cells):
         x0 = origin[0] + (i % COLS) * CELL
         y0 = origin[1] + (i // COLS) * CELL
-        for y in range(y0, y0 + CELL):
-            for x in range(x0, x0 + CELL):
+        for y in range(y0, min(height, y0 + CELL)):
+            for x in range(x0, min(width, x0 + CELL)):
                 off = 4 * (y * width + x)
                 result[off:off + 4] = bytes((b, g, r, 255))
     return result
