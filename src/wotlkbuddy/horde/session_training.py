@@ -192,7 +192,10 @@ def visit_and_train(*, quest_profile, profiles_root, current, training_goal,
             for n,r,c in training_goal.pending:
                 if (n+' '+r).strip() not in bought:
                     merged.setdefault((n,r),c)
-        record_budget(s,tuple((n,r,c) for (n,r),c in merged.items()))
+        if merged or not getattr(driver,'missing_frost_spells',None):
+            record_budget(s,tuple((n,r,c) for (n,r),c in merged.items()))
+        else:
+            log('Trainer list empty while Frost spells missing; training budget not marked complete')
     report['training_checked_level']=cap().player.level
     report['hotbar_changes']=reconcile_mage_hotbar(capture=cap,driver=driver,log=log)
     maintain_mage_supplies(capture=cap,driver=driver,log=log)
