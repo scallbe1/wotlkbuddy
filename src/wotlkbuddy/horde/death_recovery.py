@@ -65,7 +65,8 @@ def wait_death_transition(*, observe, guard, predicate, seconds, now, sleep, log
 
 
 def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
-                       read_spawn_hints, scout_surroundings, sleep, now, log, breadcrumbs):
+                       read_spawn_hints, scout_surroundings, sleep, now, log, breadcrumbs,
+                       work=lambda *args: None):
     state,position=observe()
     hints = tuple(read_spawn_hints(state,corpse)) if read_spawn_hints else ()
     chosen = None
@@ -77,6 +78,7 @@ def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
     if in_reclaim_ring(position.position,corpse) and acceptable_site(position.position,corpse,tuple(read_hazards(state,corpse))):
         local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
         log(f'Current site: {len(local)} potential attackers; checking patrol opening')
+        work('reclaimwait')
         chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
             corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
             patrol_seconds=8 if len(local)>2 else 24)
@@ -85,6 +87,7 @@ def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
     for search in range(8):
         if chosen is not None:
             break
+        work('reclaim',search+1,8)
         state, position = observe()
         hazards = tuple(read_hazards(state,corpse))
         route_points = ()
@@ -134,6 +137,7 @@ def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
             scouted.append(position.position)
             local = local_reclaim_threats(nav,corpse_map,position.position,tuple(read_hazards(state,corpse)))
             log(f'Scouted site: {len(local)} potential attackers; watching for opening')
+            work('reclaimwait')
             chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
                 corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log,
                 patrol_seconds=8 if len(local)>2 else 24)
@@ -147,10 +151,12 @@ def scout_reclaim_site(*, observe, walk, corpse, corpse_map, nav, read_hazards,
             attempted.clear()
             state, position = observe()
             if in_reclaim_ring(position.position,corpse):
+                work('reclaimwait')
                 chosen = watch_reclaim_window(sample=observe,read_hazards=read_hazards,
                     corpse=corpse,nav=nav,map_id=corpse_map,sleep=sleep,now=now,log=log)
     if chosen is not None:
         return chosen,False
+    work('reclaim')
     chosen=find_fallback_site(observe=observe,walk=walk,corpse=corpse,corpse_map=corpse_map,
         nav=nav,read_hazards=read_hazards,scouted=scouted,scout_surroundings=scout_surroundings,
         breadcrumbs=breadcrumbs,sleep=sleep,now=now,log=log)
@@ -264,6 +270,11 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
     log(f'Ghost verified; approaching corpse vicinity on map {corpse_map}: '
         f'({corpse.x:.2f},{corpse.y:.2f},{corpse.z:.2f})')
     set_status = getattr(driver, 'set_navigation_status', None)
+    update_work = getattr(driver, 'set_work_status', None)
+
+    def work(kind,done=0,total=0):
+        if callable(update_work):
+            update_work(kind,done,total)
 
     def ghost_position():
         state, position = observe()
@@ -286,6 +297,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
         failures = []
         failed_ends = []
         deadline = now()+600
+        work('clear')
         if callable(set_status):
             set_status('deathrun')
         try:
@@ -294,6 +306,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                 remaining_time = deadline-now()
                 if remaining_time < 15:
                     raise LiveControlError(label+' navigation time budget exhausted')
+                work('clear')
                 travel = follow_world_path(
                     path, sample=observe, keyboard=driver.keyboard,
                     stop_requested=driver.emergency_stop_requested,
@@ -330,6 +343,7 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                 log(f'{label} terrain mismatch; replanning {attempt+1}/4 from '
                     f'actual XYZ ({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}); '
                     f'moved {start.distance_to(measured):.1f}y on last route')
+                work('ghostroute')
                 try:
                     if toward_corpse:
                         if partial_replan or repeated:
@@ -360,11 +374,13 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
                 set_status('clear')
 
     state, position = observe()
+    work('ghostroute')
     try:
         approach = approach_path(nav,corpse_map,position.position,corpse)
     except (OSError,RuntimeError,ValueError,TimeoutError,LiveControlError):
         log('Initial corpse path unavailable; searching alternative reclaim-side routes')
         approach=alternate_approach_path(nav,corpse_map,position.position,corpse,log=log)
+    work('clear')
     if approach:
         log(f'Running toward corpse as ghost; stopping near reclaim range '
             f'({approach[-1].distance_to(corpse):.1f}y from corpse)')
@@ -377,9 +393,14 @@ def recover_corpse(*, sample, driver, nav, known_corpse=None, read_corpse=None,
         log('Actively surveying all directions before ranking reclaim locations')
         scout_surroundings()
         state, position = observe()
-    chosen,fallback=scout_reclaim_site(observe=observe,walk=walk,corpse=corpse,
-        corpse_map=corpse_map,nav=nav,read_hazards=read_hazards,read_spawn_hints=read_spawn_hints,
-        scout_surroundings=scout_surroundings,sleep=sleep,now=now,log=log,breadcrumbs=breadcrumbs)
+    work('reclaim')
+    try:
+        chosen,fallback=scout_reclaim_site(observe=observe,walk=walk,corpse=corpse,
+            corpse_map=corpse_map,nav=nav,read_hazards=read_hazards,read_spawn_hints=read_spawn_hints,
+            scout_surroundings=scout_surroundings,sleep=sleep,now=now,log=log,breadcrumbs=breadcrumbs,
+            work=work)
+    finally:
+        work('clear')
     if chosen is None:
         raise LiveControlError('Reached corpse vicinity but no safe reclaim site found; remaining a ghost nearby')
     state, position = observe()
