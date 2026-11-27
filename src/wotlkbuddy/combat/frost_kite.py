@@ -18,6 +18,7 @@ def nova_ready(state, driver):
     if (state.truncated or p.dead or not p.in_combat or not p.target_guid or
             state.resources is None or state.resources.class_token.upper()!='MAGE'
             or not t or t.dead or not t.attackable or t.attacks_player is not True
+            or t.max_health<=0 or p.max_health<=0
             or t.reaction not in (1,2,3) or t.health<=.25*t.max_health
             or p.health>.85*p.max_health or 'Frost Nova' in state.target_auras
             or 'Polymorph' in state.target_auras
@@ -88,11 +89,14 @@ def backward_pulse(driver,sleep):
 def frost_kite(state,*,driver,fresh,log,sleep=real_sleep,now=monotonic):
     """Cast once, require root, then at most three verified backsteps."""
     cast=getattr(driver,'cast_frost_nova',None)
+    if not callable(cast):
+        return state
     action=nova_ready(state,driver)
-    if action is None or not callable(cast):
+    if action is None:
         return state
     stamp=now()
-    if stamp-getattr(driver,'last_frost_kite',float('-inf'))<15:
+    previous=getattr(driver,'last_frost_kite',None)
+    if isinstance(previous,(int,float)) and stamp-previous<15:
         return state
     if not retreat_geometry(state,driver,initial=True):
         return state
