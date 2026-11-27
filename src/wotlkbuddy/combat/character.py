@@ -13,39 +13,47 @@ from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 
 
-# Starter DPS leveling builds; only ranks confirmed learnable by the live
-# server are ever spent. A pre-existing mismatched build stops allocation.
-# The sequence can be extended without modifying the talent actuator.
+# Class-specific leveling builds; each pair is a cumulative target rank.
+# Only the live client can authorize an actual talent purchase.
 DPS_TALENT_ORDERS: dict[str, tuple[tuple[str,int],...]] = {
-    # 3.3.5a Frost tree, ordered so every rank is learnable when its turn
-    # comes: row k needs 5*(k-1) points spent in-tree, and the actuator
-    # never skips ahead. Precision was removed because it sits in Arcane
-    # row 2 and deadlocked the plan (5 Arcane points were never spent).
-    # Frostbite is mandatory filler (rows 1-3 top out at 14 points before
-    # the row-4 gate of 15) and passively roots with Chills; Cold as Ice,
-    # Cold Snap and Improved Cone of Cold only fill row gates.
+    # WotLK 3.3.5a single-target solo build: 10 Arcane / 0 Fire / 61 Frost.
+    # Repeated entries finish a talent later without changing its total rank.
+    # Tier gates and prerequisites are covered by the full-build regression.
+    # Icy Veins 20, Cold Snap 30, Ice Barrier 40, Water Elemental 50,
+    # Deep Freeze 60. Permafrost reduces healing received by chilled targets.
+    # Prefer defensive filler over Winter's Chill (whose apostrophe is not
+    # supported by the current /wbttalent query allowlist).
     'MAGE': (
         ('Improved Frostbolt',5),
-        ('Ice Shards',5),
-        ('Piercing Ice',3),
+        ('Ice Shards',3),
+        ('Precision',2),
         ('Icy Veins',1),
+        ('Precision',3),
         ('Frostbite',3),
-        ('Arctic Reach',2),
         ('Frost Channeling',3),
-        ('Shatter',3),
-        ('Cold as Ice',2),
-        ("Winter's Chill",5),
-        ('Ice Barrier',1),
-        ('Shattered Barrier',3),
+        ('Arctic Reach',2),
         ('Cold Snap',1),
-        ('Improved Cone of Cold',2),
+        ('Shatter',3),
+        ('Permafrost',3),
+        ('Piercing Ice',3),
+        ('Ice Barrier',1),
+        ('Arctic Winds',4),
+        ('Fingers of Frost',2),
         ('Empowered Frostbolt',2),
-        ('Fingers of Frost',3),
+        ('Arctic Winds',5),
         ('Summon Water Elemental',1),
         ('Enduring Winter',3),
         ('Brain Freeze',3),
-        ('Chilled to the Bone',5),
+        ('Chilled to the Bone',3),
         ('Deep Freeze',1),
+        ('Chilled to the Bone',5),
+        ('Shattered Barrier',2),
+        ('Cold as Ice',2),
+        ('Ice Floes',3),
+        ('Frost Warding',1),
+        ('Arcane Subtlety',2),
+        ('Arcane Focus',3),
+        ('Arcane Concentration',5),
     ),
     'PRIEST': (
         ('Spirit Tap',5),
