@@ -166,6 +166,47 @@ def corridor_geometry_clear(check,origin,actual,guid,log):
     return False
 
 
+def try_entrance_healer_control(state,enemies,origin,ahead,*,driver,awareness,guard,log):
+    """Try a stationary control spell on a nearby healer before entering its pack."""
+    from wotlkbuddy.combat.crowd_control import is_healer, exact_hostile
+    if not isinstance(getattr(driver,'entrance_approach_guid',None),str):
+        return None
+    assess=getattr(driver,'assess_pull',None)
+    if not callable(assess):
+        return None
+    nearby=[e for e in enemies if e.position.distance_to(origin)<=25
+            and abs(e.position.z-origin.z)<=6
+            and distance_to_corridor(e.position,origin,ahead)<=18]
+    healers=[e for e in nearby if is_healer(e)]
+    if not healers or len(nearby)<2:
+        return None
+    healer=min(healers,key=lambda e:e.position.distance_to(origin))
+    state=awareness.acquire(state,healer.guid,healer.entry)
+    guard(state)
+    if state.player.in_combat:
+        return state
+    if not exact_hostile(state,healer):
+        raise LiveControlError('Unsafe encounter: entrance healer identity not verified')
+    log('Entrance healer pack: attempting stationary Polymorph before advancing')
+    state,plan=assess_corridor_pull(driver,assess,state)
+    guard(state)
+    if state.player.in_combat:
+        return state
+    # Range is not proof of line of sight. Never walk into the pack just
+    # because the control action was attempted.
+    raise LiveControlError('Unsafe encounter: entrance healer pack not engaged by verified crowd control')
+
+
+def controlled_priority_target(state,plan,driver,chosen_guid,chosen_entry):
+    from wotlkbuddy.combat.crowd_control import LinkedFight, exact_hostile
+    fight=getattr(driver,'linked_fight',None)
+    if (isinstance(fight,LinkedFight) and plan.allowed
+            and any(e.guid==fight.primary.guid for e in plan.enemies)
+            and exact_hostile(state,fight.primary)):
+        return fight.primary.guid,fight.primary.entry
+    return chosen_guid,chosen_entry
+
+
 def scan_and_clear_hostiles(
     *, initial: ClientTelemetry, player_position: WorldPosition,
     path_ahead: Sequence[Vec3],
@@ -242,9 +283,6 @@ def scan_and_clear_hostiles(
     if blocked is None:
         blocked = set()
         driver.blocked_combat_guids = blocked
-    # Enumerate a bounded set of targetable enemies. /targetenemy does NOT
-    # determine whether a mob is near or hostile; exact GUID, reaction and
-    # measured position must corroborate it. Keep no guessed NPC name list.
     seen: set[str]=set()
     candidates: list[tuple[float,str,int]]=[]
     blocked_nearby = []
@@ -276,6 +314,10 @@ def scan_and_clear_hostiles(
             remember_pack(driver,[m.position for m in urgent],monotonic())
             raise LiveControlError('Unsafe encounter: unclassified nearby object(s) on route: '+
                 ', '.join(f'{m.entry} {m.guid} faction={m.faction} level={m.level} {m.position.distance_to(origin):.1f}y' for m in urgent))
+        controlled=try_entrance_healer_control(state,enemies,origin,path_ahead,
+            driver=driver,awareness=awareness,guard=guard,log=log)
+        if controlled is not None:
+            return defend(controlled)
         for enemy in enemies:
             distance=enemy.position.distance_to(origin)
             corridor=distance_to_corridor(enemy.position,origin,path_ahead)
@@ -357,8 +399,6 @@ def scan_and_clear_hostiles(
                 break
     assess=getattr(driver,'assess_pull',None)
     corridor_count=len(candidates)+sum(d<=18 for d,_ in blocked_nearby)
-    # A known three-pack should reach the strength assessment rather than
-    # be rejected solely by count. Larger/unsurveyable packs still stop.
     allowed_count=3 if callable(assess) else crowd_limit
     if corridor_count>allowed_count:
         remember_pack(driver,pack_positions,monotonic())
@@ -384,7 +424,6 @@ def scan_and_clear_hostiles(
     if state.resources.mana < 20:
         # Only require combat mana if there is a detected red mob ahead.
         raise LiveControlError('Mage lacks minimum mana to clear hostile travel path')
-    # Prefer a ranged opening, not the nearest melee-range enemy.
     candidates.sort(key=(lambda row: (0,row[0]) if row[0]<=20 else (1,abs(row[0]-32))) if awareness is not None else None)
     distance, chosen_guid, chosen_entry=candidates[0]
     state,chosen_guid,chosen_entry=acquire_corridor_target(state,chosen_guid,chosen_entry,awareness=awareness,candidates=candidates,driver=driver,fresh=fresh,max_targets=max_targets,pack_positions=pack_positions,log=log)
@@ -449,6 +488,7 @@ def scan_and_clear_hostiles(
         if plan is None or not plan.allowed or (awareness is None and corridor_count>crowd_limit and not corridor_guids.issubset({m.guid for m in plan.enemies})):
             remember_pack(driver,([m.position for m in plan.enemies] if plan and plan.enemies else pack_positions),monotonic())
             raise LiveControlError('Unsafe encounter: '+(plan.reason if plan and not plan.allowed else 'corridor pack not fully accounted for in assessment'))
+        chosen_guid,chosen_entry=controlled_priority_target(state,plan,driver,chosen_guid,chosen_entry)
         target=state.combat_target
         if (plan and len(plan.enemies)==1 and state.player.target_guid==chosen_guid and
                 can_close_range(state,origin=player_position.position,ahead=path_ahead,
@@ -457,7 +497,8 @@ def scan_and_clear_hostiles(
             log('Approved isolated target moved out of range; advancing along checked route')
             return finish(state)
         if (state.player.target_guid!=chosen_guid or not target or target.dead or
-                target.fireball_in_range is not True):
+                target.fireball_in_range is not True or
+                not corridor_geometry_clear(direct_path_clear,player_position.position,target_position(state),chosen_guid,log)):
             raise LiveControlError('Unsafe encounter: target moved during assessment')
     before_hp=target.health
     before_quests = state.quests
