@@ -118,7 +118,8 @@ def execute_thread_purchase(vendor,*,pid,cap,driver,nav,db,hud,set_native_status
     hud.set(goal='The Chill of Death: obtain Coarse Thread',
             action='Navigating to Abigail Shiel')
     set_native_status('vendor')
-    visit_npc(npc_name=vendor.name,npc_id=vendor.entry,pid=pid,capture=cap,
-              driver=driver,nav=nav,spawns=db,radius=600,
-              destination_hint=vendor.world_position,log=log)
+    from wotlkbuddy.horde.service_travel import visit_service_npc
+    visit_service_npc(npc_name=vendor.name,npc_id=vendor.entry,pid=pid,capture=cap,
+                      driver=driver,nav=nav,spawns=db,visit=visit_npc,
+                      destination_hint=vendor.world_position,log=log)
     return buy_thread_at_vendor(capture=cap,driver=driver,log=log)

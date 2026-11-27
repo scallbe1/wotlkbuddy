@@ -5,6 +5,7 @@ from wotlkbuddy.horde.merchant import (
     _capture_fresh, verify_merchant_state, wait_merchant_closed)
 from wotlkbuddy.horde.quest_vendor import open_purchase_window
 from wotlkbuddy.horde.npc_catalog import nearby_service_npcs
+from wotlkbuddy.horde.service_travel import service_candidates, visit_service_npc
 from wotlkbuddy.horde.npc_visit import visit_npc, NpcTargetUnavailable
 from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
 from wotlkbuddy.live.control import LiveControlError
@@ -78,16 +79,16 @@ def maintain_equipment(*,profile,profiles_root,location,cap,driver,pid,nav,db,
         return deferred_repair(critical,'repair visit temporarily deferred',log)
     if state.resources.money_copper<=0:
         return deferred_repair(critical,'no copper available for repairs',log)
-    options=nearby_service_npcs(profile=profile,profiles_root=profiles_root,
-        spawns=db,origin=current.position,map_id=current.map_id,role='repair',radius=600)
-    reason='no verified repair vendor within 600 yards'
+    options=service_candidates(profile=profile,profiles_root=profiles_root,
+        spawns=db,origin=current.position,map_id=current.map_id,role='repair',catalog=nearby_service_npcs)
+    reason='no verified repair vendor within 1800 yards'
     for npc in options[:3]:
         set_native_status('vendor')
         hud.set(goal='Repair damaged equipment',action=f'Navigating to {npc.name}')
         log(f'Equipment durability {durability}%: visiting repair vendor {npc.name} ({npc.entry})')
         try:
-            visit_npc(npc_name=npc.name,npc_id=npc.entry,pid=pid,capture=cap,
-                driver=driver,nav=nav,spawns=db,radius=600,destination_hint=npc.position,log=log)
+            visit_service_npc(npc_name=npc.name,npc_id=npc.entry,pid=pid,capture=cap,
+                driver=driver,nav=nav,spawns=db,visit=visit_npc,destination_hint=npc.position,log=log)
         except (NpcTargetUnavailable,EncounterRouteUnavailable) as exc:
             observed=cap()
             if (observed.truncated or observed.player.guid!=state.player.guid or

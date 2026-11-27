@@ -9,6 +9,7 @@ from wotlkbuddy.horde.merchant import (
     estimated_vendor_copper, should_vendor_before_training, free_bag_space)
 from wotlkbuddy.horde.gear import equip_mage_upgrades
 from wotlkbuddy.horde.npc_catalog import nearby_service_npcs
+from wotlkbuddy.horde.service_travel import service_candidates, visit_service_npc
 from wotlkbuddy.horde.npc_visit import visit_npc, NpcTargetUnavailable
 from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
 from wotlkbuddy.horde.npc_service_turnin import turnin_ready_quests_at_npc
@@ -136,10 +137,10 @@ def execute_training_phase(args, *, quest_profile, profiles_root, cap, driver,
 def visit_and_train(*, quest_profile, profiles_root, current, training_goal,
                     cap, driver, pid, nav, db, hud, set_native_status, report, log):
     """Visit a verified trainer, record purchases and reconcile the character."""
-    trainers = nearby_service_npcs(
+    trainers = service_candidates(
         profile=quest_profile, spawns=db,
         origin=current.position, map_id=current.map_id,
-        role='train', profiles_root=profiles_root, radius=600)
+        role='train', profiles_root=profiles_root,catalog=nearby_service_npcs)
     if not trainers:
         raise EncounterRouteUnavailable(
             'No nearby Mage TrainClass vendor found in local Horde '
@@ -150,9 +151,9 @@ def visit_and_train(*, quest_profile, profiles_root, current, training_goal,
             action='Navigating to class trainer')
     log(f'Profile-selected Mage trainer: {trainer.name} '
         f'({trainer.entry}); source={trainer.source}')
-    visit_npc(npc_name=trainer.name, npc_id=trainer.entry,
+    visit_service_npc(npc_name=trainer.name, npc_id=trainer.entry,
               pid=pid, capture=cap, driver=driver, nav=nav,
-              spawns=db, radius=600,
+              spawns=db, visit=visit_npc,
               destination_hint=trainer.position, log=log)
     # NPC services and quest turn-in are not mutually exclusive.
     # Complete only ready quests explicitly targeting this verified
