@@ -22,7 +22,8 @@ from wotlkbuddy.horde.resurrection_site import (
 def _ghost_terrain_failure(reason):
     partial_replan = ('Backtracked but fresh Detour route unavailable:' in reason and
         any(marker in reason for marker in ('partial path', 'no usable bounded waypoint path',
-            'route starts away from the verified player position')))
+            'route starts away from the verified player position',
+            'Fresh route returns to blocked corridor or snaps away from actual position')))
     terrain_failure = partial_replan or any(marker in reason for marker in (
         'height/floor', 'No forward progress', 'Measured movement disagrees with client facing',
         'Movement diverged from waypoint', 'Unexpected player displacement during turn',

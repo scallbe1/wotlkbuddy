@@ -187,3 +187,70 @@ def test_ghost_replans_from_measured_floor_after_height_mismatch():
             read_hazards=lambda *_:(),sleep=lambda _:None)
     assert calls == [start.position,mismatch.position]
     assert result['status']=='resurrected'
+
+
+def test_ghost_rejected_collision_route_uses_alternate_reclaim_approach():
+    from wotlkbuddy.game.types import Vec3
+    base = snap()
+    guid = base.player.guid
+    corpse = Vec3(2157.58,-500.,79.12)
+    start = WorldPosition(guid,0,1749.96,-668.26,44.50,0,1)
+    blocked = WorldPosition(guid,0,2125.43,-559.32,71.42,0,1)
+    original = Vec3(2134.85,-531.82,81.72)
+    site = WorldPosition(guid,0,2187.58,-500.,79.12,0,1)
+    where = start
+    alive = False
+    driver = Mock()
+    driver.wow_is_foreground.return_value = True
+    driver.emergency_stop_requested.return_value = False
+
+    def sample():
+        player = replace(base.player,dead=not alive,health=50 if alive else 0)
+        return replace(base,player=player,death_state=DeathState(
+            not alive,False,not alive and where==site)),where
+
+    def chat(command):
+        nonlocal alive
+        assert command == '/run RetrieveCorpse()'
+        assert where == site
+        alive = True
+
+    driver.chat.side_effect = chat
+
+    def travel(path,**kwargs):
+        nonlocal where
+        assert kwargs['ghost_only']
+        if where == start:
+            assert path[-1] == original
+            where = blocked
+            return Mock(stopped_reason='Backtracked but fresh Detour route unavailable: '
+                        'Fresh route returns to blocked corridor or snaps away from actual position')
+        assert path[0] == blocked.position and path[-1] == site.position
+        where = site
+        return Mock(stopped_reason='complete')
+
+    nav = Mock()
+    nav.find_path.side_effect=lambda _,a,b:[a,b]
+    with patch('wotlkbuddy.horde.death_recovery.follow_world_path',side_effect=travel), \
+            patch('wotlkbuddy.horde.death_recovery.approach_path',
+                  return_value=(start.position,original)), \
+            patch('wotlkbuddy.horde.death_recovery.alternate_approach_path',
+                  return_value=(blocked.position,site.position)) as alternate:
+        result=recover_corpse(sample=sample,driver=driver,nav=nav,
+            known_corpse=(0,corpse.x,corpse.y,corpse.z),
+            read_hazards=lambda *_:(),sleep=lambda _:None)
+    assert alternate.call_count == 1
+    assert alternate.call_args.args[:4] == (nav,0,blocked.position,corpse)
+    assert alternate.call_args.kwargs['excluded_ends'] == [original]
+    assert alternate.call_args.kwargs['failed_points'] == [blocked.position]
+    assert result['status']=='resurrected'
+
+
+@pytest.mark.parametrize('reason', [
+    'Escape pressed or WoW lost focus during world navigation',
+    'Ghost/map changed during corpse navigation',
+    'Defense lost player identity, telemetry or input focus',
+])
+def test_ghost_recovery_does_not_retry_nonterrain_safety_failures(reason):
+    from wotlkbuddy.horde.death_recovery import _ghost_terrain_failure
+    assert _ghost_terrain_failure(reason) == (False,False)
