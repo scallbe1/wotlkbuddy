@@ -22,4 +22,19 @@ services,audit=read(); assert(#services==0 and audit[2]==2 and audit[9]==0)
 GetTrainerServiceCost=function() return 100 end
 GetTrainerServiceTypeFilter=function() return 0 end
 services,audit=read(); assert(audit[8]==0 and audit[9]==0)
+-- A 251-row trainer with available ranks beyond the old 120-row ceiling.
+GetTrainerServiceTypeFilter=function() return 1 end
+rows={}
+for i=1,251 do rows[i]={'Future Spell','Rank 1','unavailable'} end
+rows[1]={'Arcane','','header',1}
+rows[120]={'Frost','','header',1}
+rows[121]={'Frostbolt','Rank 1','available'}
+rows[200]={'Frost Nova','Rank 1','available'}
+rows[251]={'Frost Armor','Rank 2','available'}
+services,audit=read()
+assert(audit[1]==251 and audit[2]==3 and audit[3]==246 and audit[4]==0)
+assert(audit[5]==2 and audit[9]==1 and #services==3)
+assert(string.match(services[1],'^Y\t121\tFrostbolt\t'))
+assert(string.match(services[2],'^Y\t200\tFrost Nova\t'))
+assert(string.match(services[3],'^Y\t251\tFrost Armor\t'))
 print('Trainer service audit: passed')
