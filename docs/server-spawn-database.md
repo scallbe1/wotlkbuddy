@@ -1,8 +1,11 @@
 # Server-derived creature spawn database
 
-WotLKBuddy already consumes a SQLite `spawns(entry, map_id, x, y, z)`
-table using `--spawns-db`. Use an explicit local snapshot of your actual
-world server instead of mixing server rows with the old CopilotBuddy DB.
+WotLKBuddy consumes a SQLite `spawns(entry, map_id, x, y, z)` table.
+The repository includes `datadb/CreatureSpawns.db`, a server-derived snapshot
+of 153,126 unique positions. It is the default for source checkouts; installed
+packages can fetch a pinned, hash-verified copy. No CopilotBuddy spawn database
+is required. For a different world server, explicitly select its own snapshot
+using `--spawns-db`.
 
 ## Export
 
@@ -33,7 +36,7 @@ Transfer the TSV to the client and run from the project checkout:
 py -3.12 -m wotlkbuddy.horde.import_server_spawns "$HOME\server-spawns.tsv" "$HOME\ServerCreatureSpawns.db"
 ```
 
-Then use the existing option in your normal command:
+For a custom server, use the existing option in your normal command:
 
 ```powershell
 --spawns-db "$HOME\ServerCreatureSpawns.db"
