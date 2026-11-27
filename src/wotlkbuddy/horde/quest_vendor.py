@@ -114,44 +114,12 @@ def buy_thread_at_vendor(*,capture,driver,log,sleep=real_sleep,now=monotonic):
                                  now=now,npc_name='Abigail Shiel',log=log)
 
 
-class ThreadVendorSpawns:
-    """Exact server-export spawn as a search-only reference for this vendor.
-
-    The third-party DB can omit the server's spawn or have different XYZ.
-    This adapter is scoped to quest 375, item 2320, entry 2118, map zero.
-    The NPC visit still requires live exact name/GUID and merchant UI.
-    """
-    def __init__(self, db, vendor, log):
-        self.db=db
-        self.vendor=vendor
-        self.log=log
-
-    def find(self, entry, map_id, limit=50):
-        rows=self.db.find(entry,map_id,limit)
-        from wotlkbuddy.game.types import Vec3
-        from wotlkbuddy.horde.worlddata import Spawn
-        anchor=Vec3(2259.73,275.571,34.8637)
-        if (entry!=NPC_ID or map_id!=0 or self.vendor.entry!=NPC_ID
-                or self.vendor.name!='Abigail Shiel'
-                or self.vendor.world_position.distance_to(anchor)>.01):
-            return rows
-        close=tuple(row for row in rows if row.position.distance_to(anchor)<=40)
-        if close:
-            return close
-        self.log('Abigail Shiel: local spawn DB lacks matching server-export spawn; '
-                 'using exact server XYZ for search, requiring live NPC identity')
-        return (Spawn(NPC_ID,0,anchor.x,anchor.y,anchor.z),)
-
-    def __getattr__(self, name):
-        return getattr(self.db,name)
-
-
 def execute_thread_purchase(vendor,*,pid,cap,driver,nav,db,hud,set_native_status,log):
     hud.set(goal='The Chill of Death: obtain Coarse Thread',
             action='Navigating to Abigail Shiel')
     set_native_status('vendor')
     from wotlkbuddy.horde.service_travel import visit_service_npc
     visit_service_npc(npc_name=vendor.name,npc_id=vendor.entry,pid=pid,capture=cap,
-                      driver=driver,nav=nav,spawns=ThreadVendorSpawns(db,vendor,log),visit=visit_npc,
+                      driver=driver,nav=nav,spawns=db,visit=visit_npc,
                       destination_hint=vendor.world_position,log=log)
     return buy_thread_at_vendor(capture=cap,driver=driver,log=log)
