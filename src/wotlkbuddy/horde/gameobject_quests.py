@@ -126,10 +126,17 @@ def next_active_gameobject_quest(
     return None
 
 
+def next_object_hotspot(hotspots,visited,origin):
+    """A distant source hotspot is not exhausted just because it is unloaded."""
+    candidates=[(i,h) for i,h in enumerate(hotspots)
+                if i not in visited and h.distance_to(origin)<=4000]
+    return min(candidates,key=lambda pair:pair[1].distance_to(origin),default=None)
+
+
 def navigate_object_destination(s,destination,*,pid,world_position,capture,guard,
                                 driver,nav,travel,goal,started,max_seconds,now,sleep,log,fresh):
     """Retain the object destination after verified combat/loot displacement."""
-    from wotlkbuddy.horde.return_turnin import encounter_route_failure,height_route_failure
+    from wotlkbuddy.horde.return_turnin import encounter_route_failure,height_route_failure,delivery_legs
     from wotlkbuddy.horde.height_recovery import HeightRecovery
     guard(s)
     who,world=world_position(s)
@@ -164,8 +171,10 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
         raw=nav.find_path(map_id,world.position,destination)
         if not raw or abs(raw[0].z-world.z)>2.5:
             raise LiveControlError('GameObject Detour route does not start on measured floor')
-        waypoints=validate_nav_path(raw,world.position,destination,max_step=18.)
-        log(f'GameObject Detour: {len(waypoints)-1} verified legs')
+        route=validate_nav_path(raw,world.position,destination,max_step=18.,max_distance=6000)
+        waypoints=delivery_legs(route)[0]
+        log(f'GameObject Detour: {len(waypoints)-1} verified legs; '
+            f'{world.position.distance_to(destination):.1f}y to objective hotspot')
         report=travel(waypoints,sample=sample,keyboard=getattr(driver,'keyboard',driver),
             stop_requested=driver.emergency_stop_requested,
             expected_quest_id=goal.quest_id,expected_map_id=map_id,
@@ -178,7 +187,14 @@ def navigate_object_destination(s,destination,*,pid,world_position,capture,guard
             replan_path=lambda a,b:nav.find_path(map_id,a,b),sleep=sleep,now=now)
         reason=report.stopped_reason
         if reason=='complete':
-            return fresh(s)
+            if waypoints[-1]==route[-1]:
+                return fresh(s)
+            s,world=sample()
+            guard(s)
+            if world.position.distance_to(waypoints[-1])>7:
+                raise LiveControlError('GameObject transit segment endpoint not confirmed')
+            log('GameObject transit segment reached; continuing toward original hotspot')
+            continue
         if not encounter_route_failure(reason) and not height_route_failure(reason):
             raise LiveControlError('GameObject navigation stopped: '+reason)
         s,world=sample()
@@ -483,20 +499,16 @@ def execute_gameobject_quest(
                         loaded.position.distance_to(hotspot)<=12)
                        for loaded in visible_now):
                     visited_hotspots.add(i)
-            unexplored=sorted(
-                ((i,h) for i,h in enumerate(goal.hotspots)
-                 if i not in visited_hotspots and
-                 h.distance_to(world.position)<420),
-                key=lambda pair:pair[1].distance_to(world.position))
-            if not unexplored:
+            unexplored=next_object_hotspot(goal.hotspots,visited_hotspots,world.position)
+            if unexplored is None:
                 raise LiveControlError(
                     f'No currently observed GameObject {goal.object_id} '
-                    'and all verified XML hotspots exhausted')
-            i,spot=unexplored[0]
-            visited_hotspots.add(i)
+                    'and no unvisited verified XML hotspots within 4000y')
+            i,spot=unexplored
             log(f'No loaded GameObject yet; travelling to XML hotspot '
                 f'{i+1}/{len(goal.hotspots)}')
             state=navigate(state,spot)
+            visited_hotspots.add(i)
             continue
         obj=options[0]
         if obj.position.distance_to(world.position)>4.1:
