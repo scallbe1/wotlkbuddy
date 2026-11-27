@@ -24,15 +24,18 @@ def state(cls='MAGE', actions=(), buffs=(), debuffs=()):
 
 
 class PlannerRuntimeTests(unittest.TestCase):
-    def test_mage_uses_ready_fast_damage_then_frostbolt(self):
+    def test_mage_prefers_frostbolt_and_finishes_with_fire_blast(self):
         actions=(
             ActionSpell(1,2136,'Fire Blast',True,True,0),
             ActionSpell(2,116,'Frostbolt',True,True,0),
             ActionSpell(3,133,'Fireball',True,True,0),
         )
-        self.assertEqual(selected_action(state(actions=actions)).name,'Fire Blast')
+        healthy=state(actions=actions)
+        self.assertEqual(selected_action(healthy).name,'Frostbolt')
+        low=replace(healthy,combat_target=replace(healthy.combat_target,health=12))
+        self.assertEqual(selected_action(low).name,'Fire Blast')
         waiting=(replace(actions[0],cooldown_ms=2000),)+actions[1:]
-        self.assertEqual(selected_action(state(actions=waiting)).name,'Frostbolt')
+        self.assertEqual(selected_action(replace(low,action_spells=waiting)).name,'Frostbolt')
 
     def test_priest_dot_and_direct_damage_are_class_policies(self):
         actions=(

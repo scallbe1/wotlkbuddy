@@ -10,12 +10,12 @@ from time import sleep as real_sleep
 from typing import Callable
 
 from wotlkbuddy.combat.rotation import (
-    Ability, CombatContext, DEFAULT_ROTATIONS, choose_ability)
+    Ability, CombatContext, DEFAULT_ROTATIONS, Rotation, RotationRule, choose_ability)
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 
 
-def selected_action(snapshot: ClientTelemetry) -> Ability | None:
+def selected_action(snapshot: ClientTelemetry, *, opening: bool = False) -> Ability | None:
     """Select a ready, ranged, class-appropriate spell from live action slots."""
     if (snapshot.truncated or snapshot.player.dead or
             snapshot.resources is None or snapshot.combat_target is None):
@@ -44,6 +44,10 @@ def selected_action(snapshot: ClientTelemetry) -> Ability | None:
                     snapshot.current_cast_remaining_ms > 0),
         buffs=frozenset(snapshot.player_auras),
         target_debuffs=frozenset(snapshot.target_auras))
+    if opening and cls == 'MAGE':
+        rotation=Rotation('MAGE',(RotationRule('Frostbolt', 1),
+                                 RotationRule('Fireball', 2),
+                                 RotationRule('Fire Blast', 3)))
     return choose_ability(rotation,observed,ctx)
 
 
