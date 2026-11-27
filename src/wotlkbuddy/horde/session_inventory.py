@@ -49,6 +49,28 @@ class SessionInventory:
         return self.record_sale(sold)
 
 
+    def prepare_services(self, args, *, quest_profile, profiles_root, pid, cap,
+                         driver, nav, db, location, hud, set_native_status, log):
+        """Handle bag pressure and repairs before quest or trainer travel."""
+        if args.only in ('all', 'vendor', 'objectives', 'collect', 'objects', 'turnin'):
+            self.ensure_reward_space(
+                quest_profile=quest_profile, profiles_root=profiles_root,
+                pid=pid, cap=cap, driver=driver, nav=nav, db=db,
+                location=location, hud=hud, set_native_status=set_native_status,
+                log=log, force_sale=args.only=='vendor')
+            if args.only=='vendor':
+                self.report['vendor']={'status':'bag space verified',
+                                       'free_slots':cap().resources.free_bag_slots}
+        from wotlkbuddy.horde.repair import maintain_equipment
+        result=maintain_equipment(
+            profile=quest_profile, profiles_root=profiles_root, location=location,
+            cap=cap, driver=driver, pid=pid, nav=nav, db=db, hud=hud,
+            set_native_status=set_native_status, log=log,
+            memory=getattr(args,'_repair_route_memory',None))
+        if result is not None:
+            self.report['equipment_repair']=result
+
+
 def bind_encounter_loot(*, cap, location, driver, nav, pid, log):
     """Attach verified corpse looting and post-loot bag upgrades to this driver."""
     from wotlkbuddy.live.world_position import observe_target_position
