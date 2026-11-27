@@ -273,6 +273,17 @@ def load_horde_vendor_catalog(profiles_root: str | Path, *,
         # the old root/Horde fallback in that case. Real selected profiles
         # have already been loaded from disk and are strictly contained.
         if selected.is_file():
+            native = native_profiles_root().resolve()
+            if selected.is_relative_to(native) and not selected.is_relative_to(root):
+                # Native selection must not break the existing merchant catalog.
+                # Scan the trusted packaged tree plus the known import tree if present.
+                native_vendors = load_horde_vendor_catalog(
+                    native, selected_profile_path=selected, max_files=max_files)
+                for imported in (root, root / 'Profile v3'):
+                    if (imported / 'Horde').is_dir():
+                        return native_vendors + load_horde_vendor_catalog(
+                            imported, max_files=max_files)
+                return native_vendors
             if not selected.is_relative_to(root):
                 raise HordeProfileError(
                     'Selected profile must remain under the profiles root')
@@ -431,6 +442,24 @@ def condition_value(expression: str, *, level: int, race: str = 'Undead',
         return None
     except (TypeError, ValueError):
         return None
+
+
+def native_profiles_root() -> Path:
+    """Installed, version-controlled profiles shipped with WotLKBuddy."""
+    return Path(__file__).resolve().parent.parent / 'profiles'
+
+
+def select_quest_profile(profiles_root: str | Path, *, level: int,
+                         race: str = 'Undead', class_name: str = 'Mage') -> Path:
+    """Prefer a curated native route; fall back to the imported loader."""
+    if 1 <= level <= 12 and race.casefold() == 'undead' and class_name.casefold() == 'mage':
+        root = native_profiles_root().resolve()
+        path = (root / 'Horde' / 'Starter' / 'Tirisfal-Glades-1-12.xml').resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise HordeProfileError('Installed native Tirisfal profile missing; reinstall WotLKBuddy')
+        return path
+    return select_profile_from_loader(profiles_root, level=level, race=race,
+                                      class_name=class_name)
 
 
 def select_profile_from_loader(profiles_root: str | Path, *, level: int,
