@@ -5,6 +5,7 @@ from math import hypot
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.horde.interaction import navigate_with_status
+from wotlkbuddy.horde.height_recovery import HeightRecovery
 from wotlkbuddy.live.codec import ClientTelemetry
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.live.world_travel import validate_nav_path
@@ -22,7 +23,7 @@ def verify_replan_position(state,world_position,pid,guid,map_id):
 def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approach_path=None,
                   pid, guid, quest_id, capture, driver, nav, world_position,
                   guard, fresh, travel, max_seconds, now, started, log) -> ClientTelemetry:
-    """Follow Detour; retry a height mismatch once from measured live XYZ.
+    """Follow Detour; replan from measured XYZ while a distant camp gets closer.
 
     A route that reaches an XY waypoint on the wrong floor is invalid.
     Never keep walking that route or relax its Z tolerance. A new
@@ -31,12 +32,17 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approac
     """
     height_replans = 0
     displacement_replans = 0
-    height_limit = 4 if camp_transit else 1
+    height_limit = 1
+    camp_recovery = None
     precise = approach_path is not None
     while True:
+        if now()-started >= max_seconds:
+            raise LiveControlError('Quest travel time budget exhausted during navigation')
         _pid, world = world_position(s)
         if _pid != pid:
             raise LiveControlError('Active WoW PID changed')
+        if camp_transit and camp_recovery is None:
+            camp_recovery = HeightRecovery(world.position, dest, max_stagnant=0, min_progress=5.)
         remaining_xy = hypot(world.x-dest.x, world.y-dest.y)
         if remaining_xy < (1.0 if precise else 4):
             if abs(world.z-dest.z) > (1.5 if precise else 5):
@@ -58,8 +64,8 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approac
             log(f'Distant camp transit: first of {len(segments)} validated segments; '
                 f'final camp XYZ ({dest.x:.2f},{dest.y:.2f},{dest.z:.2f})')
         log(f'Detour approaching target location via {len(legs)-1} longer legs'
-            + (f' (height replan {height_replans}/{height_limit})'
-               if height_replans else ''))
+            + (f' (height replan {height_replans}; progress-based)' if camp_transit and height_replans
+               else f' (height replan {height_replans}/{height_limit})' if height_replans else ''))
         kb = getattr(driver, 'keyboard', driver)
         def sample():
             snap = capture()
@@ -100,12 +106,12 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approac
             return out
         if (out.player.in_combat or
                 'height/floor' not in report.stopped_reason or
-                height_replans >= height_limit):
+                (not camp_transit and height_replans >= height_limit)):
             raise LiveControlError('Navigation stopped: '+report.stopped_reason)
         measured = verify_replan_position(out,world_position,pid,guid,world.map_id)
         new_remaining = hypot(measured.x-dest.x, measured.y-dest.y)
         progress_xy = remaining_xy - new_remaining
-        if progress_xy < 5:
+        if progress_xy < 5 or (camp_recovery is not None and not camp_recovery.record(measured.position)):
             raise LiveControlError(
                 'Navigation stopped: '+report.stopped_reason+
                 f'; only {progress_xy:.1f}y closer to destination, '
@@ -114,5 +120,6 @@ def navigate_hunt(s: ClientTelemetry, dest: Vec3, *, camp_transit=False, approac
         log(f'Detour height/floor disagreement after moving '
             f'{progress_xy:.1f}y closer: player XYZ '
             f'({measured.x:.2f},{measured.y:.2f},{measured.z:.2f}); '
-            'recalculating once from the measured player floor')
+            + ('recalculating from measured player floor; destination progress retained'
+               if camp_transit else 'recalculating once from the measured player floor'))
         s = out
