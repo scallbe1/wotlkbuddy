@@ -46,6 +46,63 @@ def refresh_trainer_services(state, *, driver, fresh, log):
     return state
 
 
+def verify_trainer_frame(s, guid, npc_name, npc_id, driver, *, opening=False):
+    """Never authorize trainer input from incomplete or changed observations."""
+    if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+        raise LiveControlError('Trainer interrupted: Escape pressed or WoW lost focus')
+    if s.player.guid != guid:
+        raise LiveControlError('Trainer interrupted: player identity changed')
+    if s.player.dead or s.player.in_combat:
+        raise LiveControlError('Trainer interrupted: player dead or in combat')
+    if s.player.target_name != npc_name or creature_entry_from_guid(s.player.target_guid) != npc_id:
+        raise LiveControlError(f'Trainer interrupted: target changed from {npc_name} '
+                               f'(entry {npc_id}) to {s.player.target_name!r} '
+                               f'GUID {s.player.target_guid!r}')
+    if s.truncated or s.resources is None:
+        reason = 'truncated telemetry' if s.truncated else 'missing player resources'
+        if opening:
+            return reason
+        raise LiveControlError(f'Trainer interrupted: {reason} (frame {s.sequence})')
+    if s.resources.class_token.upper() != 'MAGE':
+        raise LiveControlError('Trainer interrupted: player class is not Mage')
+    return None
+
+
+def fresh_trainer_frame(last, *, guid, npc_name, npc_id, driver, capture,
+                        sleep, now, timeout, opening, log):
+    """Wait for fresh complete telemetry without repeating the opening input."""
+    deadline = now()+timeout
+    incomplete = None
+    while now() < deadline:
+        if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+            raise LiveControlError('Trainer interrupted: Escape pressed or WoW lost focus')
+        sleep(.35)
+        try:
+            s = capture()
+        except ValueError as exc:
+            if not opening:
+                raise
+            if incomplete is None:
+                log(f'{npc_name}: trainer UI opening; incomplete capture: {exc}')
+            incomplete = 'capture decode failed'
+            continue
+        reason = verify_trainer_frame(s, guid, npc_name, npc_id, driver, opening=opening)
+        if reason is None and opening and not s.trainer_open and (
+                s.dialog is None or (s.dialog.kind == 'gossip' and not s.gossip_services_complete)):
+            reason = 'incomplete NPC dialogue or gossip service list'
+        if reason is not None:
+            if incomplete != reason:
+                log(f'{npc_name}: trainer UI opening: {reason}; waiting without further input')
+            incomplete = reason
+            continue
+        if s.sequence != last.sequence:
+            return s
+    if incomplete:
+        raise LiveControlError(f'{npc_name}: trainer UI opening timed out: {incomplete}; '
+                               'no further trainer input sent')
+    raise LiveControlError('Trainer telemetry not refreshing')
+
+
 def train_available_mage_spells(
     *, npc_name: str, npc_id: int, capture: Callable[[], ClientTelemetry],
     driver, max_spells: int = 8,
@@ -62,23 +119,12 @@ def train_available_mage_spells(
         raise LiveControlError('Player GUID missing before trainer interaction')
 
     def guard(s):
-        if (s.truncated or s.player.guid != guid or s.player.dead or
-                s.player.in_combat or s.resources is None or
-                s.resources.class_token.upper() != 'MAGE' or
-                s.player.target_name != npc_name or
-                creature_entry_from_guid(s.player.target_guid) != npc_id or
-                driver.emergency_stop_requested() or not driver.wow_is_foreground()):
-            raise LiveControlError('Trainer NPC/player identity or input state changed')
+        verify_trainer_frame(s, guid, npc_name, npc_id, driver)
 
-    def fresh(last, timeout=6):
-        deadline = now()+timeout
-        while now() < deadline:
-            sleep(.35)
-            s=capture()
-            guard(s)
-            if s.sequence != last.sequence:
-                return s
-        raise LiveControlError('Trainer telemetry not refreshing')
+    def fresh(last, timeout=6, *, opening=False):
+        return fresh_trainer_frame(last, guid=guid, npc_name=npc_name, npc_id=npc_id,
+            driver=driver, capture=capture, sleep=sleep, now=now, timeout=timeout,
+            opening=opening, log=log)
 
     guard(first)
     s = first
@@ -102,7 +148,7 @@ def train_available_mage_spells(
             deadline = now() + 8
             last = s
             while now() < deadline:
-                s = fresh(last)
+                s = fresh(last, timeout=min(6, max(.35, deadline-now())), opening=True)
                 last = s
                 if s.trainer_open or (s.dialog and s.dialog.kind != 'none'):
                     break
@@ -141,7 +187,7 @@ def train_available_mage_spells(
         deadline = now() + 8
         last = confirmed
         while now() < deadline:
-            s = fresh(last)
+            s = fresh(last, timeout=min(6, max(.35, deadline-now())), opening=True)
             last = s
             if s.trainer_open:
                 break
