@@ -2,8 +2,9 @@
 from time import sleep as real_sleep
 from wotlkbuddy.live.control import LiveControlError
 
-MAGE_ACTIONS=('Fireball','Polymorph','Frostbolt','Fire Blast','Arcane Intellect',
-              'Frost Armor','Conjure Food','Conjure Water','Frost Nova')
+MAGE_ACTIONS=('Fireball','Frostbolt','Frost Nova','Polymorph','Fire Blast',
+              'Arcane Intellect','Frost Armor','Conjure Food','Conjure Water')
+FROST_REQUIRED_LEVELS={'Frostbolt':4,'Frost Nova':10}
 
 
 def cleanup_plan(rows,bound):
@@ -31,6 +32,7 @@ def verified_empty(state,button):
 
 def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
     first=capture()
+    driver.missing_frost_spells=set()
     guid=first.player.guid
     def check(s):
         if (s.truncated or s.player.guid!=guid or
@@ -84,7 +86,7 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
     for name in MAGE_ACTIONS:
         existing=next((r for r in state.visible_hotbar if r[1]=='spell' and r[3]==name and r[0] in bound(state)),None)
         empty=next((r[0] for r in state.visible_hotbar if r[1]=='empty' and r[0] in bound(state)),None)
-        if existing is None and (not full(state) or empty is None):
+        if existing is None and (not full(state) or empty is None) and name not in FROST_REQUIRED_LEVELS:
             continue
         driver.chat('/wbtability '+name)
         observed=fresh(state,lambda s:s.actionbar_page==1 and (
@@ -96,8 +98,13 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
         state=observed
         probe=state.spellbook_probe
         if not probe or probe.name!=name:
-            if name=='Polymorph':
-                log(f'Hotbar: Polymorph not confirmed learned: {state.spellbook_diagnostic}')
+            diagnostic=state.spellbook_diagnostic
+            if (name in FROST_REQUIRED_LEVELS and state.player.level>=FROST_REQUIRED_LEVELS[name]
+                    and diagnostic and diagnostic.name==name and diagnostic.status=='NO_MATCH'):
+                driver.missing_frost_spells.add(name)
+                log(f'Frost readiness: {name} missing from learned spellbook; trainer needed')
+            elif name in ('Polymorph','Frostbolt','Frost Nova'):
+                log(f'Hotbar: {name} not confirmed learned: {diagnostic}')
             continue
         if name=='Polymorph':
             driver.verified_polymorph_id=probe.spell_id
@@ -117,7 +124,8 @@ def reconcile_mage_hotbar(*,capture,driver,log=lambda _:None,sleep=real_sleep):
             log(f'Hotbar: upgraded {name} to spell {probe.spell_id} on button {existing[0]}')
             continue
         if not full(state) or not any(r[:3]==(empty,'empty',0) for r in state.visible_hotbar):
-            break
+            log(f'Hotbar: {name} learned but no verified empty bound button; preserving bar')
+            continue
         driver.chat(f'/wbtbar put {empty} {probe.spell_id}')
         after=fresh(state,lambda s:full(s) and
             (empty,'spell',probe.spell_id,name) in s.visible_hotbar)
