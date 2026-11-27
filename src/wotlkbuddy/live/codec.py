@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 COLS = 48
-ROWS = 20
+ROWS = 32
 CELL = 4
 MAGIC = ((255, 0, 255), (0, 255, 255), (255, 255, 0), (0, 0, 0))
 MAX_PAYLOAD = (COLS * ROWS - 6) * 3
