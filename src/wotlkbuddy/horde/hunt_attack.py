@@ -253,6 +253,10 @@ def attack_target(s: ClientTelemetry, expected: int, objective_index: int,
         s=faced
         if s.combat_target.dead:
             continue
+        from wotlkbuddy.combat.frost_kite import frost_kite
+        s=frost_kite(s,driver=driver,fresh=fresh,log=log)
+        if s.player.target_guid!=target_guid or not s.combat_target or s.combat_target.dead:
+            continue
         previous_health = s.combat_target.health
         action, casted = cast_selected_action(s, driver=driver, log=log)
         if not casted:
