@@ -182,3 +182,53 @@ def test_approved_weaker_undead_pair_can_be_fought_without_polymorph():
     result,allowed=assess_linked_pull(opening,plan,primary,driver,
         NS(_fresh=lambda _:next(frames)),(),lambda _:None)
     assert result is restored and allowed is plan
+
+
+def test_level_ten_commits_to_two_level_six_undead_without_target_cycling():
+    from wotlkbuddy.horde.encounter import assess_encounter, assess_linked_pull
+    primary, escort = travel_pair()
+    primary.entry = escort.entry = 1526
+    primary.name = escort.name = 'Ravaged Corpse'
+    primary.level = escort.level = 6
+    primary.health = escort.health = 120
+    opening = state(primary, creature='Undead', hp=120)
+    opening.player.level = 10
+    opening.player.health = opening.player.max_health = 177
+    opening.resources = NS(class_token='MAGE', mana=486, max_mana=486)
+    opening.combat_target.level = 6
+    opening.combat_target.max_health = 120
+    from wotlkbuddy.game.types import Vec3
+    plan = assess_encounter(opening.player, opening.resources, Vec3(0,0,0),
+                            primary, (primary, escort))
+    assert plan.allowed
+    def unexpected(*_):
+        raise AssertionError('Clearly weaker pair must not cycle targets')
+    driver = NS(assessing_travel_corridor=True, chat=unexpected,
+                target_objective_name=unexpected)
+    result, approved = assess_linked_pull(opening, plan, primary, driver,
+        NS(_fresh=unexpected), (), lambda _: None)
+    assert result is opening and approved is plan
+
+
+def test_decisive_weaker_pull_retains_resource_identity_and_encounter_guards():
+    from wotlkbuddy.horde.encounter import decisive_weaker_pull
+    primary, escort = travel_pair()
+    primary.level = escort.level = 6
+    opening = state(primary, creature='Undead')
+    opening.player.level = 10
+    opening.player.health = opening.player.max_health = 177
+    opening.resources = NS(class_token='MAGE', mana=486, max_mana=486)
+    plan = PullPlan(True, (primary, escort), 'approved weaker pair')
+    driver = NS(assessing_travel_corridor=True)
+    assert decisive_weaker_pull(opening, plan, primary, driver, ())
+    assert not decisive_weaker_pull(opening, plan, primary, NS(), ())
+    assert not decisive_weaker_pull(opening, PullPlan(False, plan.enemies, 'unknown risk'),
+                                     primary, driver, ())
+    opening.resources.mana = 300
+    assert not decisive_weaker_pull(opening, plan, primary, driver, ())
+    opening.resources.mana = 486
+    escort.classification = 'elite'
+    assert not decisive_weaker_pull(opening, plan, primary, driver, ())
+    escort.classification = 'normal'
+    opening.player.target_guid = escort.guid
+    assert not decisive_weaker_pull(opening, plan, primary, driver, ())
