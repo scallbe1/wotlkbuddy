@@ -17,6 +17,7 @@ CATCHUP_RADIUS=600
 class RecoveryOffer:
     giver: NpcDestination
     quest_ids: frozenset[int]
+    level_rank: float = inf
 
 
 def offer_retry_due(memory, player, entry, now):
@@ -42,8 +43,10 @@ def candidate_rank(step,index,metadata,state,active,done,cutoff):
     return (inf,index) if index<cutoff else None
 
 
-def recovery_offers(profile,state,current,db,memory,*,now,metadata=None):
+def recovery_offers(profile,state,current,db,memory,*,now,metadata=None,radius=CATCHUP_RADIUS):
     """Discover missed opportunities on any supported profile/map/class."""
+    if not 30 <= radius <= 4000:
+        raise ValueError('Quest discovery radius outside travel budget')
     if (profile is None or db is None or state.truncated or state.player.dead
             or state.player.in_combat or not state.player.guid
             or len(state.quests)>=23 or getattr(state,'resources',None) is None
@@ -74,7 +77,7 @@ def recovery_offers(profile,state,current,db,memory,*,now,metadata=None):
         if not offer_retry_due(memory,state.player,step.entry,now):
             continue
         position=quest_giver_position(db,step,map_id=current.map_id,
-                                     origin=current.position,radius=CATCHUP_RADIUS)
+                                     origin=current.position,radius=radius)
         if position is None:
             continue
         distance=distance_world(current.position,position)
@@ -89,5 +92,5 @@ def recovery_offers(profile,state,current,db,memory,*,now,metadata=None):
         else:
             old,ids,best=grouped[key]
             grouped[key]=(old,ids|{step.quest_id},min(best,score))
-    return tuple(RecoveryOffer(giver,frozenset(ids))
-                 for giver,ids,_ in sorted(grouped.values(),key=lambda x:x[2]))
+    return tuple(RecoveryOffer(giver,frozenset(ids),score[0])
+                 for giver,ids,score in sorted(grouped.values(),key=lambda x:x[2]))
