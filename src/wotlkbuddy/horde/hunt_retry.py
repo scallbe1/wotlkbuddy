@@ -58,7 +58,7 @@ def select_spawn_goal(s, *, routes, nearby, spec, allowed_sources, expected,
             from wotlkbuddy.horde.hunt_height_staging import is_height_failure
             error=list(routes.failed_navigation.values())[-1]
             if all(is_height_failure(e) for e in routes.failed_navigation.values()):
-                raise EncounterRouteUnavailable('Quest hunt height/floor approaches exhausted; refresh live terrain and patrols next cycle') from error
+                raise EncounterRouteUnavailable('Quest hunt height/floor approaches exhausted; refresh live terrain and patrols next cycle: '+str(error)) from error
             raise error
         raise LiveControlError(
             f'No verified nearby creature spawns or bounded reference '
@@ -409,7 +409,7 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
         raise
     except LiveControlError as exc:
         from wotlkbuddy.horde.hunt_height_staging import is_height_failure
-        if is_height_failure(exc) and retry_height():
+        if not reference_only and is_height_failure(exc) and retry_height():
             return
         handle_spawn_failure(exc, routes=routes, key=key, allowed_sources=allowed_sources,
                              capture=capture, guard=guard, world_position=world_position,
