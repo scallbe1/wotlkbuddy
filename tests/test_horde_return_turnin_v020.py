@@ -330,3 +330,59 @@ def test_moving_receiver_search_refuses_disappearing_completed_quest(monkeypatch
         return_and_turnin(profile=profile(),quest_id=364,pid=77,
             capture=lambda:next(frames),driver=FakeDriver(),nav=FakeNav(),spawns=FakeDb(),
             world_position=position,turnin=lambda *a,**k:pytest.fail('no reward input'))
+
+
+def test_delivery_timeout_with_verified_progress_resumes_next_phase():
+    from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+    import pytest
+    far=Vec3(START.x+1200,START.y,START.z)
+    advanced=Vec3(START.x+300,START.y,START.z)
+    state={'xyz':START,'timeout':True,'turnins':0}
+    def position(s):
+        v=state['xyz']
+        return 77,SimpleNamespace(map_id=0,player_guid=s.player.guid,position=v,x=v.x,y=v.y,z=v.z)
+    def travel(points,**kwargs):
+        if state['timeout']:
+            state['xyz']=advanced
+            return SimpleNamespace(stopped_reason='World navigation time limit reached')
+        state['xyz']=points[-1]
+        return SimpleNamespace(stopped_reason='complete')
+    def handin(*args,**kwargs):
+        assert state['xyz']==far
+        state['turnins']+=1
+        return SimpleNamespace(status='turned_in')
+    def run():
+        return return_and_turnin(profile=profile(turnin_xyz=far),quest_id=364,pid=77,
+            capture=snapshot,driver=FakeDriver(),nav=FakeNav(),spawns=FakeDb((far,)),
+            world_position=position,travel=travel,turnin=handin)
+    with pytest.raises(EncounterRouteUnavailable,match='verified progress'):
+        run()
+    assert state['turnins']==0 and state['xyz']==advanced
+    state['timeout']=False
+    assert run().status=='turned_in' and state['turnins']==1
+
+
+def test_delivery_timeout_without_progress_or_with_focus_loss_does_not_yield():
+    from wotlkbuddy.horde.return_turnin import travel_delivery_slice
+    from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+    import pytest
+    def travel(*a,**k):
+        raise LiveControlError('World navigation time limit reached')
+    driver=FakeDriver()
+    for xyz,focused in ((START,True),(SARVIS,False)):
+        driver.wow_is_foreground=lambda:focused
+        with pytest.raises(LiveControlError) as exc:
+            travel_delivery_slice(travel,driver,START,SARVIS,lambda _:None,[START,SARVIS],
+                sample=lambda:(snapshot(),SimpleNamespace(position=xyz)))
+        assert not isinstance(exc.value,EncounterRouteUnavailable)
+
+
+def test_delivery_timeout_exception_with_progress_is_recoverable():
+    from wotlkbuddy.horde.return_turnin import travel_delivery_slice
+    from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+    import pytest
+    def travel(*a,**k):
+        raise LiveControlError('World navigation time limit reached')
+    with pytest.raises(EncounterRouteUnavailable,match='verified progress'):
+        travel_delivery_slice(travel,FakeDriver(),START,SARVIS,lambda _:None,[START,SARVIS],
+            sample=lambda:(snapshot(),SimpleNamespace(position=SARVIS)))
