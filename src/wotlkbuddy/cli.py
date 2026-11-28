@@ -20,6 +20,7 @@ from wotlkbuddy.profiles.quest import read_quest_profile
 from wotlkbuddy.quests.model import QuestDefinition, QuestObjectiveRequirement
 from wotlkbuddy.horde.session_delivery import execute_profile_return as _execute_profile_return
 from wotlkbuddy.horde.session_recovery import recover_horde_death as _recover_horde_death
+from wotlkbuddy.horde.reference_cli import register_reference_command
 
 
 def _run_demo(args: argparse.Namespace) -> None:
@@ -1341,7 +1342,7 @@ def _register_world_observation_commands(sub):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wotlkbuddy")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = register_reference_command(parser.add_subparsers(dest="command", required=True))
     demo = sub.add_parser("simulate", help="Run offline grinding simulation")
     demo.add_argument("--ticks", type=int, default=20)
     demo.add_argument("--profile", help="Optional XML hotspots profile")

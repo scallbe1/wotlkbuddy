@@ -27,7 +27,7 @@ wotlkbuddy = "wotlkbuddy.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"wotlkbuddy.horde" = ["verified_vendor_services.tsv", "QuestMetadata.upstream.tsv"]
+"wotlkbuddy.horde" = ["verified_vendor_services.tsv", "QuestMetadata.upstream.tsv", "QuestRelations.upstream.tsv"]
 "wotlkbuddy.profiles" = ["Horde/Starter/*.xml", "Horde/Classic/*.xml", "Alliance/Starter/*.xml", "Alliance/Classic/*.xml", "schema/*"]
 
 [tool.pytest.ini_options]
