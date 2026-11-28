@@ -62,7 +62,7 @@ class ObjectQuestReport:
 
 
 def next_active_gameobject_quest(
-    profile: HordeProfile, snap: ClientTelemetry, *, map_id: int,
+    profile: HordeProfile, snap: ClientTelemetry, *, map_id: int, rank=None, collect_only=False,
 ) -> ActiveGameObjectQuest | None:
     """Match source XML QuestOrder to live objective; refuse invented GO IDs."""
     if (snap.truncated or not snap.player.guid or snap.player.dead or
@@ -72,12 +72,15 @@ def next_active_gameobject_quest(
         raise LiveControlError('Living out-of-combat Undead Mage required')
     quests={q.quest_id:q for q in snap.quests}
     completed={qid for qid,flag in snap.quest_completions if flag}
+    eligible=[]
     for index,step in enumerate(profile.steps,1):
         if (step.kind!='objective' or not step.supported or
                 step.objective_type not in ('CollectItem','UseObject') or
                 step.quest_id not in quests or step.quest_id in completed):
             continue
         quest=quests[step.quest_id]
+        if collect_only and step.objective_type!='CollectItem':
+            continue
         if quest.complete:
             continue
         checks=[condition_value(expression,level=snap.player.level,
@@ -120,11 +123,14 @@ def next_active_gameobject_quest(
                 item_id=0
             if not 0 < object_id < 2**24 or not spec.hotspots:
                 continue
-            return ActiveGameObjectQuest(
+            candidate = ActiveGameObjectQuest(
                 step.quest_id,quest.title,index,step.objective_type,
                 object_id,object_name,item_id,spec.count,spec.hotspots,
                 observed.index)
-    return None
+            if rank is None:
+                return candidate
+            eligible.append(candidate)
+    return min(eligible,key=rank,default=None)
 
 
 def next_object_hotspot(hotspots,visited,origin):
