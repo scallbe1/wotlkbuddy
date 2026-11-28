@@ -28,8 +28,13 @@ def test_ranged_corpse_can_be_approached_from_27_yards(monkeypatch):
     where=NS(x=0.,y=0.,z=0.,position=Vec3(0,0,0),map_id=0)
     state=NS(player=NS(in_combat=False))
     nav=NS(find_path=lambda m,a,b:(a,b),segment_clear=lambda *args:True)
-    driver=NS(keyboard=None,emergency_stop_requested=lambda:False)
-    monkeypatch.setattr(encounter_loot,'follow_world_path',lambda *args,**kw:NS(stopped_reason='complete'))
+    driver=NS(keyboard=None,emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True)
+    def travel(path,**kwargs):
+        p=path[-1]
+        where.position=p
+        where.x,where.y,where.z=p.x,p.y,p.z
+        return NS(stopped_reason='complete')
+    monkeypatch.setattr(encounter_loot,'follow_world_path',travel)
     logs=[]
     result=encounter_loot.approach_corpse(state,where,Vec3(27,0,0),27,
         cg='corpse',retry_after={},now=lambda:0.,nav=nav,driver=driver,
@@ -46,3 +51,14 @@ def test_colors_distinguish_navigation_loot_warning_and_success():
     stream=StringIO()
     log_console('Loot deferred: no free bag slots',stream=stream)
     assert stream.getvalue()=='Loot deferred: no free bag slots\n'
+
+
+def test_approach_does_not_accept_completion_without_measured_movement(monkeypatch):
+    where=NS(x=0.,y=0.,z=0.,position=Vec3(0,0,0),map_id=0)
+    state=NS(player=NS(in_combat=False))
+    nav=NS(find_path=lambda m,a,b:(a,b),segment_clear=lambda *args:True)
+    driver=NS(keyboard=None,emergency_stop_requested=lambda:False,wow_is_foreground=lambda:True)
+    monkeypatch.setattr(encounter_loot,'follow_world_path',lambda *args,**kw:NS(stopped_reason='complete'))
+    assert not encounter_loot.approach_corpse(state,where,Vec3(27,0,0),27,
+        cg='corpse',retry_after={},now=lambda:0.,nav=nav,driver=driver,
+        observe=lambda:(state,where),log=lambda _:None)[2]

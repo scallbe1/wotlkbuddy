@@ -1,5 +1,5 @@
 """Drain the combat-log corpse queue at encounter boundaries, regardless of quest."""
-from math import hypot
+from math import hypot, atan2, cos, sin, pi
 from time import monotonic, sleep as real_sleep
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
@@ -28,53 +28,122 @@ def select_corpse(state, where, cg, entry, name, *, driver, fresh, exact, log):
     return state,where
 
 
-def approach_corpse(state, where, point, distance, *, cg, retry_after, now, nav, driver, observe, log):
-    """Return the observed state and a reasoned outcome for a bounded corpse approach."""
-    dz=point.z-where.z
-    if abs(dz)>4:
-        retry_after[cg]=now()+45
-        log(f'Loot deferred: {cg}; height difference {dz:+.1f}y exceeds 4y (distance {distance:.1f}y)')
-        return state,where,False
-    if distance<=4:
+def corpse_route(nav,where,point,*,radius,exclude=(),log):
+    """Try the direct stand-off, then projected positions around the corpse."""
+    origin=where.position
+    angle=atan2(origin.y-point.y,origin.x-point.x)
+    for offset in (0.,pi/3,-pi/3,2*pi/3,-2*pi/3,pi):
+        desired=Vec3(point.x+radius*cos(angle+offset),
+                     point.y+radius*sin(angle+offset),point.z)
+        if any(desired.distance_to(old)<.5 for old in exclude):
+            continue
+        try:
+            # Preserve the ordinary direct path first. Alternate positions
+            # use actual mesh projection when the provider supports it.
+            project=getattr(nav,'nearest_point',None)
+            dest=project(where.map_id,desired) if callable(project) else desired
+            if (dest is None or dest.distance_to(desired)>2
+                    or dest.distance_to(point)>3.5):
+                continue
+            raw=nav.find_path(where.map_id,origin,dest)
+            if not raw or raw[0].distance_to(origin)>3 or raw[-1].distance_to(dest)>1.5:
+                continue
+            path=validate_nav_path(raw,origin,dest,max_distance=70,max_step=5)
+            if path:
+                return path,desired
+        except (OSError,ValueError,RuntimeError,TimeoutError):
+            continue
+    log('No complete local route to a reachable corpse interaction position')
+    return None,None
+
+
+def approach_corpse(state, where, point, distance, *, cg, retry_after, now, nav, driver, observe, log,
+                    close=False):
+    """Recheck measured range after each approach; try a different angle on failure."""
+    if distance<=(1.8 if close else 3.5):
         return state,where,True
     if distance>40:
-        retry_after[cg]=now()+45
         log(f'Loot deferred: {cg}; corpse {distance:.1f}y away exceeds 40y approach limit')
         return state,where,False
-    dx,dy=point.x-where.x,point.y-where.y
-    d=hypot(dx,dy)
-    if d<.1:
-        log(f'Loot deferred: {cg}; no horizontal approach to corpse')
+    if nav is None:
+        log(f'Loot deferred: {cg}; no navigation available; height difference {point.z-where.z:+.1f}y')
         return state,where,False
-    dest=Vec3(point.x-dx/d*2.5,point.y-dy/d*2.5,point.z)
-    try:
-        path=validate_nav_path(nav.find_path(where.map_id,where.position,dest),
-            where.position,dest,max_distance=48,max_step=5)
-    except (OSError,ValueError,RuntimeError) as exc:
-        log(f'Loot deferred: {cg}; no verified corpse route: {exc}')
-        return state,where,False
-    log(f'Loot approach: {cg}; {distance:.1f}y away, height difference {dz:+.1f}y')
-    report=follow_world_path(path,sample=observe,keyboard=driver.keyboard,
-        stop_requested=driver.emergency_stop_requested,expected_quest_id=None,
-        expected_map_id=where.map_id,max_seconds=45,arrival_yards=1.,
-        progress=log,on_threat=None,on_aggro=None,
-        can_traverse=lambda a,b:nav.segment_clear(where.map_id,a,b))
-    state,where=observe()
-    if state.player.in_combat:
-        log(f'Loot deferred: {cg}; combat interrupted corpse approach')
-        return state,where,False
-    if report.stopped_reason!='complete':
-        log(f'Loot deferred: {cg}; corpse approach stopped: {report.stopped_reason}')
-        return state,where,False
-    return state,where,True
+    tried=[]
+    for attempt in range(3):
+        if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+            raise LiveControlError('Encounter loot interrupted')
+        radius=1.3 if close or attempt else 2.5
+        path,dest=corpse_route(nav,where,point,radius=radius,exclude=tried,log=log)
+        if path is None:
+            break
+        tried.append(dest)
+        log(f'Loot approach: {attempt+1}/3 {cg}; {where.position.distance_to(point):.1f}y away, '
+            f'height difference {point.z-where.z:+.1f}y')
+        report=follow_world_path(path,sample=observe,keyboard=driver.keyboard,
+            stop_requested=driver.emergency_stop_requested,expected_quest_id=None,
+            expected_map_id=where.map_id,max_seconds=30,arrival_yards=1.,
+            progress=log,on_threat=None,on_aggro=None,
+            can_traverse=lambda a,b:nav.segment_clear(where.map_id,a,b))
+        state,where=observe()
+        if state.player.in_combat:
+            return state,where,False
+        if report.stopped_reason!='complete':
+            from wotlkbuddy.horde.hunt_routes import recoverable_hunt_failure
+            error=LiveControlError(report.stopped_reason)
+            if not recoverable_hunt_failure(error):
+                raise error
+            log('Corpse route blocked; trying another measured approach: '+str(error))
+        remaining=where.position.distance_to(point)
+        if remaining<=(2.5 if close else 3.5):
+            return state,where,True
+        log(f'Corpse still {remaining:.1f}y away after approach; trying closer ground')
+    retry_after[cg]=now()+8
+    return state,where,False
+
+
+def hover_select_corpse(state,where,cg,entry,*,driver,fresh,exact,log):
+    """Select a dead exact GUID via the world cursor; never click a name match."""
+    mouse_factory=getattr(driver,'corpse_mouse',None)
+    if not callable(mouse_factory) or getattr(state,'mouse_world_dead',None) is None:
+        return state,where
+    from wotlkbuddy.live.world_mouse import world_mouse_probe_points
+    mouse=mouse_factory()
+    for x,y in world_mouse_probe_points():
+        mouse.move(x,y)
+        state,where=fresh(state)
+        if state.player.in_combat:
+            return state,where
+        if state.mouse_world_guid!=cg or not state.mouse_world_dead or state.spell_targeting:
+            continue
+        state,where=fresh(state)
+        if state.player.in_combat:
+            return state,where
+        if state.mouse_world_guid!=cg or not state.mouse_world_dead or state.spell_targeting:
+            continue
+        mouse.left_click()
+        state,where=fresh(state)
+        if exact(state,cg,entry):
+            log(f'Corpse selected by verified WorldFrame GUID: {cg}')
+            return state,where
+        if state.player.in_combat:
+            return state,where
+    return state,where
+
+
+def acquire_corpse(state,where,cg,entry,name,*,driver,fresh,exact,log):
+    state,where=select_corpse(state,where,cg,entry,name,
+        driver=driver,fresh=fresh,exact=exact,log=log)
+    if not state.player.in_combat and not exact(state,cg,entry):
+        state,where=hover_select_corpse(state,where,cg,entry,
+            driver=driver,fresh=fresh,exact=exact,log=log)
+    return state,where
 
 
 def corpse_approach_limit(driver,entry,nearby_only):
     """Keep ordinary travel loot local; quest-source loot gets priority."""
     if nearby_only:
-        return 4.
-    entries=getattr(driver,'active_quest_entries',())
-    return 40. if entry in entries else 12.
+        return 3.5
+    return 40.  # prioritize quest loot in ordering, not by discarding ordinary kills
 
 
 def corpse_bookkeeping(driver):
@@ -181,10 +250,12 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                 break
             if not approached:
                 continue
-            state,where=select_corpse(state,where,cg,entry,name,driver=driver,fresh=fresh,exact=exact,log=log)
+            state,where=acquire_corpse(state,where,cg,entry,name,
+                driver=driver,fresh=fresh,exact=exact,log=log)
             if state.player.in_combat:
                 break
             if not exact(state,cg,entry):
+                retry_after[cg]=now()+8
                 log('Exact corpse not selectable at loot range; retaining pending corpse')
                 if nearby_only:
                     retry_after.pop(cg,None)  # allow the post-rest drain to retry
@@ -194,7 +265,7 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
             except (OSError,ValueError,RuntimeError) as exc:
                 log(f'Loot deferred: {cg}; final corpse position unavailable: {exc}')
                 continue
-            if actual is None or where.position.distance_to(actual)>4.4:
+            if actual is None or where.position.distance_to(actual)>3.5:
                 log(f'Loot deferred: {cg}; final corpse position missing or outside interact range')
                 continue
             baseline=state.loot_sequence
@@ -226,7 +297,10 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                 corpse_bookkeeping(driver)[0].pop(cg,None)
                 log(f'Encounter corpse processed: {cg}')
             else:
+                retry_after[cg]=now()+8
                 log(f'Loot not confirmed: {cg}; window opened={opened}, remaining slots={state.loot_count}, inventory/cash/bag change={before!=after}; corpse remains pending')
+                if nearby_only:
+                    retry_after.pop(cg,None)
         return state
     finally:
         driver.looting_encounter=False

@@ -86,6 +86,8 @@ def bind_encounter_loot(*, cap, location, driver, nav, pid, log):
     """Attach verified corpse looting and post-loot bag upgrades to this driver."""
     from wotlkbuddy.live.world_position import observe_target_position
     from wotlkbuddy.game.win32 import ProcessMemory
+    from wotlkbuddy.live.world_mouse import WorldObjectMouse
+    driver.corpse_mouse=lambda:WorldObjectMouse(pid=pid)
 
     def corpse_position(state, corpse_guid):
         with ProcessMemory(pid, writable=False) as memory:

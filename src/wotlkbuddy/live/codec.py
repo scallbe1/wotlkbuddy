@@ -434,6 +434,8 @@ class ClientTelemetry:
     fireball_key: str | None = None
     fireball_cast_remaining_ms: int | None = None
     mouse_world_name: str | None = None
+    mouse_world_guid: str | None = None
+    mouse_world_dead: bool | None = None
     spell_targeting: bool | None = None
     death_state: DeathState | None = None
     recent_kills: tuple[tuple[int,str,str], ...] = ()
@@ -535,6 +537,24 @@ def validate_action_identity_rows(raw_action_slots,actionbar_inspected,action_id
                 raise TelemetryError('Action identity disagrees with raw action slot')
 
 
+def parse_world_hover(parts):
+    """Parse legacy and extended WorldFrame hover records."""
+    if (len(parts) not in (2,3,5) or len(parts[1])>75 or
+            any(ord(ch)<32 for ch in parts[1]) or
+            (len(parts)>=3 and parts[2] not in ('0','1'))):
+        raise TelemetryError('Malformed WorldFrame hover record')
+    guid=None
+    dead=None
+    if len(parts)==5:
+        raw,flag=parts[3:5]
+        if (flag not in ('0','1') or bool(raw)!=(flag=='1') or
+                (raw and (len(raw)!=18 or not raw.startswith('0x') or
+                 any(ch not in '0123456789abcdefABCDEF' for ch in raw[2:])))):
+            raise TelemetryError('Invalid WorldFrame corpse hover identity')
+        guid,dead=raw or None,flag=='1'
+    return parts[1],(parts[2]=='1' if len(parts)>=3 else None),guid,dead
+
+
 def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     content = data.decode('utf-8', errors='replace')
     player = None
@@ -600,6 +620,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     fireball_key = None
     fireball_cast_remaining_ms = None
     mouse_world_name = None
+    mouse_world_guid = None
+    mouse_world_dead = None
     spell_targeting = None
     for line in content.splitlines():
         parts = line.split('\t')
@@ -743,13 +765,9 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                     raise TelemetryError('Invalid quest item name')
                 tracked_item_name = parts[3] or None
         elif parts[0] == 'G':
-            if (len(parts) not in (2,3) or mouse_world_name is not None or
-                    len(parts[1]) > 75 or
-                    any(ord(c) < 32 for c in parts[1]) or
-                    (len(parts)==3 and parts[2] not in ('0','1'))):
-                raise TelemetryError('Malformed or duplicate WorldFrame hover record')
-            mouse_world_name = parts[1]
-            spell_targeting = (parts[2]=='1') if len(parts)==3 else None
+            if mouse_world_name is not None:
+                raise TelemetryError('Duplicate WorldFrame hover record')
+            mouse_world_name,spell_targeting,mouse_world_guid,mouse_world_dead=parse_world_hover(parts)
         elif parts[0] == 'F':
             if (len(parts) != 3 or fireball_record_seen or
                     parts[1] not in ('-', *'0123456789')):
@@ -1323,6 +1341,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            fireball_key=fireball_key,
                            fireball_cast_remaining_ms=fireball_cast_remaining_ms,
                            mouse_world_name=mouse_world_name,
+                           mouse_world_guid=mouse_world_guid,
+                           mouse_world_dead=mouse_world_dead,
                            spell_targeting=spell_targeting,
                            death_state=death_state,
                            recent_kills=tuple(recent_kills[i] for i in sorted(recent_kills)),
