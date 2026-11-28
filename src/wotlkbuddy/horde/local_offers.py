@@ -6,6 +6,7 @@ from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
 from wotlkbuddy.live.control import LiveControlError
 from wotlkbuddy.horde.quest_offers import accept_npc_offers
 from wotlkbuddy.horde.missed_quests import offer_retry_due, CATCHUP_RADIUS
+from wotlkbuddy.horde.quest_travel import DISCOVERY_RADIUS, plan_recovery_offer, visit_remote_quest_giver
 
 
 def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
@@ -25,9 +26,10 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
     recovery=None
     if local:
         from wotlkbuddy.horde.missed_quests import recovery_offers
-        candidates=recovery_offers(profile,state,current,db,memory,now=now())
-        if candidates:
-            recovery=candidates[0]
+        candidates=recovery_offers(profile,state,current,db,memory,now=now(),radius=DISCOVERY_RADIUS)
+        recovery=plan_recovery_offer(candidates,location=location,driver=driver,nav=nav,
+                                     state=state,world=current,now=now)
+        if recovery:
             givers=[recovery.giver]
             log(f'Quest catch-up: checking unresolved quests {sorted(recovery.quest_ids)} '
                 f'at {recovery.giver.name}, {recovery.giver.distance:.0f}y away')
@@ -39,12 +41,16 @@ def collect_profile_offers(*, profile, location, cap, driver, nav, db, pid,
     for giver in givers[:4 if local else 12]:
         before,where=location()
         if local and (len(before.quests)>=23 or
-                where.position.distance_to(giver.position)>(CATCHUP_RADIUS if recovery else 160)):
+                where.position.distance_to(giver.position)>(DISCOVERY_RADIUS if recovery else 160)):
             continue
         hud.set(goal=f'Accept quests from {giver.name}',action='Navigating to quest giver')
         log(f'Profile quest giver: {giver.name} ({giver.entry}) from {giver.source}')
         try:
-            visited=visit_npc(npc_name=giver.name,npc_id=giver.entry,pid=pid,capture=cap,
+            if recovery:
+                visited=visit_remote_quest_giver(giver,location=location,driver=driver,nav=nav,
+                    visit=visit_npc,now=now,pid=pid,capture=cap,spawns=db,log=log)
+            else:
+                visited=visit_npc(npc_name=giver.name,npc_id=giver.entry,pid=pid,capture=cap,
                 driver=driver,nav=nav,spawns=db,radius=CATCHUP_RADIUS if recovery else 240,
                 destination_hint=giver.position,log=log)
         except (NpcTargetUnavailable,EncounterRouteUnavailable) as exc:

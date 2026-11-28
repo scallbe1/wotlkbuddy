@@ -41,8 +41,18 @@ Discovery uses actual race/class tokens, quest levels, previous-quest
 requirements (including reverse NextQuestID links), positive exclusive group
 exclusions and completed negative prerequisite groups. Other conditions,
 reputation, event availability and complex grouped prerequisites remain
-server-authoritative. Catch-up remains bounded to 600 yards and yields to
-ready rewards. This change does not import quest objectives or NPC relations
+server-authoritative. Runtime catch-up considers givers within a 4,000-yard
+same-map search budget and yields to ready rewards. It compares the first eight
+eligible candidates using complete navmesh routes (maximum 6,000 yards),
+preferring lower-level quests then shorter actual paths. Known unsafe packs and
+partial routes are rejected. Planning is capped at 12 seconds between nav calls;
+each nav query retains the worker's own timeout. Distant or winding routes use
+guarded legs of at most 450 yards, with a shared 450-second / 16-leg visit budget.
+Identity, map, focus, combat, journal-space, arrival and live offer checks remain
+mandatory. These are travel/session limits, not a claim of unlimited discovery
+or guaranteed safety. Local sweeps remain local; standalone planner callers
+retain the legacy 600-yard default unless a travel budget is explicitly passed.
+This change does not automatically execute quest objectives or NPC relations
 outside the selected profile, or make class-specific combat execution generic.
 
 Schema references:
