@@ -62,7 +62,11 @@ def approach_corpse(state, where, point, distance, *, cg, retry_after, now, nav,
     """Recheck measured range after each approach; try a different angle on failure."""
     if distance<=(1.8 if close else 3.5):
         return state,where,True
-    if nav is None or distance>40:
+    if distance>40:
+        log(f'Loot deferred: {cg}; corpse {distance:.1f}y away exceeds 40y approach limit')
+        return state,where,False
+    if nav is None:
+        log(f'Loot deferred: {cg}; no navigation available; height difference {point.z-where.z:+.1f}y')
         return state,where,False
     tried=[]
     for attempt in range(3):
@@ -73,7 +77,7 @@ def approach_corpse(state, where, point, distance, *, cg, retry_after, now, nav,
         if path is None:
             break
         tried.append(dest)
-        log(f'Loot approach {attempt+1}/3: {cg}; {where.position.distance_to(point):.1f}y away, '
+        log(f'Loot approach: {attempt+1}/3 {cg}; {where.position.distance_to(point):.1f}y away, '
             f'height difference {point.z-where.z:+.1f}y')
         report=follow_world_path(path,sample=observe,keyboard=driver.keyboard,
             stop_requested=driver.emergency_stop_requested,expected_quest_id=None,
@@ -123,6 +127,15 @@ def hover_select_corpse(state,where,cg,entry,*,driver,fresh,exact,log):
             return state,where
         if state.player.in_combat:
             return state,where
+    return state,where
+
+
+def acquire_corpse(state,where,cg,entry,name,*,driver,fresh,exact,log):
+    state,where=select_corpse(state,where,cg,entry,name,
+        driver=driver,fresh=fresh,exact=exact,log=log)
+    if not state.player.in_combat and not exact(state,cg,entry):
+        state,where=hover_select_corpse(state,where,cg,entry,
+            driver=driver,fresh=fresh,exact=exact,log=log)
     return state,where
 
 
@@ -237,12 +250,8 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                 break
             if not approached:
                 continue
-            state,where=select_corpse(state,where,cg,entry,name,driver=driver,fresh=fresh,exact=exact,log=log)
-            if state.player.in_combat:
-                break
-            if not exact(state,cg,entry):
-                state,where=hover_select_corpse(state,where,cg,entry,driver=driver,
-                    fresh=fresh,exact=exact,log=log)
+            state,where=acquire_corpse(state,where,cg,entry,name,
+                driver=driver,fresh=fresh,exact=exact,log=log)
             if state.player.in_combat:
                 break
             if not exact(state,cg,entry):

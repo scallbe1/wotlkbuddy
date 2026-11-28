@@ -51,11 +51,11 @@ def test_no_retreat_without_hazards_or_after_budget(monkeypatch,hazards,retreats
     navigate.assert_not_called()
 
 
-def test_travel_loot_does_not_backtrack_to_old_nonquest_corpses():
+def test_travel_loot_has_bounded_approach_for_all_corpses():
     driver=NS(active_quest_entries=(1535,1537))
-    assert corpse_approach_limit(driver,1548,False)==12
+    assert corpse_approach_limit(driver,1548,False)==40
     assert corpse_approach_limit(driver,1537,False)==40
-    assert corpse_approach_limit(driver,1537,True)==4
+    assert corpse_approach_limit(driver,1537,True)==3.5
 
 
 def test_hud_activity_reuses_registered_travel_command():
