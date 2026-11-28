@@ -153,6 +153,17 @@ def test_controller_uses_real_destination_status_only_during_detour():
                           if isinstance(node, ast.FunctionDef)
                           and node.name == 'walk_npc_path']
                 assert len(bodies) == 1
+            if kind == 'npc' and target == 'step.npc_name':
+                # Delivery now delegates through a timeout-aware travel
+                # adapter. Verify the HUD-wrapped callback passes the injected
+                # travel function, and follow that adapter to the actual call.
+                delegated = calls_named(bodies, 'travel_delivery_slice')
+                assert any(node.args and ast.unparse(node.args[0]) == 'travel'
+                           for node in delegated)
+                bodies = [node for node in tree.body
+                          if isinstance(node, ast.FunctionDef)
+                          and node.name == 'travel_delivery_slice']
+                assert len(bodies) == 1
             assert calls_named(bodies, 'travel')
             return
         pytest.fail(f'No navigation status wrapper for {kind}: {target}')

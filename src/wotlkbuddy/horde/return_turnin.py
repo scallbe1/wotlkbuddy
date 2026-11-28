@@ -139,7 +139,7 @@ def finish_delivery(*,profile,step,quest_id,pid,capture,driver,world_position,pl
     if driver.emergency_stop_requested() or not driver.wow_is_foreground():
         raise LiveControlError('Escape or WoW focus lost before NPC interaction')
     if monotonic() - start_time > max_seconds:
-        raise LiveControlError('Return-to-NPC time budget exhausted')
+        raise EncounterRouteUnavailable('Return-to-NPC time budget exhausted at verified receiver; resume turn-in next cycle')
     log(f'Arrived near {step.npc_name}; verifying quest dialogue and reward')
     # The guarded quest-dialogue turn-in accepts identity/UI verification
     # callbacks, not navigation combat callbacks. The latter belong only
@@ -184,6 +184,34 @@ def patrol_delivery(*,profile,step,quest_id,pid,capture,driver,nav,spawns,world,
         capture=capture,driver=driver,world_position=world_position,player=player,
         map_id=world.map_id,destination=destination,start_time=start_time,
         max_seconds=max_seconds,turnin=turnin,log=log,moving=True)
+
+
+def delivery_timeout(sample,driver,origin,destination,reason,log):
+    """Yield a progressing delivery, but retain genuine stagnation errors."""
+    state,where=sample()
+    if (state.truncated or state.player.dead or state.player.in_combat
+            or driver.emergency_stop_requested() or not driver.wow_is_foreground()):
+        raise LiveControlError(reason)
+    advanced=origin.distance_to(destination)-where.position.distance_to(destination)
+    if advanced<15:
+        raise LiveControlError(reason+'; no meaningful progress toward NPC')
+    log(f'Delivery time slice exhausted after advancing {advanced:.1f}y toward NPC; '
+        f'{where.position.distance_to(destination):.1f}y remaining; resuming from measured position next cycle')
+    raise EncounterRouteUnavailable(reason+'; delivery made verified progress, resume completed quest next cycle')
+
+
+def travel_delivery_slice(travel,driver,origin,destination,log,segment,**kwargs):
+    """Recognize only the exact world navigation deadline, not arbitrary failures."""
+    try:
+        result=travel(segment,**kwargs)
+    except LiveControlError as exc:
+        if str(exc)!='World navigation time limit reached':
+            raise
+        delivery_timeout(kwargs['sample'],driver,origin,destination,str(exc),log)
+        raise
+    if result.stopped_reason=='World navigation time limit reached':
+        delivery_timeout(kwargs['sample'],driver,origin,destination,result.stopped_reason,log)
+    return result
 
 
 def return_and_turnin(
@@ -277,7 +305,7 @@ def return_and_turnin(
                     raise LiveControlError('Unsafe player state before delivery segment')
                 remaining=max_seconds-(monotonic()-start_time)
                 if remaining<15:
-                    raise LiveControlError('Return-to-NPC time budget exhausted between segments')
+                    delivery_timeout(sample,driver,world.position,destination,'Return-to-NPC time budget exhausted between segments',log)
                 # A prior segment may end slightly off its intended waypoint.
                 # Revalidate against the real position before the next leg.
                 segment=leg
@@ -289,7 +317,7 @@ def return_and_turnin(
                 log(f'Delivery segment {index}/{index+len(pending)} toward XYZ '
                     f'({leg[-1].x:.2f},{leg[-1].y:.2f},{leg[-1].z:.2f}); '
                     f'final NPC {step.npc_name}')
-                result=travel(
+                result=travel_delivery_slice(travel,driver,world.position,destination,log,
                     segment,sample=sample,keyboard=kb,
                     stop_requested=driver.emergency_stop_requested,
                     expected_quest_id=quest_id,expected_map_id=world.map_id,
@@ -328,7 +356,7 @@ def return_and_turnin(
                     # increase the acceptable height difference. Replace
                     # every untravelled segment using fresh floor geometry.
                     if max_seconds-(monotonic()-start_time)<15:
-                        raise LiveControlError('Return-to-NPC time budget exhausted during height recovery')
+                        delivery_timeout(sample,driver,world.position,destination,'Return-to-NPC time budget exhausted during height recovery',log)
                     try:
                         if blocked:
                             if len(leg)>1:
