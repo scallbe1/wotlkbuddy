@@ -19,3 +19,4 @@ CreaturePatrols.local.tsv
 QuestMetadata.local.tsv
 QuestRelations.local.tsv
 QuestObjectives.local.tsv
+QuestLoot.local.json

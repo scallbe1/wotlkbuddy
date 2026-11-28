@@ -22,6 +22,7 @@ def register_reference_command(sub):
     key = parser.add_mutually_exclusive_group(required=True)
     key.add_argument('--quest-id', type=positive_id)
     key.add_argument('--entry', type=positive_id)
+    key.add_argument('--item-id', type=positive_id, help='Trace candidate quest-item loot sources')
     key.add_argument('--profile', help='Audit a profile XML against reference relations/objectives')
     parser.add_argument('--kind', choices=('creature', 'gameobject'), default='creature')
     parser.add_argument('--data-dir', help='Directory containing optional local reference TSVs')
@@ -30,6 +31,12 @@ def register_reference_command(sub):
 
 
 def print_reference(args):
+    if args.item_id:
+        from wotlkbuddy.horde.quest_loot import load_quest_loot
+        loot = load_quest_loot(args.data_dir)
+        print(json.dumps(dict(source=loot.source, reference_only=True,
+                              execution_authorized=False, **loot.sources_for(args.item_id)), indent=2))
+        return
     catalog = load_quest_relations(args.data_dir)
     requirements = load_quest_requirements(args.data_dir)
     if args.profile:
