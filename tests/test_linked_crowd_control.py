@@ -232,3 +232,46 @@ def test_decisive_weaker_pull_retains_resource_identity_and_encounter_guards():
     escort.classification = 'normal'
     opening.player.target_guid = escort.guid
     assert not decisive_weaker_pull(opening, plan, primary, driver, ())
+
+
+def test_observed_bonecaster_and_unknown_rank_weaker_escort_do_not_trigger_control():
+    from wotlkbuddy.horde.encounter import assess_encounter, assess_linked_pull
+    from wotlkbuddy.game.types import Vec3
+    primary,escort=travel_pair()
+    primary.entry,primary.level,primary.health=1522,8,143
+    escort.entry,escort.level,escort.health,escort.classification=1531,7,137,'unknown'
+    opening=state(primary,hp=143,creature='Undead')
+    opening.player.level=11
+    opening.player.health=opening.player.max_health=192
+    opening.resources=NS(class_token='MAGE',mana=520,max_mana=520)
+    plan=assess_encounter(opening.player,opening.resources,Vec3(0,0,0),primary,(primary,escort))
+    assert plan.allowed
+    def unexpected(*_):
+        raise AssertionError('Approved weaker pair must not cycle targets or attempt control')
+    driver=NS(assessing_travel_corridor=True,chat=unexpected,target_objective_name=unexpected)
+    result,approved=assess_linked_pull(opening,plan,primary,driver,
+        NS(_fresh=unexpected),(),lambda _:None)
+    assert result is opening and approved is plan
+
+
+def test_descriptor_only_escort_needs_extra_level_advantage_and_known_primary():
+    from wotlkbuddy.horde.encounter import decisive_weaker_pull
+    primary,escort=travel_pair()
+    primary.level,escort.level=8,7
+    primary.health,escort.health=143,137
+    escort.classification='unknown'
+    opening=state(primary,hp=143)
+    opening.player.level=11
+    opening.player.health=opening.player.max_health=192
+    opening.resources=NS(class_token='MAGE',mana=520,max_mana=520)
+    driver=NS(assessing_travel_corridor=True)
+    plan=PullPlan(True,(primary,escort),'approved weaker pair')
+    assert decisive_weaker_pull(opening,plan,primary,driver,())
+    escort.level=8
+    assert not decisive_weaker_pull(opening,plan,primary,driver,())
+    escort.level=7
+    opening.combat_target.classification='elite'
+    assert not decisive_weaker_pull(opening,plan,primary,driver,())
+    opening.combat_target.classification='normal'
+    escort.level=None
+    assert not decisive_weaker_pull(opening,plan,primary,driver,())
