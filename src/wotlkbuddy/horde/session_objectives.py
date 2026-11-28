@@ -13,10 +13,10 @@ from wotlkbuddy.horde.gear import equip_mage_upgrades
 from wotlkbuddy.live.control import LiveControlError
 
 
-def select_objective(args, quest_profile, state, current):
+def select_objective(args, quest_profile, state, current, *, rank_override=None):
     """Rank every eligible objective by observed quest level, progress and proximity."""
     from wotlkbuddy.horde.quest_priority import quest_ranker, rank_with_deferrals
-    rank=rank_with_deferrals(quest_ranker(quest_profile,state,current),state,
+    rank=rank_override or rank_with_deferrals(quest_ranker(quest_profile,state,current),state,
                              getattr(args,'_quest_deferrals',None))
     priority={'rank':rank} if rank is not None else {}
     kill = (next_active_kill_quest(
@@ -55,8 +55,9 @@ def execute_active_objective(args, *, quest_profile, location, cap, driver,
                              ensure_reward_bag_space, report, log):
     """Execute one eligible objective or record why it cannot be executed."""
     state, current = location()
-    target_mode, target_quest, kill, collection = select_objective(
-        args, quest_profile, state, current)
+    from wotlkbuddy.horde.quest_batching import local_batch_plan
+    target_mode, target_quest, kill, collection = (local_batch_plan(args,quest_profile,state,current)
+        or select_objective(args, quest_profile, state, current))
     collecting = target_mode == 'collect'
     if target_quest is not None:
         from wotlkbuddy.horde.quest_priority import describe_priority
@@ -132,12 +133,13 @@ def execute_active_objective(args, *, quest_profile, location, cap, driver,
                 target_quest=target_quest, kill=kill, collection=collection,
                 cap=cap, driver=driver, pid=pid, nav=nav, db=db, hud=hud,
                 set_native_status=set_native_status,
-                ensure_reward_bag_space=ensure_reward_bag_space, report=report, log=log)
+                ensure_reward_bag_space=ensure_reward_bag_space, report=report, log=log,
+                location=location)
 
 
 def complete_objective(args, *, quest_profile, target_mode, target_quest, kill,
                        collection, cap, driver, pid, nav, db, hud,
-                       set_native_status, ensure_reward_bag_space, report, log):
+                       set_native_status, ensure_reward_bag_space, report, log, location=None):
     """Complete the selected quest and verify its reward before returning."""
     collecting = target_mode == 'collect'
     quest_title = target_quest.title
@@ -191,6 +193,10 @@ def complete_objective(args, *, quest_profile, target_mode, target_quest, kill,
         raise LiveControlError(
             f'Quest {target_quest.quest_id} objectives not '
             f'complete: {hunt.status}; no turn-in attempted')
+    from wotlkbuddy.horde.quest_batching import postpone_completed_objective
+    if location is not None and postpone_completed_objective(args,quest_profile,location,
+            target_quest.quest_id,report,log):
+        return
     hud.set(goal=f'Turn in quest: {quest_title}',
             action='Checking bag space before reward')
     ensure_reward_bag_space()

@@ -201,6 +201,10 @@ class QuestSession:
             if report.get('levels_gained_this_run', 0) and level != self.train_level:
                 self.train(cycle, level)
             return False
+        if report.get('deferred_turnin'):
+            self.steps.append({'cycle':cycle,'action':'deferred_turnin',
+                               **report['deferred_turnin']})
+            return False
         if report.get('quest_vendor_purchase'):
             self.steps.append({'cycle':cycle,'action':'quest_vendor_purchase',
                                **report['quest_vendor_purchase']})
