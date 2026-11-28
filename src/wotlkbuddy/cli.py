@@ -222,8 +222,8 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
         next_active_gameobject_quest, execute_gameobject_quest)
     from wotlkbuddy.horde.marla_prerequisite import collect_samuel_remains
     from wotlkbuddy.horde.return_turnin import return_and_turnin
-    from wotlkbuddy.horde.merchant import (
-        free_bag_space, next_ready_profile_turnin)
+    from wotlkbuddy.horde.merchant import free_bag_space
+    from wotlkbuddy.horde.quest_batching import choose_ready_turnin
     from wotlkbuddy.horde.npc_catalog import (
         nearby_service_npcs)
     from wotlkbuddy.horde.npc_visit import visit_npc
@@ -381,7 +381,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
             delivered_ready_quest = bool(resumed_offer)
             if args.only in ('all', 'objectives', 'collect', 'objects', 'turnin') and not delivered_ready_quest:
                 state, current = location()
-                quest = next_ready_profile_turnin(quest_profile, state)
+                quest = choose_ready_turnin(args,quest_profile,state,current,log=log)
                 if quest is not None:
                     hud.set(goal=f'Turn in ready quest: {quest.title}',
                             action='Checking reward bag space')

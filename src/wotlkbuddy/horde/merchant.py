@@ -44,7 +44,7 @@ class VendorSaleReport:
     copper_received: int
 
 
-def next_ready_profile_turnin(profile: HordeProfile, state: ClientTelemetry):
+def next_ready_profile_turnin(profile: HordeProfile, state: ClientTelemetry, *, rank=None):
     """Identify the next active, complete journal quest with exact XML turn-in.
 
     Never re-submit an absent journal quest merely because a previous reward
@@ -54,6 +54,7 @@ def next_ready_profile_turnin(profile: HordeProfile, state: ClientTelemetry):
         raise LiveControlError('Quest journal state incomplete before hand-in')
     journal = {q.quest_id: q for q in state.quests}
     history = dict(state.quest_completions)
+    ready = []
     for step in profile.steps:
         if (step.kind != 'turnin' or not step.supported or
                 not step.npc_name or step.entry <= 0):
@@ -65,8 +66,10 @@ def next_ready_profile_turnin(profile: HordeProfile, state: ClientTelemetry):
             raise LiveControlError(
                 f'Quest {quest.quest_id} is both server-completed and '
                 'active in journal; refusing duplicate reward submission')
-        return quest
-    return None
+        if rank is None:
+            return quest
+        ready.append(quest)
+    return min(ready,key=rank,default=None)
 
 
 def safe_sale_candidates(
