@@ -171,6 +171,13 @@ def fallback_corpse_surface(nav,map_id,position,x,y,exact,*,log,supervise):
     return (map_id,x,y,elevation)
 
 
+class CorpseSurfaceUnavailable(LiveControlError):
+    """The marker is known but a complete local corpse route is not."""
+    def __init__(self,map_id,x,y):
+        super().__init__('No reachable navmesh surface at Lua corpse marker or surrounding reclaim ring')
+        self.map_id,self.x,self.y=map_id,x,y
+
+
 def resolve_lua_corpse(state, position, *, nav, log=lambda _:None, supervise=lambda:None):
     death = state.death_state
     if (state.truncated or not state.player.dead or death is None or not death.ghost or
@@ -218,4 +225,4 @@ def resolve_lua_corpse(state, position, *, nav, log=lambda _:None, supervise=lam
                                      log=log,supervise=supervise)
     if alternate is not None:
         return alternate
-    raise LiveControlError('No reachable navmesh surface at Lua corpse marker or surrounding reclaim ring')
+    raise CorpseSurfaceUnavailable(map_id,x,y)
