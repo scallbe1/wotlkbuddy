@@ -29,7 +29,25 @@ def fresh(capture,previous,owner,driver,sleep):
     raise LiveControlError('Inventory quest telemetry stalled')
 
 
-def accept_item_quests(*,capture,driver,log=lambda _:None,sleep=real_sleep):
+def expected_item_title(profile,item,quest):
+    steps=getattr(profile,'steps',())
+    titles={step.name.strip() for step in steps
+            if step.kind=='pickup' and step.entry==item and step.quest_id==quest
+            and step.name.strip()}
+    return next(iter(titles)) if len(titles)==1 else ''
+
+
+def matching_item_detail(dialog,quest,expected_title):
+    if not dialog or dialog.kind!='detail' or not dialog.title.strip():
+        return False
+    if dialog.quest_id==quest:
+        return not expected_title or dialog.title.strip()==expected_title
+    # 3.3.5a GetQuestID can return zero in a newly opened detail.
+    # Only an independently sourced item/quest/title match authorizes it.
+    return dialog.quest_id==0 and bool(expected_title) and dialog.title.strip()==expected_title
+
+
+def accept_item_quests(*,capture,driver,profile=None,log=lambda _:None,sleep=real_sleep):
     state=capture()
     # Old addon and mocked callers: no candidate data, no input.
     if not isinstance(getattr(state,'item_quest_starters',None),tuple) or not state.item_quest_starters:
@@ -38,7 +56,7 @@ def accept_item_quests(*,capture,driver,log=lambda _:None,sleep=real_sleep):
     accepted=[]
     attempted=set()
     for _ in range(4):
-        if not safe(state,owner,driver) or state.dialog is None or state.dialog.kind!='none':
+        if not safe(state,owner,driver) or state.dialog is None or state.dialog.kind!='none' or len(state.quests)>=25:
             break
         options=[row for row in candidates(state) if row[3] not in attempted]
         if not options:
@@ -46,6 +64,7 @@ def accept_item_quests(*,capture,driver,log=lambda _:None,sleep=real_sleep):
         row=options[0]
         bag,slot,item,quest,_,_=row
         attempted.add(quest)
+        expected_title=expected_item_title(profile,item,quest)
         confirmed=fresh(capture,state,owner,driver,sleep)
         if confirmed.dialog is None or confirmed.dialog.kind!='none' or row not in candidates(confirmed):
             state=confirmed
@@ -61,13 +80,18 @@ def accept_item_quests(*,capture,driver,log=lambda _:None,sleep=real_sleep):
         if not state.dialog or state.dialog.kind!='detail':
             log(f'Item {item}: no quest detail confirmed; retaining item')
             break
-        if state.dialog.quest_id!=quest:
-            log(f'Item {item}: quest detail ID not verified; closing without accepting')
+        if not matching_item_detail(state.dialog,quest,expected_title):
+            log(f'Item {item}: quest detail mismatch: observed ID={state.dialog.quest_id}, '
+                f'title={state.dialog.title!r}; expected ID={quest}, '
+                f'title={expected_title!r}; closing without accepting')
             driver.chat('/click QuestFrameCloseButton')
             break
         again=fresh(capture,state,owner,driver,sleep)
-        if not again.dialog or again.dialog.kind!='detail' or again.dialog.quest_id!=quest or again.dialog.title!=state.dialog.title:
+        if not matching_item_detail(again.dialog,quest,expected_title) or again.dialog.title!=state.dialog.title:
+            log(f'Item {item}: detail changed before acceptance; deferring')
             break
+        if again.dialog.quest_id==0:
+            log(f'Item {item}: untagged detail matched exact profile quest {quest} {expected_title!r}')
         driver.chat('/run AcceptQuest()')
         state=again
         for _wait in range(20):
