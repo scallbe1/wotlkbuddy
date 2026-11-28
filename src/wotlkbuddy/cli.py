@@ -1060,7 +1060,10 @@ def _live_status(args: argparse.Namespace) -> None:
         race='Undead' if race.casefold() in ('undead','scourge') else race
         chosen=select_quest_profile(args.profiles_root,level=snapshot.player.level,
                                     race=race,class_name=snapshot.resources.class_token.title())
-        print_profile_audit(audit_profile_quests(load_horde_profile(chosen),snapshot))
+        profile = load_horde_profile(chosen)
+        print_profile_audit(audit_profile_quests(profile,snapshot))
+        from wotlkbuddy.horde.reference_audit import print_reference_differences
+        print_reference_differences(profile, {q.quest_id for q in snapshot.quests})
 
 
 def _live_probe(args: argparse.Namespace) -> None:
