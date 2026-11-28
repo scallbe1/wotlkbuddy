@@ -679,14 +679,18 @@ local function tickData()
     -- cursor is over the 3-D world, not a bag/chat/tooltip/action bar region.
     -- Python correlates this with a double-observed GO template/GUID and
     -- world distance before permitting any right-click.
-    local hoveredWorldName = ''
+    local hoveredWorldName, hoveredGuid, hoveredDead = '', '', '0'
     if GetMouseFocus and GetMouseFocus() == WorldFrame and
             GameTooltip and GameTooltip:IsShown() and
             GameTooltipTextLeft1 then
         hoveredWorldName = safe(GameTooltipTextLeft1:GetText(), 75)
+        if UnitExists('mouseover') and UnitIsDead('mouseover') then
+            hoveredGuid = UnitGUID('mouseover') or ''
+            hoveredDead = hoveredGuid ~= '' and '1' or '0'
+        end
     end
     local targeting = SpellIsTargeting and SpellIsTargeting() and '1' or '0'
-    appendLine(table.concat({'G', hoveredWorldName, targeting}, '\t'))
+    appendLine(table.concat({'G', hoveredWorldName, targeting, hoveredGuid, hoveredDead}, '\t'))
     -- Prioritize explicitly requested spellbook probes ahead of optional
     -- quest detail, gear, and merchant records so a busy frame cannot
     -- silently drop the result. SD always acknowledges the request.

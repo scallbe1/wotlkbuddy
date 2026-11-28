@@ -73,3 +73,46 @@ def test_aggro_recovery_loots_only_nearby_before_next_phase(monkeypatch):
     assert session_recovery.loot_after_settled_aggro(state,cap=lambda:state,
         driver=driver,pid=77,log=lambda _:None) is state
     assert events==['nearby loot']
+
+
+def test_extended_world_hover_record_preserves_legacy_and_exact_corpse_guid():
+    from wotlkbuddy.live.codec import parse_payload
+    base=b'P\tAarr\t0x000000000000025F\t5\t60\t60\t0\t0\t.2\t.3\t2\t12\tDeathknell\t\t\n'
+    legacy=parse_payload(base+b'G\tDoom Weed\t0\n',1)
+    assert legacy.mouse_world_name=='Doom Weed' and legacy.mouse_world_dead is None
+    exact=parse_payload(base+b'G\tScarlet Convert\t0\t0xF1300005E2028AF7\t1\n',2)
+    assert exact.mouse_world_dead and exact.mouse_world_guid=='0xF1300005E2028AF7'
+
+
+def test_hover_select_requires_two_exact_dead_guid_frames():
+    from types import SimpleNamespace as NS
+    from unittest.mock import Mock
+    from wotlkbuddy.horde.encounter_loot import hover_select_corpse
+    guid='0xF1300005E2028AF7'
+    def frame(g,dead=True,selected=False):
+        return NS(mouse_world_guid=g,mouse_world_dead=dead,spell_targeting=False,
+            player=NS(in_combat=False,target_guid=guid if selected else ''))
+    mouse=Mock()
+    driver=NS(corpse_mouse=lambda:mouse)
+    frames=iter([frame('wrong'),frame(guid),frame('wrong'),frame(guid),frame(guid),frame(guid,selected=True)])
+    result,_=hover_select_corpse(frame(''),None,guid,1506,driver=driver,
+        fresh=lambda _: (next(frames),None),exact=lambda s,g,e:s.player.target_guid==g,log=Mock())
+    assert result.player.target_guid==guid
+    mouse.left_click.assert_called_once()
+
+
+def test_ordinary_corpse_approach_tries_alternate_projected_slope():
+    from types import SimpleNamespace as NS
+    from wotlkbuddy.game.types import Vec3
+    from wotlkbuddy.horde.encounter_loot import corpse_route,corpse_approach_limit
+    origin=Vec3(0,0,0)
+    body=Vec3(18,0,4.2)
+    where=NS(position=origin,map_id=0)
+    calls=[]
+    def find(m,a,b):
+        calls.append(b)
+        return (a,a) if len(calls)==1 else (a,b)
+    nav=NS(nearest_point=lambda m,p:p,find_path=find)
+    path,dest=corpse_route(nav,where,body,radius=2.5,log=lambda _:None)
+    assert len(calls)==2 and path[-1].distance_to(body)<=3.5
+    assert corpse_approach_limit(NS(),1506,False)==40

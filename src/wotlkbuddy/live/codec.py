@@ -434,6 +434,8 @@ class ClientTelemetry:
     fireball_key: str | None = None
     fireball_cast_remaining_ms: int | None = None
     mouse_world_name: str | None = None
+    mouse_world_guid: str | None = None
+    mouse_world_dead: bool | None = None
     spell_targeting: bool | None = None
     death_state: DeathState | None = None
     recent_kills: tuple[tuple[int,str,str], ...] = ()
@@ -600,6 +602,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
     fireball_key = None
     fireball_cast_remaining_ms = None
     mouse_world_name = None
+    mouse_world_guid = None
+    mouse_world_dead = None
     spell_targeting = None
     for line in content.splitlines():
         parts = line.split('\t')
@@ -743,13 +747,21 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                     raise TelemetryError('Invalid quest item name')
                 tracked_item_name = parts[3] or None
         elif parts[0] == 'G':
-            if (len(parts) not in (2,3) or mouse_world_name is not None or
+            if (len(parts) not in (2,3,5) or mouse_world_name is not None or
                     len(parts[1]) > 75 or
                     any(ord(c) < 32 for c in parts[1]) or
-                    (len(parts)==3 and parts[2] not in ('0','1'))):
+                    (len(parts)>=3 and parts[2] not in ('0','1'))):
                 raise TelemetryError('Malformed or duplicate WorldFrame hover record')
             mouse_world_name = parts[1]
-            spell_targeting = (parts[2]=='1') if len(parts)==3 else None
+            spell_targeting = (parts[2]=='1') if len(parts)>=3 else None
+            if len(parts)==5:
+                guid,dead=parts[3:5]
+                if (dead not in ('0','1') or bool(guid)!=(dead=='1') or
+                        (guid and (len(guid)!=18 or not guid.startswith('0x') or
+                        any(ch not in '0123456789abcdefABCDEF' for ch in guid[2:])))):
+                    raise TelemetryError('Invalid WorldFrame corpse hover identity')
+                mouse_world_guid=guid or None
+                mouse_world_dead=dead=='1'
         elif parts[0] == 'F':
             if (len(parts) != 3 or fireball_record_seen or
                     parts[1] not in ('-', *'0123456789')):
@@ -1323,6 +1335,8 @@ def parse_payload(data: bytes, sequence: int) -> ClientTelemetry:
                            fireball_key=fireball_key,
                            fireball_cast_remaining_ms=fireball_cast_remaining_ms,
                            mouse_world_name=mouse_world_name,
+                           mouse_world_guid=mouse_world_guid,
+                           mouse_world_dead=mouse_world_dead,
                            spell_targeting=spell_targeting,
                            death_state=death_state,
                            recent_kills=tuple(recent_kills[i] for i in sorted(recent_kills)),
