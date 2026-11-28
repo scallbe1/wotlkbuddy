@@ -62,6 +62,11 @@ def test_offline_command_and_unknown_id(capsys):
     args = parser.parse_args(['quest-reference', '--quest-id', '999999'])
     args.func(args)
     assert json.loads(capsys.readouterr().out)['relations'] == []
+    args = parser.parse_args(['quest-reference', '--quest-id', '6395'])
+    args.func(args)
+    result = json.loads(capsys.readouterr().out)
+    assert result['requirements_known'] and not result['execution_authorized']
+    assert result['objectives'] == [dict(kind='gameobject_credit', slot=1, entry=178090, count=1)]
     with pytest.raises(SystemExit):
         parser.parse_args(['quest-reference', '--quest-id', '-1'])
 

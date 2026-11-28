@@ -3,6 +3,7 @@ from dataclasses import asdict
 import json
 
 from wotlkbuddy.horde.quest_relations import load_quest_relations
+from wotlkbuddy.horde.quest_requirements import load_quest_requirements
 
 
 def positive_id(value):
@@ -21,6 +22,7 @@ def register_reference_command(sub):
     key = parser.add_mutually_exclusive_group(required=True)
     key.add_argument('--quest-id', type=positive_id)
     key.add_argument('--entry', type=positive_id)
+    key.add_argument('--profile', help='Audit a profile XML against reference relations/objectives')
     parser.add_argument('--kind', choices=('creature', 'gameobject'), default='creature')
     parser.add_argument('--data-dir', help='Directory containing optional local reference TSVs')
     parser.set_defaults(func=print_reference)
@@ -29,10 +31,26 @@ def register_reference_command(sub):
 
 def print_reference(args):
     catalog = load_quest_relations(args.data_dir)
+    requirements = load_quest_requirements(args.data_dir)
+    if args.profile:
+        from wotlkbuddy.horde.profile import load_horde_profile
+        from wotlkbuddy.horde.reference_audit import audit_reference_profile
+        print(json.dumps(audit_reference_profile(
+            load_horde_profile(args.profile), catalog, requirements), indent=2))
+        return
     rows = (catalog.for_quest(args.quest_id) if args.quest_id else
             catalog.for_entity(args.kind, args.entry))
+    rule = requirements.get(args.quest_id) if args.quest_id else None
     print(json.dumps(dict(
         source=catalog.source, reference_only=True,
         availability='unverified',
         relations=[asdict(row) for row in rows],
+        objectives_source=requirements.source,
+        requirements_known=rule is not None if args.quest_id else None,
+        objectives=[asdict(o) for o in rule.objectives] if rule else [],
+        constraints=(dict(flags=rule.flags, time_allowed=rule.time_allowed,
+                          player_kills=rule.player_kills,
+                          required_money_copper=max(0, -rule.reward_money),
+                          anomalies=rule.anomalies) if rule else None),
+        execution_authorized=False,
     ), indent=2))
