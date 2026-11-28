@@ -26,6 +26,7 @@ class HuntRouteState:
     structured_attempts: int = 0
     tactical_retreats: int = 0
     terrain: HuntTerrain = field(default_factory=HuntTerrain)
+    height_attempts: dict = field(default_factory=dict)
 
 
 def wait_for_patrol_refresh(driver,sleep):
@@ -54,7 +55,11 @@ def select_spawn_goal(s, *, routes, nearby, spec, allowed_sources, expected,
         return None
     if not nearby:
         if routes.failed_navigation:
-            raise list(routes.failed_navigation.values())[-1]
+            from wotlkbuddy.horde.hunt_height_staging import is_height_failure
+            error=list(routes.failed_navigation.values())[-1]
+            if all(is_height_failure(e) for e in routes.failed_navigation.values()):
+                raise EncounterRouteUnavailable('Quest hunt height/floor approaches exhausted; refresh live terrain and patrols next cycle: '+str(error)) from error
+            raise error
         raise LiveControlError(
             f'No verified nearby creature spawns or bounded reference '
             f'search locations for XML sources {allowed_sources} '
@@ -338,6 +343,19 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
                     clear_remaining_aggro, navigate, capture, guard,
                     world_position, pid, drain_travel_corpses, log):
     """Attempt one bounded spawn approach, then return for a fresh hunt iteration."""
+    key=(round(goal.x),round(goal.y),round(goal.z))
+    from wotlkbuddy.horde.hunt_height_staging import recover_height_staging
+    def retry_height():
+        return recover_height_staging(goal,routes=routes,driver=driver,nav=nav,
+            capture=capture,guard=guard,world_position=world_position,pid=pid,
+            map_id=world.map_id,navigate=navigate,now=now,
+            clear_remaining_aggro=clear_remaining_aggro,log=log)
+    if key in routes.height_attempts:
+        if retry_height():
+            return
+        routes.recently_visited[key]=2
+        routes.failed_navigation[key]=LiveControlError('Alternate height/floor staging exhausted')
+        return
     if len(allowed_sources)==1 and routes.route_replans>=2:
         from wotlkbuddy.horde.structured_approach import explore_required_approach
         if explore_required_approach(s,routes=routes,goal=goal,world=world,
@@ -390,6 +408,9 @@ def run_spawn_route(s, *, routes, goal, nearby, world, reference_only, remote_ca
         routes.recently_visited.pop(key,None)
         raise
     except LiveControlError as exc:
+        from wotlkbuddy.horde.hunt_height_staging import is_height_failure
+        if not reference_only and is_height_failure(exc) and retry_height():
+            return
         handle_spawn_failure(exc, routes=routes, key=key, allowed_sources=allowed_sources,
                              capture=capture, guard=guard, world_position=world_position,
                              pid=pid, world=world, log=log, clear_remaining_aggro=clear_remaining_aggro)
