@@ -91,6 +91,8 @@ class KeyboardQuestInput:
         self.defeated_corpses = {}
         self.finished_corpses = set()
         self.seen_kill_events = set()
+        self.corpse_missing_since = {}
+        self.retired_corpses = set()
 
     def wow_is_foreground(self) -> bool:
         return self.keyboard.wow_is_foreground()
@@ -147,6 +149,8 @@ class KeyboardQuestInput:
             self.seen_kill_events.add(key)
             # A respawn may reuse a GUID; a new combat-log kill supersedes it.
             self.finished_corpses.discard(guid)
+            getattr(self,'retired_corpses',set()).discard(guid)
+            getattr(self,'corpse_missing_since',{}).pop(guid,None)
             getattr(self,'corpse_retry_after',{}).pop(guid,None)
             entry=creature_entry_from_guid(guid)
             if entry:
@@ -156,7 +160,8 @@ class KeyboardQuestInput:
         target = state.combat_target
         guid = state.player.target_guid
         self.sync_kills(state)
-        if guid and guid not in self.finished_corpses and target and target.entry_id > 0 and target.dead:
+        if (guid and guid not in self.finished_corpses and guid not in getattr(self,'retired_corpses',())
+                and target and target.entry_id > 0 and target.dead):
             self.defeated_corpses[guid] = (target.entry_id, state.player.target_name)
             if len(self.defeated_corpses) > 16:
                 self.defeated_corpses.pop(next(iter(self.defeated_corpses)))

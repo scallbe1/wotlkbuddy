@@ -132,5 +132,7 @@ def attach_hunt_memory(driver,guid,memory):
         'finished_corpses':set(), 'seen_kill_events':set(),
         'corpse_retry_after':{}, 'dangerous_hunt_positions':[]})
     record.setdefault('learned_control',{})
+    record.setdefault('corpse_missing_since',{})
+    record.setdefault('retired_corpses',set())
     for name,value in record.items():
         setattr(driver,name,value)
