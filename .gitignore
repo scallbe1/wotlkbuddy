@@ -20,3 +20,4 @@ QuestMetadata.local.tsv
 QuestRelations.local.tsv
 QuestObjectives.local.tsv
 QuestLoot.local.json
+QuestScripts.local.json

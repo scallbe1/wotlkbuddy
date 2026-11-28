@@ -17,6 +17,25 @@ def print_reference_differences(profile, quest_ids):
         for issue in row['issues']:
             details = ', '.join(f'{key}={value}' for key, value in issue.items() if key != 'code')
             print(f"    {issue['code']}" + (f': {details}' if details else ''))
+    print_script_hints(quest_ids)
+
+
+def print_script_hints(quest_ids):
+    if not quest_ids:
+        return
+    from wotlkbuddy.horde.script_reference import load_script_reference
+    from wotlkbuddy.horde.quest_relations import load_quest_relations
+    from wotlkbuddy.horde.quest_requirements import load_quest_requirements
+    catalog = load_script_reference()
+    relations, requirements = load_quest_relations(), load_quest_requirements()
+    for qid in sorted(quest_ids):
+        report = catalog.inspect(qid, relations, requirements)
+        hints = set(report['features']) & {
+            'set_faction', 'start_attack', 'quest_event_credit', 'group_quest_credit',
+            'start_escort', 'gossip_selected', 'native_script_unresolved', 'set_invincibility'}
+        if hints:
+            print(f"  [{qid}] related script hints (reference only, not an execution plan): "
+                  + ', '.join(sorted(hints)))
 
 
 def compare_objectives(spec, reference):
