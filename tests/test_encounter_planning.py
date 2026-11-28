@@ -139,3 +139,46 @@ def test_neutral_quest_rotation_requires_exact_source_permission():
     assert selected_action(s) is None
     assert selected_action(s,quest_entry=1554) is None
     assert selected_action(s,quest_entry=1553).name=='Fireball'
+
+
+def test_manageable_equal_level_pair_approved_but_risky_pair_rejected():
+    from dataclasses import replace
+    from wotlkbuddy.horde.encounter import manageable_pair
+    p=SimpleNamespace(level=11,health=192,max_health=192)
+    r=SimpleNamespace(mana=450,max_mana=520)
+    a=replace(mob('a',20,level=11),health=140)
+    b=replace(mob('b',29,level=10),health=160)
+    assert manageable_pair(p,r,(a,b))
+    assert assess_encounter(p,r,Vec3(0,0,0),a,(a,b)).allowed
+    assert not manageable_pair(p,r,(a,replace(b,classification='elite')))
+    assert not manageable_pair(p,r,(a,replace(b,level=12)))
+    p.health=100
+    assert not manageable_pair(p,r,(a,b))
+
+
+def test_single_potential_hostile_can_be_approached_with_defense_armed():
+    from dataclasses import replace
+    from wotlkbuddy.horde.threat_scan import weaker_corridor
+    p=SimpleNamespace(level=11,health=192,max_health=192)
+    r=SimpleNamespace(mana=490,max_mana=520)
+    state=SimpleNamespace(player=p,resources=r)
+    a=replace(mob('a',20,level=10,kind='unknown'),health=135)
+    assert weaker_corridor(state,(a,),(),[a.position])
+    assert not weaker_corridor(state,(a,),(object(),),[a.position])
+    assert not weaker_corridor(state,(replace(a,health=500),),(),[a.position])
+
+
+def test_manageable_target_acquisition_failure_does_not_remember_pack():
+    from wotlkbuddy.horde.threat_scan import acquire_travel_target
+    state=SimpleNamespace(player=SimpleNamespace(target_guid='',in_combat=False))
+    driver=SimpleNamespace(dangerous_hunt_positions=[])
+    awareness=SimpleNamespace(acquire=lambda *a:state)
+    args=dict(awareness=awareness,driver=driver,fresh=lambda s:s,max_targets=7,
+              pack_positions=[Vec3(20,0,0)],log=lambda _:None)
+    assert acquire_travel_target(state,[(20,'a',1533)],weak=True,**args)==(state,None,None)
+    assert not driver.dangerous_hunt_positions
+    import pytest
+    from wotlkbuddy.live.control import LiveControlError
+    with pytest.raises(LiveControlError,match='could not acquire'):
+        acquire_travel_target(state,[(20,'a',1533)],weak=False,**args)
+    assert driver.dangerous_hunt_positions
