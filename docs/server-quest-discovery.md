@@ -8,6 +8,14 @@ world database at revision `65e5a9879480cd34eb5b1bede11a63c7256858aa`. This is u
 reference data, not a claim about custom server modifications. A local export
 takes priority. Missing quest IDs fall back to earlier profile hints.
 
+When the profile supplies a giver name/ID but lacks XYZ, a matching creature
+starter in the bundled or local quest relation catalog can now corroborate the
+identity. The current-map spawn database must then provide an unambiguous local
+cluster; capped, missing or ambiguous results are rejected. Local relation
+replacement files are selected beside the spawn database. See
+[quest reference](quest-reference.md) for formats and provenance. Normal
+profile coordinates continue to use their existing spawn verification path.
+
 For accurate difficulty ordering and eligibility filtering, export the
 following read-only query from your AzerothCore world database using MySQL
 `--batch --skip-column-names` (UTF-8 TSV; no headers):

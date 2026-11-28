@@ -5,7 +5,7 @@ Only a verified live NPC offer and a new journal entry authorize acceptance.
 """
 from dataclasses import dataclass
 from math import inf
-from wotlkbuddy.horde.npc_catalog import NpcDestination, _verified_spawn
+from wotlkbuddy.horde.npc_catalog import NpcDestination, quest_giver_position
 from wotlkbuddy.horde.profile import condition_value
 from wotlkbuddy.horde.quest_metadata import character_tokens,metadata_for,quest_eligible
 from wotlkbuddy.horde.worlddata import distance_world
@@ -62,8 +62,7 @@ def recovery_offers(profile,state,current,db,memory,*,now,metadata=None):
     grouped={}
     for index,step in enumerate(profile.steps):
         if (step.kind!='pickup' or not step.supported or step.quest_id<=0
-                or step.quest_id in active|done or not step.npc_name
-                or step.world_position is None):
+                or step.quest_id in active|done or not step.npc_name or step.entry<=0):
             continue
         rank=candidate_rank(step,index,metadata,state,active,done,cutoff)
         if rank is None or not earlier_same_giver_ready(profile,index,step,active,done):
@@ -74,14 +73,14 @@ def recovery_offers(profile,state,current,db,memory,*,now,metadata=None):
             continue
         if not offer_retry_due(memory,state.player,step.entry,now):
             continue
-        position=_verified_spawn(db,entry=step.entry,map_id=current.map_id,
-                                 origin=current.position,anchor=step.world_position,
-                                 radius=CATCHUP_RADIUS)
+        position=quest_giver_position(db,step,map_id=current.map_id,
+                                     origin=current.position,radius=CATCHUP_RADIUS)
         if position is None:
             continue
         distance=distance_world(current.position,position)
-        giver=NpcDestination(step.npc_name,step.entry,position,distance,
-                             'profile quest discovery with server spawn verification','quest')
+        source=('profile name + quest relation + local spawn DB' if step.world_position is None
+                else 'profile quest discovery with server spawn verification')
+        giver=NpcDestination(step.npc_name,step.entry,position,distance,source,'quest')
         key=(step.entry,position.x,position.y,position.z)
         # Prefer known easy quests, then nearby destinations, then XML order.
         score=(rank[0],distance,rank[1])

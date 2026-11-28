@@ -58,6 +58,24 @@ def _verified_spawn(spawns, *, entry: int, map_id: int, origin: Vec3,
     return chosen
 
 
+def quest_giver_position(spawns, step, *, map_id, origin, radius):
+    """Fill missing profile XYZ only for a catalog-backed creature starter."""
+    if step.world_position is None:
+        from wotlkbuddy.horde.quest_relations import load_quest_relations
+        path = getattr(spawns, 'path', None)
+        data_dir = Path(path).parent if isinstance(path, (str, Path)) else None
+        catalog = load_quest_relations(data_dir)
+        if not any(r.kind == 'creature' and r.role == 'starter' and r.entry == step.entry
+                   for r in catalog.for_quest(step.quest_id)):
+            return None
+        # find() is capped. A full result could conceal a second local spawn
+        # cluster, so it cannot establish an unambiguous destination.
+        if len(spawns.find(step.entry, map_id, 100)) >= 100:
+            return None
+    return _verified_spawn(spawns, entry=step.entry, map_id=map_id, origin=origin,
+                           anchor=step.world_position, radius=radius)
+
+
 def nearby_profile_quest_givers(
     *, profile: HordeProfile, telemetry: ClientTelemetry, spawns,
     origin: Vec3, map_id: int, radius: float = 160,
@@ -103,15 +121,16 @@ def nearby_profile_quest_givers(
         name = step.npc_name or (next(iter(candidates)) if len(candidates) == 1 else '')
         if not name or (step.npc_name and len(candidates) > 1):
             continue
-        position = _verified_spawn(
-            spawns, entry=step.entry, map_id=map_id, origin=origin,
-            anchor=step.world_position, radius=radius)
+        position = quest_giver_position(
+            spawns, step, map_id=map_id, origin=origin, radius=radius)
         if position is None:
             continue
         seen.add(step.entry)
         results.append(NpcDestination(
             name, step.entry, position,
-            distance_world(origin, position), 'Horde QuestOrder', 'quest'))
+            distance_world(origin, position),
+            ('profile name + quest relation + local spawn DB' if step.world_position is None
+             else 'Horde QuestOrder'), 'quest'))
     return tuple(results)
 
 

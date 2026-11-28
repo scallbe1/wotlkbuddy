@@ -4,6 +4,16 @@ The package includes 16,262 creature and GameObject starter/ender relations.
 They are indexed by quest and by entity, independently of any selected profile,
 race or class. No user upload or runtime download is required.
 
+Local offer discovery and catch-up can now resolve a profile giver with missing
+XYZ when its creature-starter relation matches the catalog and the selected
+spawn database identifies one local cluster on the current map. The profile
+must still provide the NPC name and quest ID. Missing, ambiguous, distant or
+potentially truncated spawn results are rejected. Existing eligibility,
+profile conditions, retry cooldowns, journal limits, path validation and live
+offer verification still apply. This does not add quests absent from profiles.
+For this runtime lookup, local relation overrides are read beside the selected
+spawn database, using the same precedence as the offline command.
+
 ```powershell
 py -3.12 -m wotlkbuddy quest-reference --quest-id 590
 py -3.12 -m wotlkbuddy quest-reference --entry 6784
