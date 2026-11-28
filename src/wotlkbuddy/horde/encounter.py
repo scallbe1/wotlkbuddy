@@ -23,6 +23,31 @@ class PullPlan:
     reason:str
 
 
+def manageable_pair(player,resources,enemies):
+    """A healthy Mage can fight two ordinary opponents, not just trivial mobs."""
+    return bool(resources is not None and len(enemies)==2
+        and player.health>=.90*player.max_health
+        and resources.mana>=.80*resources.max_mana
+        and all(m.classification=='normal' and m.level is not None
+                and 0<m.level<=player.level and 0<m.health<=1.15*player.max_health
+                for m in enemies)
+        and sum(m.health for m in enemies)<=2.0*player.max_health)
+
+
+def manageable_corridor_budget(player,resources,enemies):
+    """Allow closer acquisition with defense armed, never unverified casts."""
+    if weaker_pack_budget(player,resources,enemies) or manageable_pair(player,resources,enemies):
+        return True
+    if resources is None or len(enemies)!=1:
+        return False
+    m=enemies[0]
+    return bool(player.health>=.85*player.max_health and
+        resources.mana>=.75*resources.max_mana and m.level is not None and
+        0<m.level<=player.level and 0<m.health<=player.max_health and
+        (m.classification=='normal' or
+         (m.classification=='unknown' and m.health<=.85*player.max_health)))
+
+
 def assess_encounter(player, resources, position, chosen, enemies, quest_entries=()):
     """Estimate proximity-linked adds; do not claim exact server aggro rules."""
     group={chosen.guid:chosen}
@@ -56,6 +81,8 @@ def assess_encounter(player, resources, position, chosen, enemies, quest_entries
         return PullPlan(True,pack,'isolated target')
     if unknown:
         return PullPlan(False,pack,'unknown enemy level in multi-pull')
+    if manageable_pair(player,resources,pack):
+        return PullPlan(True,pack,'two manageable normal enemies; healthy combat resources')
     if len(pack)==2 and hp>=.95 and mana>=.90 and all(m.level<=player.level-1 for m in pack):
         if sum(m.health for m in pack)<=2.5*player.max_health:
             return PullPlan(True,pack,'two weaker enemies including escorts; high resources')
@@ -125,8 +152,9 @@ def assess_linked_pull(state, plan, chosen, driver, awareness, quest_entries, lo
             and exact_hostile(state,chosen)
             and not getattr(state,'current_cast_remaining_ms',0)
             and all(e.classification=='normal' for e in baseline.enemies)
-            and state.player.health>=.95*state.player.max_health
-            and state.resources.mana>=.90*state.resources.max_mana):
+            and (manageable_pair(state.player,state.resources,baseline.enemies) or
+                 (state.player.health>=.95*state.player.max_health
+                  and state.resources.mana>=.90*state.resources.max_mana))):
         plan=baseline
         log('Linked pull: using approved weaker-enemy combat budget without crowd control')
     if plan is not None and not plan.allowed:

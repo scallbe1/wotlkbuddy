@@ -48,7 +48,7 @@ def distance_to_corridor(point: Vec3, start: Vec3,
     return best
 
 
-def acquire_corridor_target(state, chosen_guid, chosen_entry, *, awareness, candidates, driver, fresh, max_targets, pack_positions, log):
+def acquire_corridor_target(state, chosen_guid, chosen_entry, *, awareness, candidates, driver, fresh, max_targets, pack_positions, log, remember_failure=True):
     from wotlkbuddy.horde.hunt_routes import remember_pack
     from time import monotonic
     # Reacquire the exact GUID after cycling: never select by ambiguous name.
@@ -72,7 +72,8 @@ def acquire_corridor_target(state, chosen_guid, chosen_entry, *, awareness, cand
                         if alternative is not None:
                             break
                 if alternative is None:
-                    remember_pack(driver,pack_positions,monotonic())
+                    if remember_failure:
+                        remember_pack(driver,pack_positions,monotonic())
                     raise LiveControlError('Unsafe encounter: could not acquire exact discovered hostile GUID')
                 distance,chosen_guid,chosen_entry=alternative
                 log(f'Using alternate verified corridor enemy {chosen_entry} {chosen_guid}')
@@ -188,24 +189,25 @@ def verified_ranged_target(target,entry):
 
 def weaker_corridor(state,enemies,unknown,pack_positions):
     """Use live levels and HP rather than geometry alone to assess a small pack."""
-    from wotlkbuddy.horde.encounter import weaker_pack_budget
+    from wotlkbuddy.horde.encounter import manageable_corridor_budget
     from wotlkbuddy.combat.crowd_control import is_healer
     pack=tuple(e for e in enemies if e.position in pack_positions)
     # Do not ignore other observed enemies or unknown units in the corridor.
     return (not unknown and len(pack)==len(enemies) and not any(is_healer(e) for e in pack)
-            and weaker_pack_budget(state.player,state.resources,pack))
+            and manageable_corridor_budget(state.player,state.resources,pack))
 
 
 def acquire_travel_target(state,candidates,*,awareness,driver,fresh,max_targets,pack_positions,log,weak):
     distance,guid,entry=candidates[0]
     try:
         return acquire_corridor_target(state,guid,entry,awareness=awareness,candidates=candidates,
-            driver=driver,fresh=fresh,max_targets=max_targets,pack_positions=pack_positions,log=log)
+            driver=driver,fresh=fresh,max_targets=max_targets,pack_positions=pack_positions,log=log,
+            remember_failure=not weak)
     except LiveControlError as exc:
         if not weak or str(exc)!='Unsafe encounter: could not acquire exact discovered hostile GUID':
             raise
         current=fresh(state)
-        log('Weaker corridor pack: target not yet acquired; advancing on verified route for closer acquisition or defensive combat')
+        log('Manageable corridor encounter: target not yet acquired; advancing on verified route for closer acquisition or defensive combat; no danger marker recorded')
         return current,None,None
 
 
