@@ -3,6 +3,31 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
+from time import monotonic
+
+_elapsed_start = ContextVar('elapsed_console_start', default=None)
+
+
+@contextmanager
+def elapsed_console(*, enabled=True, now=monotonic):
+    """Use one monotonic origin for a whole CLI invocation, including retries."""
+    token = _elapsed_start.set((now, now()) if enabled else None)
+    try:
+        yield
+    finally:
+        _elapsed_start.reset(token)
+
+
+def elapsed_prefix():
+    clock = _elapsed_start.get()
+    if clock is None:
+        return ''
+    now, started = clock
+    tenths = max(0, int(round((now()-started)*10)))
+    minutes, remainder = divmod(tenths, 600)
+    return f'[+ {minutes}m{remainder/10:04.1f}s] '
 
 
 def category_color(line: str) -> str:
@@ -47,5 +72,6 @@ def log_console(line: str, *, stream=None) -> None:
                 enabled=False
         except ImportError:
             enabled=False
+    line = '\n'.join(elapsed_prefix()+part for part in line.split('\n'))
     print(f'\x1b[{color}m{line}\x1b[0m' if enabled else line,
           file=stream,flush=True)

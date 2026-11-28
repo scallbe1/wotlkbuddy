@@ -5,6 +5,7 @@ import argparse
 import json
 import sys
 import time
+from wotlkbuddy.live.console_log import log_console
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -53,8 +54,7 @@ class QuestSession:
             return self.progress(child, _skip_countdown=True, _emit_report=False)
 
     def retry_blocked_route(self, exc, cycle: int) -> None:
-        print(f'Route temporarily unavailable: {exc}; refreshing after patrol wait',
-              file=sys.stderr, flush=True)
+        log_console(f'Route temporarily unavailable: {exc}; refreshing after patrol wait')
         keyboard = WindowsKeyboard()
         initial = capture_monitor(self.args.monitor)
         if initial.truncated or not initial.player.guid:
@@ -111,7 +111,7 @@ class QuestSession:
                     if (not keyboard.emergency_stop_requested() and keyboard.wow_is_foreground() and
                             not state.truncated and state.player.guid==owner and state.player.dead and
                             state.death_state and state.death_state.ghost):
-                        print('No safe resurrection yet; remaining ghost and retrying next cycle',file=sys.stderr,flush=True)
+                        log_console('No safe resurrection yet; remaining ghost and retrying next cycle')
                         return {'status':'ghost_wait','character_guid':owner}
                     raise
                 if not any(marker in str(error) for marker in (
@@ -126,8 +126,7 @@ class QuestSession:
                     raise
                 self.recoveries+=1
                 self.steps.append({'cycle':cycle,'action':'redeath','reason':str(error)})
-                print('Verified repeat death; restarting corpse recovery with fresh live coordinates',
-                      file=sys.stderr,flush=True)
+                log_console('Verified repeat death; restarting corpse recovery with fresh live coordinates')
                 exc=error
 
     def guarded_phase(self, mode: str, cycle: int) -> dict | None:
@@ -146,13 +145,13 @@ class QuestSession:
         self.train_level = level
         message = ('checking trainer after resumed follow-up' if resumed
                    else 'checking verified Mage trainer')
-        print(f'Level {level}: {message}', file=sys.stderr, flush=True)
+        log_console(f'Level {level}: {message}')
         try:
             training = self.phase('train')
             self.steps.append({'cycle': cycle, 'action': 'train',
                                'trained_spells': training.get('trained_spells', ())})
         except LiveControlError as exc:
-            print(f'Mage training unavailable this cycle: {exc}', file=sys.stderr, flush=True)
+            log_console(f'Mage training unavailable this cycle: {exc}')
 
     def record_local_offers(self,report,cycle):
         ids=sorted({qid for ids in report.get('local_accepted_quests',{}).values()
@@ -258,8 +257,8 @@ class QuestSession:
             if self.time_expired():
                 self.reason = 'time_limit'
                 break
-            print(f'Continuous quest cycle {cycle}/{self.args.max_cycles}: '
-                  'refreshing journal and objectives', file=sys.stderr, flush=True)
+            log_console(f'Continuous quest cycle {cycle}/{self.args.max_cycles}: '
+                  'refreshing journal and objectives')
             report = self.guarded_phase('objectives', cycle)
             if report is not None and self.handle_objectives(report, cycle):
                 offers = self.guarded_phase('quests', cycle)
@@ -281,8 +280,8 @@ def run_continuous(args: argparse.Namespace, *, progress: Callable, recover: Cal
         raise ValueError('Continuous questing needs armed input and 2..20s countdown')
     if not 1 <= args.max_cycles <= 250 or not 5 <= args.auto_minutes <= 720:
         raise ValueError('Invalid continuous progression budgets')
-    print(f'Switch to WoW now; continuous quest progression starts in '
-          f'{args.countdown:g}s.', file=sys.stderr, flush=True)
+    log_console(f'Switch to WoW now; continuous quest progression starts in '
+          f'{args.countdown:g}s.')
     time.sleep(args.countdown)
     session = QuestSession(args, progress, recover, time.monotonic())
     result = {'continuous': session.run()}
