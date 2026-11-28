@@ -23,7 +23,7 @@ def settle_live_encounter(args,first,cap):
     # Resolve once from the actual GUID-matched client, even when --pid
     # was omitted. Every position callback must use the same integer PID.
     recovery_pid,_=verified_live_position(first,pid=getattr(args,'pid',None))
-    print(f'Aggro recovery: verified WoW PID {recovery_pid}',file=sys.stderr,flush=True)
+    log_console(f'Aggro recovery: verified WoW PID {recovery_pid}')
     recovery_driver.face_combat_target=lambda state: face_target_in_place(
         state,capture=cap,driver=recovery_driver,
         player_position=lambda s:verified_live_position(s,pid=recovery_pid)[1],
@@ -75,7 +75,7 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
         if not first.player.dead:
             log_console('Combat cleared alive; refreshing quest and resource state')
             return {'status':'combat_cleared','character_guid':first.player.guid}
-    print('Verified death; starting corpse recovery',file=sys.stderr,flush=True)
+    log_console('Verified death; starting corpse recovery')
     if not args.nav_dll or not args.python32:
         raise ValueError('Corpse recovery needs --nav-dll and --python32')
     dll = Path(args.nav_dll).expanduser().resolve()

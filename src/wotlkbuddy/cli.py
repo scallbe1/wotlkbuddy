@@ -8,7 +8,7 @@ import json
 import time
 from dataclasses import asdict
 
-from wotlkbuddy.live.console_log import log_console
+from wotlkbuddy.live.console_log import log_console, elapsed_console
 from wotlkbuddy.bots.grind import GrindBot
 from wotlkbuddy.bots.quest import QuestBot
 from wotlkbuddy.engine.runner import BotRunner
@@ -243,8 +243,7 @@ def _horde_progress(args: argparse.Namespace, *, _skip_countdown: bool = False,
     if args.only == 'recover':
         if not args.enable_input or not 2 <= args.countdown <= 20:
             raise ValueError('Recovery requires armed input and 2..20s countdown')
-        print(f'Switch to WoW now; death recovery starts in {args.countdown:g}s.',
-              file=sys.stderr, flush=True)
+        log_console(f'Switch to WoW now; death recovery starts in {args.countdown:g}s.')
         time.sleep(args.countdown)
         result = _recover_horde_death(args)
         print(json.dumps(result, indent=2))
@@ -1619,12 +1618,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if getattr(args, "ticks", 0) < 0:
         parser.error("--ticks must be nonnegative")
-    try:
-        args.func(args)
-    except (OSError, ValueError, RuntimeError, ImportError) as exc:
-        log_console(f"Error: {exc}")
-        return 1
-    return 0
+    return execute_cli_command(args)
+
+
+def execute_cli_command(args):
+    with elapsed_console(enabled=args.func is _horde_progress):
+        try:
+            args.func(args)
+        except (OSError, ValueError, RuntimeError, ImportError) as exc:
+            log_console(f"Error: {exc}")
+            return 1
+        return 0
 
 
 if __name__ == "__main__":
