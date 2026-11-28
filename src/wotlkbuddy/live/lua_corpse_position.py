@@ -11,7 +11,7 @@ The live player's existing verified world position anchors the transform.
 Lua cannot provide corpse Z. Query reachable navmesh surfaces without
 reading corpse memory, guessing an elevation, or accessing the server.
 """
-from math import hypot, isfinite
+from math import hypot, isfinite, atan2, cos, sin, pi
 
 from wotlkbuddy.game.types import Vec3
 from wotlkbuddy.live.control import LiveControlError
@@ -96,7 +96,82 @@ ZONE_SPANS = {
 }
 
 
-def resolve_lua_corpse(state, position, *, nav):
+def reachable_surface(nav,map_id,origin,point):
+    if origin.distance_to(point)<=2:
+        return True
+    try:
+        raw=nav.find_path(map_id,origin,point)
+        return bool(raw and raw[-1].distance_to(point)<=2 and
+                    validate_nav_path(raw,origin,point,max_step=9))
+    except (OSError,RuntimeError,ValueError,TimeoutError):
+        return False
+
+
+def projected_surface(nav,map_id,desired):
+    point=nav.nearest_point(map_id,desired)
+    if (point is not None and all(isfinite(v) for v in (point.x,point.y,point.z))
+            and hypot(point.x-desired.x,point.y-desired.y)<=3):
+        return point
+    return None
+
+
+def reachable_reclaim_surfaces(nav,map_id,origin,x,y,heights,*,supervise):
+    """Find a real route to the outer ring, not a fabricated route to the body."""
+    heading=atan2(origin.y-y,origin.x-x)
+    surfaces=[]
+    for z in heights:
+        for radius in (28.,34.):
+            for offset in (0.,pi/3,-pi/3,2*pi/3,-2*pi/3,pi):
+                supervise()
+                desired=Vec3(x+radius*cos(heading+offset),y+radius*sin(heading+offset),z)
+                point=projected_surface(nav,map_id,desired)
+                if (point is None or not 18<=hypot(point.x-x,point.y-y)<=37
+                        or abs(point.z-z)>8):
+                    continue
+                if any(point.distance_to(old)<3 for old in surfaces):
+                    continue
+                if reachable_surface(nav,map_id,origin,point):
+                    surfaces.append(point)
+    return surfaces
+
+
+def fallback_corpse_surface(nav,map_id,position,x,y,exact,*,log,supervise):
+    """Retain marker XY; infer Z only from a reachable, unambiguous floor."""
+    origin=position.position
+    if exact:
+        reachable=[]
+        for candidate in exact:
+            points=reachable_reclaim_surfaces(nav,map_id,origin,x,y,[candidate.z],
+                                              supervise=supervise)
+            if points:
+                reachable.append(candidate)
+        if len(reachable)>1:
+            raise LiveControlError('Lua corpse marker has multiple reachable elevations; corpse floor is ambiguous')
+        if reachable:
+            log('Corpse itself is not reachable; verified an alternate reclaim-ring route at the marker elevation')
+            return (map_id,x,y,reachable[0].z)
+        return None
+    # No surface at the exact XY: use nearby mesh elevations as evidence,
+    # but never substitute the ring point's XY for the corpse marker.
+    heights=[]
+    for dz in (0,-20,20,-40,40,-80,80):
+        supervise()
+        z=position.z+dz
+        points=reachable_reclaim_surfaces(nav,map_id,origin,x,y,[z],
+                                          supervise=supervise)
+        for point in points:
+            if not any(abs(point.z-old)<4 for old in heights):
+                heights.append(point.z)
+    if not heights:
+        return None
+    if max(heights)-min(heights)>8:
+        raise LiveControlError('Lua corpse marker has multiple reachable elevations; corpse floor is ambiguous')
+    elevation=min(heights,key=lambda z:abs(z-position.z))
+    log(f'Corpse marker off navmesh; reachable reclaim-ring ground found, estimated corpse Z={elevation:.2f}; live reclaim readiness required')
+    return (map_id,x,y,elevation)
+
+
+def resolve_lua_corpse(state, position, *, nav, log=lambda _:None, supervise=lambda:None):
     death = state.death_state
     if (state.truncated or not state.player.dead or death is None or not death.ghost or
             death.corpse_map_name is None or death.corpse_map_x is None or
@@ -120,24 +195,27 @@ def resolve_lua_corpse(state, position, *, nav):
         raise LiveControlError('Corpse marker exceeds bounded recovery route')
     # Query at multiple heights around the current ghost's elevation;
     # collapse duplicate polygons and reject genuinely ambiguous floors.
-    candidates = []
+    log(f'Lua corpse marker: map {map_id}, XY ({x:.2f},{y:.2f}); ghost XYZ '
+        f'({position.x:.2f},{position.y:.2f},{position.z:.2f})')
+    candidates=[]
+    exact=[]
     for dz in (0, -10, 10, -20, 20, -30, 30, -40, 40, -50, 50, -60, 60, -80, 80):
-        point = nav.nearest_point(map_id, Vec3(x, y, position.z + dz))
-        if (point is None or not all(isfinite(v) for v in (point.x, point.y, point.z))
-                or hypot(point.x-x, point.y-y) > 3
-                or any(abs(point.z-p.z) < 4 for p in candidates)):
+        supervise()
+        point=projected_surface(nav,map_id,Vec3(x,y,position.z+dz))
+        if point is None or any(abs(point.z-p.z)<4 for p in exact):
             continue
-        if position.position.distance_to(point) > 2:
-            path = nav.find_path(map_id, position.position, point)
-            try:
-                validate_nav_path(path, position.position, point, max_step=9)
-            except LiveControlError:
-                continue
-        candidates.append(point)
-    if not candidates:
-        raise LiveControlError('No reachable navmesh surface at Lua corpse marker')
-    if len(candidates) > 1:
+        exact.append(point)
+        if reachable_surface(nav,map_id,position.position,point):
+            candidates.append(point)
+    if len(candidates)>1:
         raise LiveControlError('Lua corpse marker has multiple reachable elevations; '
                                'corpse floor is ambiguous')
-    point = candidates[0]
-    return (map_id, point.x, point.y, point.z)
+    if candidates:
+        point=candidates[0]
+        return (map_id,point.x,point.y,point.z)
+    log('No complete route to the exact corpse marker; searching reachable reclaim-ring positions')
+    alternate=fallback_corpse_surface(nav,map_id,position,x,y,exact,
+                                     log=log,supervise=supervise)
+    if alternate is not None:
+        return alternate
+    raise LiveControlError('No reachable navmesh surface at Lua corpse marker or surrounding reclaim ring')

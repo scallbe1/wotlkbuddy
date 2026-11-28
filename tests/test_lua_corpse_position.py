@@ -80,3 +80,41 @@ def test_deathknell_parent_selected_before_player_and_corpse_samples():
             tick.index('local cx, cy = GetCorpseMapPosition()'))
     # Never alias DeathknellStart coordinates to Tirisfal's scale.
     assert 'DeathknellStart' not in ZONE_SPANS
+
+
+def test_unreachable_body_has_reachable_reclaim_ring():
+    state,pos,target=setup_marker()
+    nav=Mock()
+    def nearest(_map,q):
+        if Vec3(q.x,q.y,target.z).distance_to(target)<3:
+            return target
+        if abs(q.z-target.z)<=8:
+            return Vec3(q.x,q.y,target.z)
+        return None
+    nav.nearest_point.side_effect=nearest
+    nav.find_path.side_effect=lambda m,a,b: [a,a] if b==target else [a,b]
+    assert resolve_lua_corpse(state,pos,nav=nav)==pytest.approx((0,target.x,target.y,target.z))
+
+
+def test_off_mesh_marker_keeps_original_xy_and_uses_reachable_ring_elevation():
+    state,pos,target=setup_marker()
+    nav=Mock()
+    def nearest(_map,q):
+        xy=Vec3(q.x,q.y,target.z).distance_to(target)
+        if 25<=xy<=36 and abs(q.z-target.z)<=8:
+            return Vec3(q.x,q.y,target.z)
+        return None
+    nav.nearest_point.side_effect=nearest
+    nav.find_path.side_effect=lambda m,a,b:[a,b]
+    logs=[]
+    assert resolve_lua_corpse(state,pos,nav=nav,log=logs.append)==pytest.approx((0,target.x,target.y,target.z))
+    assert any('live reclaim readiness required' in msg for msg in logs)
+
+
+def test_partial_ring_routes_are_rejected():
+    state,pos,target=setup_marker()
+    nav=Mock()
+    nav.nearest_point.side_effect=lambda m,q:Vec3(q.x,q.y,target.z) if abs(q.z-target.z)<=8 else None
+    nav.find_path.side_effect=lambda m,a,b:[a,Vec3(a.x+1,a.y,a.z)]
+    with pytest.raises(LiveControlError,match='No reachable'):
+        resolve_lua_corpse(state,pos,nav=nav)

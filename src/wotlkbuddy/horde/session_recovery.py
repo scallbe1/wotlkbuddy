@@ -129,10 +129,15 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
             _, where = verified_live_position(state,pid=pid)
             return tuple(spawn.position for spawn in db.nearby(where.map_id,corpse))
 
+        def supervise_corpse_search():
+            if driver.emergency_stop_requested() or not driver.wow_is_foreground():
+                raise LiveControlError('Corpse marker search interrupted by Escape or focus loss')
+
         return recover_corpse(
             sample=sample, driver=driver, nav=nav,
             known_corpse=getattr(args, 'corpse_world', None),
-            read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav),
+            read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav,
+                log=log, supervise=supervise_corpse_search),
             read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore,
             scout_surroundings=scout.passive_survey, prepare_retreat=prepare_retreat,
             fast_observe=lambda state,radius: fast_ghost_position(state,pid=pid), log=log)
