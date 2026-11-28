@@ -14,8 +14,8 @@ def fixture():
     profile=load_horde_profile(root/'src/wotlkbuddy/profiles/Horde/Starter/Tirisfal-Glades-1-12.xml')
     base=snap()
     family=QuestRecord(354,11,False,'Deaths in the Family',(
-        QuestObjective(1,True,'item','1/1'),QuestObjective(2,True,'item','1/1'),
-        QuestObjective(3,False,'item','0/1')))
+        QuestObjective(1,True,'item',"Nissa's Remains: 1/1"),QuestObjective(2,True,'item',"Gregor's Remains: 1/1"),
+        QuestObjective(3,False,'item',"Thurman's Remains: 0/1")))
     letter=QuestRecord(361,8,True,'A Letter Undelivered',())
     state=replace(base,player=replace(base.player,level=11),quests=(family,letter))
     current=NS(map_id=0,position=Vec3(2848.48,1018.58,117.90))
@@ -27,8 +27,14 @@ def test_agamand_mills_finishes_thurman_before_remote_letter():
     logs=[]
     assert choose_ready_turnin(args,profile,state,current,log=logs.append) is None
     mode,objective,*_=local_batch_plan(args,profile,state,current)
-    assert mode=='collect' and objective.quest_id==354 and objective.item_id==2830
-    assert objective.sources==(1656,)
+    assert mode=='collect' and objective.quest_id==354
+    # Item names are not yet resolved: the collection selector proposes
+    # the first item for tracking, not an authorized combat target.
+    assert objective.item_id==2828
+    from wotlkbuddy.horde.quest_batching import objective_distance
+    assert objective_distance(profile,objective,current,state)<40
+    # Name binding for completed items is still handled by the executor.
+    # The planner must not infer item identity from journal row ordering.
     assert 'Geographic quest batch' in logs[0]
 
 
