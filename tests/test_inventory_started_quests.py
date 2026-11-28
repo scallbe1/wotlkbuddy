@@ -9,8 +9,16 @@ def test_item_starter_record():
     with pytest.raises(TelemetryError):
         parse_item_quest_starter(['IQ','0','2','123','456','0','0'],rows)
 
-@pytest.mark.parametrize('merchant,detail_id,expected',[(False,456,(456,)),(True,456,()),(False,999,())])
-def test_item_quest_acceptance(merchant,detail_id,expected):
+@pytest.mark.parametrize('merchant,detail_id,title,profile_title,expected',[
+    (False,456,'Quest from item',None,(456,)),
+    (True,456,'Quest from item',None,()),
+    (False,999,'Quest from item','Quest from item',()),
+    (False,0,'A Letter Undelivered','A Letter Undelivered',(456,)),
+    (False,0,'Wrong title','A Letter Undelivered',()),
+    (False,0,'Quest from item',None,()),
+    (False,0,'','Quest from item',()),
+])
+def test_item_quest_acceptance(merchant,detail_id,title,profile_title,expected):
     calls=[]
     sequence=[0]
     def capture():
@@ -22,9 +30,10 @@ def test_item_quest_acceptance(merchant,detail_id,expected):
                   quests=(NS(quest_id=456),) if accepted else (),quest_completions=(),
                   item_quest_starters=() if accepted else ((0,2,123,456,0,0),),
                   dialog=NS(kind='detail' if used and not accepted else 'none',
-                            quest_id=detail_id,title='Quest from item'))
+                            quest_id=detail_id,title=title))
     driver=NS(wow_is_foreground=lambda:True,emergency_stop_requested=lambda:False,chat=calls.append)
-    assert accept_item_quests(capture=capture,driver=driver,sleep=lambda _:None)==expected
+    profile=NS(steps=(NS(kind='pickup',entry=123,quest_id=456,name=profile_title),)) if profile_title else None
+    assert accept_item_quests(capture=capture,driver=driver,profile=profile,sleep=lambda _:None)==expected
     assert ('/run AcceptQuest()' in calls)==bool(expected)
     if merchant:
         assert not calls
