@@ -41,3 +41,36 @@ def test_progress_then_hotspot_then_profile_order_break_level_ties():
             hotspots=(Vec3(distance,0,0),)),))
     assert min(candidates,key=quest_ranker(replace(base,quests=tuple(specs)),state,where)).quest_id==5001
     assert min(candidates,key=quest_ranker(base,state,where)).quest_id==3901
+
+
+def test_route_failure_temporarily_demotes_lower_level_quest():
+    import pytest
+    from wotlkbuddy.horde.quest_priority import defer_blocked_quest,rank_with_deferrals
+    from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+    a=replace(active(3901,'Rattling the Rattlecages'),level=4)
+    b=replace(active(5001,'Later kill quest'),level=10)
+    state=snap(quests=(a,b))
+    memory={}
+    with pytest.raises(EncounterRouteUnavailable):
+        with defer_blocked_quest(state,3901,memory,now=lambda:100.):
+            raise EncounterRouteUnavailable('blocked terrain')
+    candidates=[NS(quest_id=3901,profile_step=3),NS(quest_id=5001,profile_step=4)]
+    rank=quest_ranker(profile(),state,NS(position=Vec3(0,0,0)))
+    assert min(candidates,key=rank_with_deferrals(rank,state,memory,now=lambda:101.)).quest_id==5001
+    assert min(candidates,key=rank_with_deferrals(rank,state,memory,now=lambda:221.)).quest_id==3901
+
+
+def test_deferral_is_cleared_by_progress_and_does_not_mask_telemetry_failure():
+    import pytest
+    from wotlkbuddy.horde.quest_priority import active_deferrals,defer_blocked_quest
+    from wotlkbuddy.live.control import LiveControlError
+    a=active(3901,'Rattling the Rattlecages')
+    state=snap(quests=(a,))
+    key=(state.player.guid,3901)
+    memory={key:(220.,state.player.level,0.)}
+    changed=replace(state,quests=(replace(a,objectives=(replace(a.objectives[0],description='1/8'),)),))
+    assert active_deferrals(changed,memory,now=lambda:101.)=={}
+    with pytest.raises(LiveControlError,match='focus lost'):
+        with defer_blocked_quest(state,3901,memory,now=lambda:100.):
+            raise LiveControlError('focus lost')
+    assert not memory
