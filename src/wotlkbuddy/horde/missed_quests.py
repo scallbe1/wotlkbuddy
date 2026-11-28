@@ -1,28 +1,16 @@
-"""Bounded catch-up of server-verified Tirisfal NPC pickups.
+"""Generic bounded catch-up over the selected profile and optional server metadata.
 
-Quest levels and positive PrevQuestID relationships are from the supplied
-AzerothCore world export. These are opportunities, not proof of availability:
-the NPC's live offer and the post-acceptance journal remain authoritative.
+A missing history flag is not a completed quest or a proven available offer.
+Only a verified live NPC offer and a new journal entry authorize acceptance.
 """
 from dataclasses import dataclass
-from pathlib import Path
-
+from math import inf
 from wotlkbuddy.horde.npc_catalog import NpcDestination, _verified_spawn
-from wotlkbuddy.horde.profile import condition_value, native_profiles_root
+from wotlkbuddy.horde.profile import condition_value
+from wotlkbuddy.horde.quest_metadata import character_tokens,metadata_for
 from wotlkbuddy.horde.worlddata import distance_world
 
-
-# quest ID: (minimum level, quest level, required rewarded prerequisite)
-CATCHUP = {
-    8: (1,5,0),
-    365: (4,7,0),
-    5481: (5,5,0),
-    5482: (5,6,5481),
-    354: (7,11,0),
-    362: (7,10,0),
-    359: (6,9,358),
-    356: (6,11,0),
-}
+CATCHUP_RADIUS=600
 
 
 @dataclass(frozen=True)
@@ -37,51 +25,76 @@ def offer_retry_due(memory, player, entry, now):
             now-memory.get(('no_offer',*key),float('-inf'))>=1800)
 
 
-def recovery_offers(profile, state, current, db, memory, *, now):
-    """Select earlier/easier NPC opportunities within supported travel bounds."""
-    native = native_profiles_root() / 'Horde/Starter/Tirisfal-Glades-1-12.xml'
-    if (Path(getattr(profile,'source_path','')).resolve()!=native.resolve() or current.map_id!=0
-            or state.truncated or state.player.dead or state.player.in_combat
-            or not state.player.guid or len(state.quests)>=23
-            or any(q.complete for q in state.quests)
-            or state.resources is None
-            or state.resources.class_token.upper()!='MAGE'
-            or state.resources.race_token.casefold() not in ('undead','scourge')):
+def earlier_same_giver_ready(profile,index,step,active,done):
+    return not any(p.kind=='turnin' and p.entry==step.entry
+                   and (p.quest_id not in done or p.quest_id in active)
+                   for p in profile.steps[:index])
+
+
+def candidate_rank(step,index,metadata,state,active,done,cutoff):
+    rule=metadata.get(step.quest_id)
+    if rule is not None:
+        if not rule.permits(state,active,done):
+            return None
+        # For mutually exclusive or grouped chains the live server remains
+        # authoritative; do not invent full quest-condition semantics.
+        if rule.exclusive_group>0 and any(qid!=step.quest_id and
+                other.exclusive_group==rule.exclusive_group and
+                qid in active|done for qid,other in metadata.items()):
+            return None
+        return (rule.level if rule.level>0 else state.player.level,index)
+    # Without a world export, earlier profile order is a route hint only.
+    # Do not claim a level or infer availability from profile ordering.
+    return (inf,index) if index<cutoff else None
+
+
+def recovery_offers(profile,state,current,db,memory,*,now,metadata=None):
+    """Discover missed opportunities on any supported profile/map/class."""
+    if (profile is None or db is None or state.truncated or state.player.dead
+            or state.player.in_combat or not state.player.guid
+            or len(state.quests)>=23 or getattr(state,'resources',None) is None
+            or any(q.complete for q in state.quests)):
+        return ()
+    race,cls=character_tokens(state)
+    if not race or not cls:
         return ()
     active={q.quest_id for q in state.quests}
     done={qid for qid,complete in state.quest_completions if complete}
-    level=state.player.level
-    unfinished=[i for i,s in enumerate(profile.steps)
-                if s.kind=='objective' and s.quest_id in active
-                and any(q.quest_id==s.quest_id and not q.complete for q in state.quests)]
-    cutoff=min(unfinished,default=len(profile.steps))
+    unfinished={q.quest_id for q in state.quests if not q.complete}
+    cutoff=next((i for i,s in enumerate(profile.steps)
+                 if s.kind in ('objective','turnin') and s.quest_id in unfinished),
+                len(profile.steps))
+    metadata=metadata_for(db) if metadata is None else metadata
     grouped={}
-    for i,step in enumerate(profile.steps):
-        rule=CATCHUP.get(step.quest_id)
-        if (step.kind!='pickup' or not step.supported or rule is None
-                or step.quest_id in active or step.quest_id in done
-                or not step.npc_name or step.world_position is None):
+    for index,step in enumerate(profile.steps):
+        if (step.kind!='pickup' or not step.supported or step.quest_id<=0
+                or step.quest_id in active|done or not step.npc_name
+                or step.world_position is None):
             continue
-        minimum,quest_level,prereq=rule
-        if level<minimum or quest_level>level or (prereq and prereq not in done):
+        rank=candidate_rank(step,index,metadata,state,active,done,cutoff)
+        if rank is None or not earlier_same_giver_ready(profile,index,step,active,done):
             continue
-        if i>=cutoff:
-            continue
-        if any(condition_value(expr,level=level,race='Undead',class_name='Mage',
-                               map_id=0,active_quests=active,completed_quests=done)
+        if any(condition_value(expr,level=state.player.level,race=race,class_name=cls,
+                               map_id=current.map_id,active_quests=active,completed_quests=done)
                is not True for expr in step.conditions):
             continue
         if not offer_retry_due(memory,state.player,step.entry,now):
             continue
-        position=_verified_spawn(db,entry=step.entry,map_id=0,
-                                 origin=current.position,anchor=step.world_position,radius=600)
+        position=_verified_spawn(db,entry=step.entry,map_id=current.map_id,
+                                 origin=current.position,anchor=step.world_position,
+                                 radius=CATCHUP_RADIUS)
         if position is None:
             continue
         distance=distance_world(current.position,position)
         giver=NpcDestination(step.npc_name,step.entry,position,distance,
-                             'server-verified native quest catch-up','quest')
-        if step.entry not in grouped:
-            grouped[step.entry]=(giver,set(),i)
-        grouped[step.entry][1].add(step.quest_id)
+                             'profile quest discovery with server spawn verification','quest')
+        key=(step.entry,position.x,position.y,position.z)
+        # Prefer known easy quests, then nearby destinations, then XML order.
+        score=(rank[0],distance,rank[1])
+        if key not in grouped:
+            grouped[key]=(giver,{step.quest_id},score)
+        else:
+            old,ids,best=grouped[key]
+            grouped[key]=(old,ids|{step.quest_id},min(best,score))
     return tuple(RecoveryOffer(giver,frozenset(ids))
-                 for giver,ids,_ in sorted(grouped.values(),key=lambda x:(x[0].distance,x[2])))
+                 for giver,ids,_ in sorted(grouped.values(),key=lambda x:x[2]))

@@ -65,6 +65,9 @@ def nearby_profile_quest_givers(
     """Find unresolved local pickups, preserving profile order and conditions."""
     if not 30 <= radius <= 600:
         raise ValueError('Quest-giver discovery radius out of bounds')
+    from wotlkbuddy.horde.quest_metadata import character_tokens,metadata_for
+    race,cls=character_tokens(telemetry)
+    metadata=metadata_for(spawns)
     in_journal = {q.quest_id for q in telemetry.quests}
     completed = {qid for qid, done in telemetry.quest_completions if done}
     names: dict[int, set[str]] = {}
@@ -87,9 +90,12 @@ def nearby_profile_quest_givers(
                     or prior.quest_id in in_journal)
                for prior in profile.steps[:index]):
             continue
+        rule=metadata.get(step.quest_id)
+        if rule is not None and not rule.permits(telemetry,in_journal,completed):
+            continue
         checks = [condition_value(
-            expr, level=telemetry.player.level, race='Undead',
-            class_name='Mage', map_id=map_id, active_quests=in_journal,
+            expr, level=telemetry.player.level, race=race,
+            class_name=cls, map_id=map_id, active_quests=in_journal,
             completed_quests=completed) for expr in step.conditions]
         if any(value is not True for value in checks):
             continue  # Do not execute unknown/false profile conditions.

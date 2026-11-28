@@ -15,3 +15,5 @@ mmaps/
 private/
 .env
 CreaturePatrols.local.tsv
+
+QuestMetadata.local.tsv
