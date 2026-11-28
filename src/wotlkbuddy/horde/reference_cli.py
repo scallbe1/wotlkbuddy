@@ -26,11 +26,14 @@ def register_reference_command(sub):
     key.add_argument('--profile', help='Audit a profile XML against reference relations/objectives')
     parser.add_argument('--kind', choices=('creature', 'gameobject'), default='creature')
     parser.add_argument('--data-dir', help='Directory containing optional local reference TSVs')
+    parser.add_argument('--scripts', action='store_true', help='Inspect scripted behavior for --quest-id')
     parser.set_defaults(func=print_reference)
     return sub
 
 
 def print_reference(args):
+    if args.scripts and not args.quest_id:
+        raise ValueError('--scripts requires --quest-id')
     if args.item_id:
         from wotlkbuddy.horde.quest_loot import load_quest_loot
         loot = load_quest_loot(args.data_dir)
@@ -39,6 +42,11 @@ def print_reference(args):
         return
     catalog = load_quest_relations(args.data_dir)
     requirements = load_quest_requirements(args.data_dir)
+    if args.scripts:
+        from wotlkbuddy.horde.script_reference import load_script_reference
+        print(json.dumps(load_script_reference(args.data_dir).inspect(
+            args.quest_id, catalog, requirements), indent=2))
+        return
     if args.profile:
         from wotlkbuddy.horde.profile import load_horde_profile
         from wotlkbuddy.horde.reference_audit import audit_reference_profile

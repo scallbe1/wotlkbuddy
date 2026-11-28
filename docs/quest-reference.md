@@ -19,12 +19,17 @@ py -3.12 -m wotlkbuddy quest-reference --quest-id 590
 py -3.12 -m wotlkbuddy quest-reference --entry 6784
 py -3.12 -m wotlkbuddy quest-reference --kind gameobject --entry 178090
 py -3.12 -m wotlkbuddy quest-reference --profile path/to/profile.xml
+py -3.12 -m wotlkbuddy quest-reference --item-id 3265
+py -3.12 -m wotlkbuddy quest-reference --quest-id 590 --scripts
 ```
 
 Results contain IDs and relation types, not invented names, coordinates or
 availability. Creature and GameObject IDs are separate namespaces. The live
 executor remains profile-backed while objective and interaction support is
 extended. See [the roadmap](improvement-roadmap.md).
+For indirect loot sources see [loot reference](quest-loot-reference.md); for
+phases, faction changes and event-credit behavior see
+[scripted quest reference](scripted-quest-reference.md).
 
 The package also includes 9,464 objective records. `--quest-id` shows signed
 creature/GameObject credit IDs, item requirements, counts and original SQL slots,
