@@ -77,6 +77,47 @@ def corpse_approach_limit(driver,entry,nearby_only):
     return 40. if entry in entries else 12.
 
 
+def corpse_bookkeeping(driver):
+    """Share missing-corpse observations and retired GUIDs across phases."""
+    for name,factory in (('corpse_missing_since',dict),('retired_corpses',set)):
+        if getattr(driver,name,None) is None:
+            setattr(driver,name,factory())
+    return driver.corpse_missing_since,driver.retired_corpses
+
+
+def record_missing_corpse(driver,cg,retry_after,now,log):
+    """A second missing observation after a short grace period retires the kill."""
+    missing,retired=corpse_bookkeeping(driver)
+    stamp=now()
+    first=missing.setdefault(cg,stamp)
+    if stamp-first>=8:
+        driver.defeated_corpses.pop(cg,None)
+        retry_after.pop(cg,None)
+        missing.pop(cg,None)
+        retired.add(cg)
+        log(f'Loot expired: {cg}; corpse no longer present after repeated observations')
+    else:
+        retry_after[cg]=first+8
+
+
+def observed_corpse_point(driver,state,cg,corpse_position,retry_after,now,log):
+    try:
+        point=corpse_position(state,cg)
+    except (OSError,ValueError,RuntimeError) as exc:
+        if 'not in WoW object manager' in str(exc):
+            record_missing_corpse(driver,cg,retry_after,now,log)
+        else:
+            retry_after[cg]=now()+15
+            log(f'Loot deferred: {cg}; corpse observation failed: {exc}')
+        return None
+    if point is None:
+        record_missing_corpse(driver,cg,retry_after,now,log)
+    else:
+        missing,_=corpse_bookkeeping(driver)
+        missing.pop(cg,None)
+    return point
+
+
 def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda _:None,
                    sleep=real_sleep, max_corpses=12, now=monotonic, nearby_only=False):
     if getattr(driver,'looting_encounter',False):
@@ -118,18 +159,10 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                     log('Loot deferred: active combat' if state.player.in_combat else 'Loot deferred: no free bag slots')
                 break
             candidates=[]
-            for cg,(entry,name) in driver.defeated_corpses.items():
+            for cg,(entry,name) in tuple(driver.defeated_corpses.items()):
                 if cg in attempted or retry_after.get(cg,0)>now():
                     continue
-                try:
-                    point=corpse_position(state,cg)
-                except (OSError,ValueError,RuntimeError) as exc:
-                    log(f'Loot deferred: {cg}; corpse coordinates unavailable: {exc}')
-                    retry_after[cg]=now()+90
-                    continue
-                if point is None:
-                    log(f'Loot deferred: {cg}; corpse not observed in object manager')
-                    retry_after[cg]=now()+90
+                point=observed_corpse_point(driver,state,cg,corpse_position,retry_after,now,log)
                 if point is not None:
                     distance=where.position.distance_to(point)
                     if distance<=corpse_approach_limit(driver,entry,nearby_only) and (not nearby_only or abs(point.z-where.z)<=4):
@@ -190,6 +223,7 @@ def loot_encounter(*, initial, sample, driver, nav, corpse_position, log=lambda 
                 driver.finished_corpses.add(cg)
                 driver.defeated_corpses.pop(cg,None)
                 retry_after.pop(cg,None)
+                corpse_bookkeeping(driver)[0].pop(cg,None)
                 log(f'Encounter corpse processed: {cg}')
             else:
                 log(f'Loot not confirmed: {cg}; window opened={opened}, remaining slots={state.loot_count}, inventory/cash/bag change={before!=after}; corpse remains pending')

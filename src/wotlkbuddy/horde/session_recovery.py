@@ -6,6 +6,27 @@ import sys
 from wotlkbuddy.live.console_log import log_console
 
 
+def loot_after_settled_aggro(state,*,cap,driver,pid,log):
+    """Loot in interaction range before another phase can change targets.
+
+    This path needs no navigation DLL: nearby_only prevents movement.
+    Low-resource or interrupted encounters remain queued for the next phase.
+    """
+    from wotlkbuddy.horde.session_inventory import bind_encounter_loot
+    from wotlkbuddy.live.world_position import verified_live_position
+    if (state.player.dead or state.player.in_combat or state.resources is None
+            or state.player.health<.70*state.player.max_health
+            or state.resources.mana<.45*state.resources.max_mana):
+        return state
+    def location():
+        snap=cap()
+        _,where=verified_live_position(snap,pid=pid)
+        return snap,where
+    bind_encounter_loot(cap=cap,location=location,driver=driver,nav=None,pid=pid,log=log)
+    log('Aggro recovery cleared; collecting nearby corpses before refreshing quest phase')
+    return driver.loot_nearby_corpses(state)
+
+
 def settle_live_encounter(args,first,cap):
     """Resume verified combat with the same character's learned control."""
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
@@ -31,9 +52,15 @@ def settle_live_encounter(args,first,cap):
         log=log_console)
     bind_combat_awareness(recovery_driver,pid=recovery_pid,cap=cap,log=log_console)
     log_console('Quest phase interrupted by unresolved aggro; keeping control until combat clears or death is verified')
-    first=settle_aggro(initial=first,capture=cap,driver=recovery_driver,
-        defend=lambda state:defend_against_aggro(initial=state,capture=cap,
-            driver=recovery_driver,log=log_console),log=log_console)
+    def settle(state):
+        return settle_aggro(initial=state,capture=cap,driver=recovery_driver,
+            defend=lambda current:defend_against_aggro(initial=current,capture=cap,
+                driver=recovery_driver,log=log_console),log=log_console)
+    first=settle(first)
+    first=loot_after_settled_aggro(first,cap=cap,driver=recovery_driver,
+                                   pid=recovery_pid,log=log_console)
+    if first.player.in_combat and not first.player.dead:
+        first=settle(first)
     return first,recovery_pid
 
 
