@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from math import inf
 from wotlkbuddy.horde.npc_catalog import NpcDestination, _verified_spawn
 from wotlkbuddy.horde.profile import condition_value
-from wotlkbuddy.horde.quest_metadata import character_tokens,metadata_for
+from wotlkbuddy.horde.quest_metadata import character_tokens,metadata_for,quest_eligible
 from wotlkbuddy.horde.worlddata import distance_world
 
 CATCHUP_RADIUS=600
@@ -34,13 +34,7 @@ def earlier_same_giver_ready(profile,index,step,active,done):
 def candidate_rank(step,index,metadata,state,active,done,cutoff):
     rule=metadata.get(step.quest_id)
     if rule is not None:
-        if not rule.permits(state,active,done):
-            return None
-        # For mutually exclusive or grouped chains the live server remains
-        # authoritative; do not invent full quest-condition semantics.
-        if rule.exclusive_group>0 and any(qid!=step.quest_id and
-                other.exclusive_group==rule.exclusive_group and
-                qid in active|done for qid,other in metadata.items()):
+        if not quest_eligible(metadata,rule,state,active,done):
             return None
         return (rule.level if rule.level>0 else state.player.level,index)
     # Without a world export, earlier profile order is a route hint only.
