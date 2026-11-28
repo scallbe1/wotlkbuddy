@@ -39,7 +39,7 @@ def settle_live_encounter(args,first,cap):
 
 def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dict:
     from wotlkbuddy.horde.death_recovery import recover_corpse
-    from wotlkbuddy.live.lua_corpse_position import resolve_lua_corpse
+    from wotlkbuddy.horde.ghost_staging import resolve_with_ghost_staging
     from wotlkbuddy.horde.interaction import KeyboardQuestInput
     from wotlkbuddy.live.capture import capture_monitor
     from wotlkbuddy.live.control import LiveControlError
@@ -136,8 +136,10 @@ def recover_horde_death(args: argparse.Namespace, *, original_error=None) -> dic
         return recover_corpse(
             sample=sample, driver=driver, nav=nav,
             known_corpse=getattr(args, 'corpse_world', None),
-            read_corpse=lambda state, pos: resolve_lua_corpse(state, pos, nav=nav,
-                log=log, supervise=supervise_corpse_search),
+            read_corpse=lambda state, pos: resolve_with_ghost_staging(state,pos,
+                nav=nav,sample=sample,driver=driver,log=log,
+                supervise=supervise_corpse_search,
+                fast_observe=lambda snap,radius:fast_ghost_position(snap,pid=pid)),
             read_hazards=hazards, read_spawn_hints=spawn_hints, restore=restore,
             scout_surroundings=scout.passive_survey, prepare_retreat=prepare_retreat,
             fast_observe=lambda state,radius: fast_ghost_position(state,pid=pid), log=log)
