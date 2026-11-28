@@ -1,5 +1,7 @@
 """Deterministic ranking of independently authorized active quest objectives."""
 from math import inf
+from contextlib import contextmanager
+from time import monotonic
 from wotlkbuddy.horde.combat import objective_progress
 
 
@@ -53,3 +55,56 @@ def describe_priority(profile,state,current,selected):
             f'journal progress {-progress:.0%}, '
             f'nearest XML hotspot {f"{distance:.1f}y" if distance!=inf else "unknown"}, '
             f'profile step {step}; lower level first')
+
+
+def active_deferrals(state,memory,*,now=monotonic):
+    """Only retain cooldowns for this character's unchanged unfinished quests."""
+    if not isinstance(memory,dict) or not hasattr(state,'player'):
+        return {}
+    owner=state.player.guid
+    level=state.player.level
+    journal={q.quest_id:q for q in state.quests}
+    stamp=now()
+    active={}
+    for key,record in list(memory.items()):
+        if key[0]!=owner:
+            continue
+        qid=key[1]
+        expires,old_level,progress=record
+        quest=journal.get(qid)
+        if (quest is None or quest.complete or stamp>=expires
+                or level!=old_level or quest_progress(quest)>progress):
+            memory.pop(key,None)
+        else:
+            active[qid]=expires
+    return active
+
+
+def rank_with_deferrals(rank,state,memory,*,now=monotonic):
+    if rank is None:
+        return None
+    deferred=active_deferrals(state,memory,now=now)
+    if not deferred:
+        return rank
+    # All unblocked objectives outrank deferred ones. If all eligible
+    # quests are deferred, retry the oldest cooldown under the existing
+    # continuous route-wait and session budgets; never abandon the quest.
+    def ranked(candidate):
+        expires=deferred.get(candidate.quest_id)
+        return (expires is not None,expires or 0.,*rank(candidate))
+    return ranked
+
+
+@contextmanager
+def defer_blocked_quest(state,quest_id,memory,*,log=lambda _:None,now=monotonic):
+    """Remember only typed temporary route failures, not telemetry/focus errors."""
+    from wotlkbuddy.horde.hunt_routes import EncounterRouteUnavailable
+    try:
+        yield
+    except EncounterRouteUnavailable:
+        if isinstance(memory,dict):
+            quest=next((q for q in state.quests if q.quest_id==quest_id and not q.complete),None)
+            if quest is not None:
+                memory[(state.player.guid,quest_id)]=(now()+120.,state.player.level,quest_progress(quest))
+                log(f'Quest {quest_id}: temporary route obstruction; deprioritized for 120s while other objectives are available')
+        raise

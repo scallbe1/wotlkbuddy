@@ -15,8 +15,9 @@ from wotlkbuddy.live.control import LiveControlError
 
 def select_objective(args, quest_profile, state, current):
     """Rank every eligible objective by observed quest level, progress and proximity."""
-    from wotlkbuddy.horde.quest_priority import quest_ranker
-    rank=quest_ranker(quest_profile,state,current)
+    from wotlkbuddy.horde.quest_priority import quest_ranker, rank_with_deferrals
+    rank=rank_with_deferrals(quest_ranker(quest_profile,state,current),state,
+                             getattr(args,'_quest_deferrals',None))
     priority={'rank':rank} if rank is not None else {}
     kill = (next_active_kill_quest(
         quest_profile, state, map_id=current.map_id, **priority)
@@ -60,6 +61,12 @@ def execute_active_objective(args, *, quest_profile, location, cap, driver,
     if target_quest is not None:
         from wotlkbuddy.horde.quest_priority import describe_priority
         log(describe_priority(quest_profile,state,current,target_quest))
+        from wotlkbuddy.horde.quest_priority import active_deferrals
+        deferred=active_deferrals(state,getattr(args,'_quest_deferrals',None))
+        if deferred:
+            log(f'Quest priority: temporarily deprioritized quest IDs {sorted(deferred)}; '
+                + ('retrying blocked quest because no unblocked eligible objective ranks ahead'
+                   if target_quest.quest_id in deferred else 'choosing unblocked objective'))
     if target_quest is not None and args.only in ('all','objectives'):
         from wotlkbuddy.horde.level_milestones import next_milestone
         from wotlkbuddy.horde.milestone_grind import run_milestone
@@ -117,12 +124,15 @@ def execute_active_objective(args, *, quest_profile, location, cap, driver,
             f'{collection.quest_id}: source XML does not identify '
             'creatures that drop it. No combat started.')
     else:
-        complete_objective(
-            args, quest_profile=quest_profile, target_mode=target_mode,
-            target_quest=target_quest, kill=kill, collection=collection,
-            cap=cap, driver=driver, pid=pid, nav=nav, db=db, hud=hud,
-            set_native_status=set_native_status,
-            ensure_reward_bag_space=ensure_reward_bag_space, report=report, log=log)
+        from wotlkbuddy.horde.quest_priority import defer_blocked_quest
+        with defer_blocked_quest(state,target_quest.quest_id,
+                                 getattr(args,'_quest_deferrals',None),log=log):
+            complete_objective(
+                args, quest_profile=quest_profile, target_mode=target_mode,
+                target_quest=target_quest, kill=kill, collection=collection,
+                cap=cap, driver=driver, pid=pid, nav=nav, db=db, hud=hud,
+                set_native_status=set_native_status,
+                ensure_reward_bag_space=ensure_reward_bag_space, report=report, log=log)
 
 
 def complete_objective(args, *, quest_profile, target_mode, target_quest, kill,

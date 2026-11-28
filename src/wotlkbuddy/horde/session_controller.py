@@ -34,6 +34,7 @@ class QuestSession:
     local_offer_memory: dict = field(default_factory=dict)
     training_route_memory: dict = field(default_factory=dict)
     repair_route_memory: dict = field(default_factory=dict)
+    quest_deferrals: dict = field(default_factory=dict)
 
     def time_expired(self) -> bool:
         return time.monotonic() - self.start >= self.args.auto_minutes * 60
@@ -48,6 +49,7 @@ class QuestSession:
         child._local_offer_memory = self.local_offer_memory
         child._training_route_memory = self.training_route_memory
         child._repair_route_memory = self.repair_route_memory
+        child._quest_deferrals = self.quest_deferrals
         owner = {'objectives': Activity.OBJECTIVES, 'quests': Activity.OFFERS,
                  'train': Activity.TRAINING}[mode]
         with self.activity.claim(owner):
