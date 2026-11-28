@@ -14,21 +14,25 @@ from wotlkbuddy.live.control import LiveControlError
 
 
 def select_objective(args, quest_profile, state, current):
-    """Respect profile order, with GameObject precedence on tied steps."""
+    """Rank every eligible objective by observed quest level, progress and proximity."""
+    from wotlkbuddy.horde.quest_priority import quest_ranker
+    rank=quest_ranker(quest_profile,state,current)
+    priority={'rank':rank} if rank is not None else {}
     kill = (next_active_kill_quest(
-        quest_profile, state, map_id=current.map_id)
+        quest_profile, state, map_id=current.map_id, **priority)
         if args.only not in ('collect','objects') else None)
     collection = (next_active_collect_quest(
-        quest_profile, state, map_id=current.map_id)
+        quest_profile, state, map_id=current.map_id, **priority)
         if args.only != 'objects' else None)
     gameobject = next_active_gameobject_quest(
-        quest_profile, state, map_id=current.map_id)
+        quest_profile, state, map_id=current.map_id, **priority,
+        **({'collect_only':True} if rank is not None and args.only=='collect' else {}))
     if args.only == 'collect' and gameobject is not None and (
             gameobject.objective_type != 'CollectItem'):
         gameobject = None
     # GameObject-backed CollectItem from the same profile step
     # supersedes an empty Mob source list; it is not an unknown
-    # creature to hunt. Otherwise honor XML QuestOrder strictly.
+    # creature to hunt. The XML order is the final deterministic tie-break.
     options = [
         (entry.profile_step, mode, entry)
         for mode, entry in (
@@ -37,7 +41,8 @@ def select_objective(args, quest_profile, state, current):
             ('gameobject', gameobject))
         if entry is not None]
     options.sort(key=lambda val:(
-        val[0], 0 if val[1]=='gameobject' else 1))
+        rank(val[2]) if rank is not None else (val[0],),
+        0 if val[1]=='gameobject' else 1))
     target_mode = options[0][1] if options else None
     target_quest = options[0][2] if options else None
     collecting = target_mode=='collect'
@@ -52,6 +57,9 @@ def execute_active_objective(args, *, quest_profile, location, cap, driver,
     target_mode, target_quest, kill, collection = select_objective(
         args, quest_profile, state, current)
     collecting = target_mode == 'collect'
+    if target_quest is not None:
+        from wotlkbuddy.horde.quest_priority import describe_priority
+        log(describe_priority(quest_profile,state,current,target_quest))
     if target_quest is not None and args.only in ('all','objectives'):
         from wotlkbuddy.horde.level_milestones import next_milestone
         from wotlkbuddy.horde.milestone_grind import run_milestone

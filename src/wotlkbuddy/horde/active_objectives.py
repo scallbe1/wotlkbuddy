@@ -24,7 +24,7 @@ class ActiveKillQuest:
 
 
 def next_active_kill_quest(
-    profile: HordeProfile, telemetry: ClientTelemetry, *, map_id: int,
+    profile: HordeProfile, telemetry: ClientTelemetry, *, map_id: int, rank=None,
 ) -> ActiveKillQuest | None:
     """Pick one eligible unfinished KillMob objective, in source profile order."""
     if (telemetry.truncated or telemetry.player.dead or
@@ -35,6 +35,7 @@ def next_active_kill_quest(
         raise LiveControlError('Cannot select quest without safe active Undead Mage state')
     journal = {q.quest_id: q for q in telemetry.quests}
     completed = {qid for qid, done in telemetry.quest_completions if done}
+    eligible = []
     for index, step in enumerate(profile.steps, 1):
         if (not step.supported or step.kind != 'objective' or
                 step.objective_type != 'KillMob' or step.quest_id <= 0 or
@@ -68,13 +69,16 @@ def next_active_kill_quest(
         if (spec.kind != 'KillMob' or spec.entry <= 0 or
                 (step.entry and spec.entry != step.entry)):
             continue
-        return ActiveKillQuest(
+        candidate = ActiveKillQuest(
             quest_id=step.quest_id,
             title=quest.title,
             mob_entry=spec.entry,
             objective_description=observed.description,
             profile_step=index)
-    return None
+        if rank is None:
+            return candidate
+        eligible.append(candidate)
+    return min(eligible,key=rank,default=None)
 
 @dataclass(frozen=True)
 class ActiveCollectQuest:
@@ -88,7 +92,7 @@ class ActiveCollectQuest:
 
 
 def next_active_collect_quest(
-    profile: HordeProfile, telemetry: ClientTelemetry, *, map_id: int,
+    profile: HordeProfile, telemetry: ClientTelemetry, *, map_id: int, rank=None,
 ) -> ActiveCollectQuest | None:
     """Plan an active CollectItem stage; sources must be explicit XML Mob IDs.
 
@@ -107,6 +111,7 @@ def next_active_collect_quest(
         raise LiveControlError('Unsafe Mage state for collection planning')
     journal = {q.quest_id: q for q in telemetry.quests}
     completed = {qid for qid, done in telemetry.quest_completions if done}
+    eligible = []
     for index, step in enumerate(profile.steps, 1):
         if (step.kind != 'objective' or step.objective_type != 'CollectItem'
                 or not step.supported or step.quest_id not in journal
@@ -134,7 +139,10 @@ def next_active_collect_quest(
         sources = tuple(dict.fromkeys(
             src.entry for src in spec.sources if
             src.kind == 'mob' and 0 < src.entry < 2**24))
-        return ActiveCollectQuest(step.quest_id, journal[step.quest_id].title,
+        candidate = ActiveCollectQuest(step.quest_id, journal[step.quest_id].title,
                                   spec.entry, spec.count, sources,
                                   observed.description, index)
-    return None
+        if rank is None:
+            return candidate
+        eligible.append(candidate)
+    return min(eligible,key=rank,default=None)
