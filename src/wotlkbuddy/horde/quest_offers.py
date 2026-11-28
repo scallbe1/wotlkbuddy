@@ -14,6 +14,7 @@ from wotlkbuddy.horde.combat import creature_entry_from_guid
 from wotlkbuddy.horde.dialog_cleanup import dismiss_quest_dialog
 from wotlkbuddy.horde.aggro_recovery import guard_interaction_aggro
 from wotlkbuddy.horde.profile import HordeProfile, condition_value
+from wotlkbuddy.horde.quest_metadata import character_tokens
 
 
 def matching_direct_offer(profile, state, npc_id, npc_name, confirmed_completed=()):
@@ -25,6 +26,7 @@ def matching_direct_offer(profile, state, npc_id, npc_name, confirmed_completed=
         return None
     active={q.quest_id for q in state.quests}
     done={qid for qid,complete in state.quest_completions if complete}|set(confirmed_completed)
+    race,cls=character_tokens(state)
     matching=[(index,step) for index,step in enumerate(profile.steps)
               if step.kind=='pickup' and step.supported and step.entry==npc_id and
               step.npc_name in ('',npc_name) and step.name==d.title and
@@ -33,7 +35,7 @@ def matching_direct_offer(profile, state, npc_id, npc_name, confirmed_completed=
     for index,step in matching:
         if step.quest_id in active or step.quest_id in done:
             continue
-        if any(condition_value(expr,level=state.player.level,race='Undead',
+        if any(condition_value(expr,level=state.player.level,race=race,class_name=cls,
                 active_quests=active,completed_quests=done) is not True for expr in step.conditions):
             continue
         if not d.quest_id and len({s.quest_id for _,s in matching})>1:
@@ -191,18 +193,6 @@ def accept_npc_offers(
                 raise LiveControlError(
                     f'{npc_name}: direct offer {observed_title!r} conflicts with '
                     'its verified quest ID or active/completed journal; no acceptance')
-            # Honor resolvable profile conditions; an unknown conditional
-            # dependency must never be silently interpreted as True.
-            completed = {qid for qid, done in state.quest_completions if done} | set(confirmed_completed)
-            for expression in step.conditions:
-                allowed = condition_value(
-                    expression, level=state.player.level, race='Undead',
-                    active_quests=set(baseline_journal),
-                    completed_quests=completed)
-                if allowed is not True:
-                    raise LiveControlError(
-                        f'{npc_name}: direct quest condition is not verified '
-                        f'true: {expression!r}; no acceptance')
             confirmed = fresh(state)
             if (confirmed.dialog is None or confirmed.dialog.kind != 'detail' or
                     confirmed.dialog.title != observed_title or
